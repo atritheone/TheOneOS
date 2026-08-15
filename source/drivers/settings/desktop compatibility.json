@@ -1,0 +1,413 @@
+{
+  "format": 1,
+  "architecture": "x86_64",
+  "profile": "common Windows desktop hardware",
+  "generation_window": "approximately 2017 through 2026",
+  "boot": {
+    "firmware": "UEFI x86_64",
+    "partition_table": "GPT",
+    "secure_boot": false,
+    "storage": [
+      "NVMe",
+      "AHCI SATA",
+      "Intel VMD"
+    ],
+    "unsupported_storage": [
+      "firmware RAID that does not expose NVMe, AHCI, or Intel VMD block devices"
+    ]
+  },
+  "module_groups": {
+    "graphics": [
+      "amdgpu",
+      "radeon",
+      "nvidia",
+      "nvidia_modeset",
+      "nvidia_drm",
+      "nvidia_uvm",
+      "nouveau",
+      "i915",
+      "xe"
+    ],
+    "storage": [
+      "vmd"
+    ],
+    "ethernet": [
+      "atlantic",
+      "alx",
+      "b44",
+      "tg3",
+      "sky2",
+      "forcedeth",
+      "bnx2",
+      "bnx2x",
+      "bnxt_en",
+      "ixgbe",
+      "ixgbevf",
+      "i40e",
+      "iavf",
+      "ice",
+      "8139cp",
+      "8139too",
+      "via_rhine",
+      "via_velocity",
+      "pcnet32",
+      "e100",
+      "asix",
+      "ax88179_178a",
+      "cdc_ether",
+      "cdc_ncm",
+      "lan78xx",
+      "smsc95xx"
+    ],
+    "audio": [
+      "snd_usb_audio",
+      "snd_hda_codec_analog",
+      "snd_hda_codec_ca0110",
+      "snd_hda_codec_ca0132",
+      "snd_hda_codec_cmedia",
+      "snd_hda_codec_conexant",
+      "snd_hda_codec_cs420x",
+      "snd_hda_codec_cs421x",
+      "snd_hda_codec_cs8409",
+      "snd_hda_codec_idt",
+      "snd_hda_codec_si3054",
+      "snd_hda_codec_via",
+      "snd_sof_amd_rembrandt",
+      "snd_sof_pci_intel_apl",
+      "snd_sof_pci_intel_cnl",
+      "snd_sof_pci_intel_icl",
+      "snd_sof_pci_intel_skl",
+      "snd_sof_pci_intel_tgl",
+      "snd_sof_pci_intel_tng"
+    ],
+    "input": [
+      "hid_apple",
+      "hid_asus",
+      "hid_corsair",
+      "hid_corsair_void",
+      "hid_lenovo",
+      "hid_logitech",
+      "hid_logitech_dj",
+      "hid_logitech_hidpp",
+      "hid_microsoft",
+      "hid_multitouch",
+      "hid_playstation",
+      "hid_sony",
+      "hid_steam",
+      "hid_steelseries",
+      "i2c_hid_acpi",
+      "wacom",
+      "xpad"
+    ],
+    "wireless_extension": [
+      "iwlwifi",
+      "iwlmvm",
+      "mt7921e",
+      "mt7925e",
+      "ath10k_pci",
+      "ath11k_pci",
+      "ath12k_wifi7",
+      "brcmfmac",
+      "rtw88_8821ce",
+      "rtw88_8822ce",
+      "rtw89_8852ae",
+      "rtw89_8852be",
+      "rtw89_8852ce",
+      "rtw89_8922ae",
+      "btusb"
+    ]
+  },
+  "dependency_only_modules": [
+    "iwlmvm",
+    "nvidia_modeset",
+    "nvidia_drm",
+    "nvidia_uvm"
+  ],
+  "built_in_kernel_features": [
+    "EFI",
+    "EFI_STUB",
+    "EFI_PARTITION",
+    "BLK_DEV_NVME",
+    "SATA_AHCI",
+    "USB_XHCI_HCD",
+    "USB_XHCI_PCI",
+    "USB_STORAGE",
+    "USB_UAS",
+    "EXFAT_FS",
+    "FAT_FS",
+    "VFAT_FS",
+    "NTFS3_FS",
+    "HID_GENERIC",
+    "USB_HID",
+    "INPUT_EVDEV",
+    "DRM_SIMPLEDRM",
+    "DRM_VMWGFX",
+    "DRM_VIRTIO_GPU",
+    "R8169",
+    "E1000",
+    "E1000E",
+    "IGB",
+    "IGC",
+    "USB_RTL8152",
+    "SND_HDA_INTEL",
+    "SND_HDA_CODEC_REALTEK",
+    "SND_HDA_CODEC_HDMI"
+  ],
+  "firmware_roots": [
+    "amd-ucode",
+    "intel-ucode",
+    "amdgpu",
+    "radeon",
+    "i915",
+    "xe",
+    "nvidia",
+    "rtl_nic",
+    "intel/ice",
+    "intel/sof",
+    "ath10k",
+    "ath11k",
+    "ath12k",
+    "brcm",
+    "mediatek",
+    "rtw88",
+    "rtw89"
+  ],
+  "required_firmware_files": [
+    "regulatory.db",
+    "t1os-firmware-manifest.json"
+  ],
+  "graphics_runtime": {
+    "gallium_drivers": [
+      "iris",
+      "crocus",
+      "r600",
+      "radeonsi",
+      "nouveau",
+      "zink",
+      "virgl",
+      "svga",
+      "softpipe"
+    ],
+    "vulkan_drivers": [
+      "intel",
+      "amd",
+      "nouveau"
+    ],
+    "libdrm_families": [
+      "intel",
+      "radeon",
+      "r600",
+      "r600-vaapi",
+      "amdgpu",
+      "nouveau"
+    ],
+    "manifest_drivers": [
+      "i915",
+      "xe",
+      "iris",
+      "crocus",
+      "anv",
+      "radeon",
+      "amdgpu",
+      "radeonsi",
+      "radv",
+      "nvidia-open",
+      "nvidia-nvdec-vaapi",
+      "nouveau",
+      "nouveau-vaapi",
+      "nvk",
+      "zink",
+      "virtio_gpu",
+      "vmwgfx",
+      "swrast"
+    ],
+    "required_files": [
+      "libdrm.so.2",
+      "libdrm_intel.so.1",
+      "libdrm_radeon.so.1",
+      "libdrm_amdgpu.so.1",
+      "libdrm_nouveau.so.2",
+      "libEGL.so.1",
+      "libGLESv2.so.2",
+      "libgbm.so.1",
+      "libvulkan.so.1",
+      "libvulkan_intel.so",
+      "libvulkan_radeon.so",
+      "libvulkan_nouveau.so",
+      "nvidia/libEGL.so.1",
+      "nvidia/libGLESv2.so.2",
+      "nvidia/libEGL_nvidia.so.0",
+      "nvidia/libnvidia-egl-gbm.so.1",
+      "nvidia/egl_vendor.d/10_nvidia.json",
+      "nvidia/gbm/15_nvidia_gbm.json",
+      "nvidia/gbm/nvidia-drm_gbm.so",
+      "nvidia/t1os-nvidia-path-provider.so",
+      "nvidia/runtime.json",
+      "nvidia/libcuda.so.1",
+      "nvidia/libnvcuvid.so.1",
+      "nvidia/libnvidia-ptxjitcompiler.so.1",
+      "libgstreamer-1.0.so.0",
+      "libgstbase-1.0.so.0",
+      "libgstcodecparsers-1.0.so.0",
+      "drivers/iHD_drv_video.so",
+      "drivers/r600_drv_video.so",
+      "drivers/radeonsi_drv_video.so",
+      "drivers/nvidia_drv_video.so",
+      "drivers/nouveau_drv_video.so",
+      "drivers/virtio_gpu_drv_video.so",
+      "drivers/vmwgfx_drv_video.so"
+    ],
+    "software_rendering_policy": "fallback only"
+  },
+  "video_decode": {
+    "api": "vaapi",
+    "device_policy": "prefer the WindowServer compositor render node; use another render node only after a DMA-BUF import compatibility probe",
+    "capability_policy": "match codec, profile, bit depth, dimensions, render-target format, and DMA-BUF export compatibility at runtime",
+    "surface_transport": "drm-prime-2",
+    "maximum_in_flight": 16,
+    "backends": [
+      {
+        "drm_drivers": [
+          "i915",
+          "xe"
+        ],
+        "vaapi_drivers": [
+          "iHD"
+        ],
+        "required_files": [
+          "drivers/iHD_drv_video.so"
+        ],
+        "class": "physical",
+        "hardware_decode": "capability-probed"
+      },
+      {
+        "drm_drivers": [
+          "amdgpu"
+        ],
+        "vaapi_drivers": [
+          "radeonsi"
+        ],
+        "required_files": [
+          "drivers/radeonsi_drv_video.so"
+        ],
+        "class": "physical",
+        "hardware_decode": "capability-probed"
+      },
+      {
+        "drm_drivers": [
+          "radeon"
+        ],
+        "vaapi_drivers": [
+          "radeonsi",
+          "r600"
+        ],
+        "required_files": [
+          "drivers/radeonsi_drv_video.so",
+          "drivers/r600_drv_video.so"
+        ],
+        "class": "physical",
+        "hardware_decode": "capability-probed",
+        "fallback": "software when neither packaged VAAPI driver exposes the requested profile"
+      },
+      {
+        "drm_drivers": [
+          "nvidia",
+          "nvidia-drm"
+        ],
+        "vaapi_drivers": [
+          "nvidia"
+        ],
+        "required_files": [
+          "drivers/nvidia_drv_video.so",
+          "nvidia/libcuda.so.1",
+          "nvidia/libnvcuvid.so.1"
+        ],
+        "class": "physical",
+        "hardware_decode": "capability-probed",
+        "decode_backend": "nvdec-direct",
+        "software_fallback": false,
+        "fallback": "fail playback when NVDEC is unavailable or the requested codec profile is unsupported"
+      },
+      {
+        "drm_drivers": [
+          "nouveau"
+        ],
+        "vaapi_drivers": [
+          "nouveau"
+        ],
+        "required_files": [
+          "drivers/nouveau_drv_video.so"
+        ],
+        "class": "physical",
+        "hardware_decode": "capability-probed"
+      },
+      {
+        "drm_drivers": [
+          "vmwgfx"
+        ],
+        "vaapi_drivers": [
+          "vmwgfx"
+        ],
+        "required_files": [
+          "drivers/vmwgfx_drv_video.so"
+        ],
+        "class": "virtual",
+        "hardware_decode": "capability-probed"
+      },
+      {
+        "drm_drivers": [
+          "virtio_gpu"
+        ],
+        "vaapi_drivers": [
+          "virtio_gpu"
+        ],
+        "required_files": [
+          "drivers/virtio_gpu_drv_video.so"
+        ],
+        "class": "virtual",
+        "hardware_decode": "host-capability-probed"
+      },
+      {
+        "drm_drivers": [
+          "simpledrm",
+          "swrast"
+        ],
+        "vaapi_drivers": [],
+        "required_files": [],
+        "class": "software",
+        "hardware_decode": "unavailable",
+        "fallback": "software"
+      }
+    ]
+  },
+  "safety": {
+    "persistent_driver_root": "/the one/drivers",
+    "runtime_root": "/.ephemeral",
+    "forbidden_persistent_roots": [
+      "/bin",
+      "/dev",
+      "/etc",
+      "/home",
+      "/lib",
+      "/lib64",
+      "/mnt",
+      "/opt",
+      "/proc",
+      "/root",
+      "/run",
+      "/sbin",
+      "/srv",
+      "/sys",
+      "/tmp",
+      "/usr",
+      "/var"
+    ],
+    "internal_disks": "discover only; never mount or write automatically"
+  },
+  "known_exclusions": [
+    "Secure Boot",
+    "32-bit-only UEFI",
+    "legacy BIOS-only boot",
+    "vendor firmware RAID outside NVMe, AHCI, and Intel VMD"
+  ]
+}

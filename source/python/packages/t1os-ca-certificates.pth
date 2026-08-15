@@ -1,0 +1,1 @@
+import os; os.environ.setdefault("SSL_CERT_FILE", "/the one/settings/network/cacerts.pem")

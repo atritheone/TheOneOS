@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "development_debug": false,
+  "kill_switch": false,
+  "max_sessions": 8,
+  "protocol_version": 1
+}

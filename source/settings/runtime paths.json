@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "runtime_roots": {
+    "boot": "/boot",
+    "catalogue": "/the one/catalogue",
+    "driver_control": "/the one/drivers/control",
+    "driver_firmware": "/the one/drivers/firmware",
+    "driver_modules": "/the one/drivers/modules",
+    "driver_nodes": "/the one/drivers/nodes",
+    "driver_processes": "/the one/drivers/processes",
+    "driver_state": "/the one/drivers/state",
+    "driver_tools": "/the one/drivers/tools",
+    "ephemeral": "/.ephemeral",
+    "logs": "/the one/logs",
+    "master": "/master",
+    "mounted_storage": "/.ephemeral/volumes",
+    "resources": "/the one/resources",
+    "services": "/the one/build",
+    "settings": "/the one/settings",
+    "software": "/the one/software"
+  },
+  "forbidden_runtime_roots": [
+    "/bin",
+    "/sbin",
+    "/lib",
+    "/lib64",
+    "/usr",
+    "/etc",
+    "/dev",
+    "/proc",
+    "/sys",
+    "/run",
+    "/var",
+    "/tmp",
+    "/home",
+    "/root",
+    "/media",
+    "/mnt",
+    "/opt",
+    "/srv"
+  ],
+  "scope": {
+    "t1os_runtime": true,
+    "storage_image": true,
+    "host_build_environment": false,
+    "pre_t1os_initramfs": false
+  }
+}

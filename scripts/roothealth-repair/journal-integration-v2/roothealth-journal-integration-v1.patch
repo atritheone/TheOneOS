@@ -1,0 +1,3595 @@
+diff --git a/scripts/create hardware usb bundle.ps1 b/scripts/create hardware usb bundle.ps1
+index cdb252a..4a18b25 100755
+--- a/scripts/create hardware usb bundle.ps1	
++++ b/scripts/create hardware usb bundle.ps1	
+@@ -15,6 +15,7 @@ param(
+ $ErrorActionPreference = 'Stop'
+ $projectRoot = Split-Path -Path $PSScriptRoot -Parent
+ $hardwareRoot = Join-Path $projectRoot 'environment\hardware'
++$journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
+ 
+ if ([string]::IsNullOrWhiteSpace($ImagePath)) {
+     $ImagePath = Join-Path $hardwareRoot 't1os-hardware-usb.img'
+@@ -22,7 +23,7 @@ if ([string]::IsNullOrWhiteSpace($ImagePath)) {
+ $ImagePath = [System.IO.Path]::GetFullPath($ImagePath)
+ $imageManifestPath = "$ImagePath.json"
+ 
+-foreach ($requiredFile in @($ImagePath, $imageManifestPath)) {
++foreach ($requiredFile in @($ImagePath, $imageManifestPath, $journalValidatorPath)) {
+     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+         throw "Required hardware USB bundle input not found: $requiredFile"
+     }
+@@ -38,6 +39,29 @@ if ([bool]$imageManifest.encrypted) {
+ if ([string]$imageManifest.root_filesystem -cne 'ntfs') {
+     throw 'The source hardware image does not contain an NTFS root.'
+ }
++$sourceJournal = $imageManifest.roothealth_journal
++$journalValidatorHash = (
++    Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++).Hash.ToLowerInvariant()
++if (
++    $null -eq $sourceJournal -or
++    [string]$sourceJournal.state -cne 'provisioned-and-validated' -or
++    [string]$sourceJournal.path -cne '$Extend/$RootHealth' -or
++    [int64]$sourceJournal.logical_bytes -ne 134217728 -or
++    [string]$sourceJournal.required_flags -cne '0x00002007' -or
++    [string]$sourceJournal.headers.state -cne 'EMPTY' -or
++    [string]$sourceJournal.provenance.validator_sha256 -cne $journalValidatorHash -or
++    -not [bool]$sourceJournal.ownership.complete -or
++    -not [bool]$sourceJournal.ownership.unique_owner -or
++    -not [bool]$sourceJournal.ownership.self_nonoverlap
++) {
++    throw 'The source image lacks a complete source-bound RootHealth journal attestation.'
++}
++$sourceJournalBase64 = [System.Convert]::ToBase64String(
++    [System.Text.Encoding]::UTF8.GetBytes(
++        ($sourceJournal | ConvertTo-Json -Depth 12 -Compress)
++    )
++)
+ 
+ $version = ([string]$imageManifest.root_label -replace '^T1OS ', '').Trim()
+ if ($version -notmatch '^\d+(?:\.\d+)?$') {
+@@ -114,11 +138,19 @@ $shellPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+ 
+ $shell = @'
+ set -euo pipefail
++export LC_ALL=C
++export PYTHONDONTWRITEBYTECODE=1
+ 
+ image=$1
+ esp_output=$2
+ root_output=$3
+ reserve_mib=$4
++roothealth_journal_validator=$5
++roothealth_journal_validator_sha256=$6
++source_journal_base64=$7
++expected_source_image_sha256=$8
++source_journal_report="${root_output}.source-roothealth.json"
++resized_journal_report="${root_output}.resized-roothealth.json"
+ 
+ for command_name in awk blockdev blkid dd losetup ntfsclone ntfsfix ntfsresize sed sha256sum tail truncate; do
+     command -v "$command_name" >/dev/null 2>&1 || {
+@@ -142,6 +174,54 @@ root_device="${source_loop}p2"
+     echo 'The source image partition devices did not appear.' >&2
+     exit 1
+ }
++printf '%s  %s\n' "$roothealth_journal_validator_sha256" "$roothealth_journal_validator" | sha256sum -c -
++source_image_hash_before=$(sha256sum "$image" | awk '{print $1}')
++[ "$source_image_hash_before" = "$expected_source_image_sha256" ]
++python3 -B "$roothealth_journal_validator" validate "$root_device" \
++    --require-one-run --require-zero-entry-area \
++    --report "$source_journal_report"
++python3 -B - \
++    "$source_journal_report" "$source_journal_base64" <<'PY'
++import base64
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++with Path(sys.argv[1]).open(encoding='utf-8') as handle:
++    report = json.load(handle)
++expected = json.loads(base64.b64decode(sys.argv[2], validate=True).decode('utf-8'))
++journal = report['journal']
++header = journal['header']
++identity = {
++    'volume_serial': report['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_hash = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++if report.get('state') != 'structurally-valid' or not all(report['checks'].values()):
++    raise SystemExit('source RootHealth journal raw validation is incomplete')
++if identity_hash != expected.get('identity_sha256') or journal['run_count'] != 1:
++    raise SystemExit('source RootHealth journal identity or run profile changed')
++if any(journal[key] != '0x00002007' for key in (
++    'standard_information_flags', 'file_name_flags',
++    'extend_i30_file_name_flags', 'required_protected_flags',
++)):
++    raise SystemExit('source RootHealth journal protected flags changed')
++if not all(journal['ownership'].get(key) is True for key in (
++    'complete', 'unique_owner', 'self_nonoverlap',
++)):
++    raise SystemExit('source RootHealth journal ownership proof is incomplete')
++if header['selected_generation'] != 2 or \
++        [slot['generation'] for slot in header['slots']] != [1, 2] or \
++        any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit('source RootHealth journal headers are not canonical EMPTY')
++PY
+ 
+ esp_bytes=$(blockdev --getsize64 "$esp_device")
+ root_original_bytes=$(blockdev --getsize64 "$root_device")
+@@ -184,8 +264,91 @@ root_loop=$(losetup --find --show --read-only "$root_output")
+ ntfsresize --check --force --no-action "$root_loop"
+ root_uuid=$(blkid -s UUID -o value "$root_loop")
+ root_label=$(blkid -s LABEL -o value "$root_loop")
++root_hash_before_journal_check=$(sha256sum "$root_output" | awk '{print $1}')
++python3 -B "$roothealth_journal_validator" validate "$root_loop" \
++    --require-zero-entry-area \
++    --report "$resized_journal_report"
++root_hash_after_journal_check=$(sha256sum "$root_output" | awk '{print $1}')
++[ "$root_hash_before_journal_check" = "$root_hash_after_journal_check" ]
++resized_journal_base64=$(python3 -B - \
++    "$resized_journal_report" "$source_journal_base64" <<'PY'
++import base64
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++report_path = Path(sys.argv[1])
++with report_path.open(encoding='utf-8') as handle:
++    report = json.load(handle)
++source = json.loads(base64.b64decode(sys.argv[2], validate=True).decode('utf-8'))
++journal = report['journal']
++header = journal['header']
++identity = {
++    'volume_serial': report['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_hash = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++exclusion_hash = hashlib.sha256(
++    json.dumps(journal['write_exclusion'], sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++if report.get('state') != 'structurally-valid' or not all(report['checks'].values()):
++    raise SystemExit('resized RootHealth journal raw validation is incomplete')
++if identity_hash != source.get('identity_sha256') or journal['run_count'] < 1:
++    raise SystemExit('resized RootHealth journal identity or run profile is invalid')
++if any(journal[key] != '0x00002007' for key in (
++    'standard_information_flags', 'file_name_flags',
++    'extend_i30_file_name_flags', 'required_protected_flags',
++)):
++    raise SystemExit('resized RootHealth journal protected flags changed')
++if not all(journal['ownership'].get(key) is True for key in (
++    'complete', 'unique_owner', 'self_nonoverlap',
++)):
++    raise SystemExit('resized RootHealth journal ownership proof is incomplete')
++if header['selected_generation'] != 2 or \
++        [slot['generation'] for slot in header['slots']] != [1, 2] or \
++        any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit('resized RootHealth journal headers are not canonical EMPTY')
++source['state'] = 'resize-preserved-and-validated'
++source['run_policy'] = 'VALIDATED_AFTER_RESIZE'
++source['resize_validation'] = {
++    'report_sha256': hashlib.sha256(report_path.read_bytes()).hexdigest(),
++    'run_count': journal['run_count'],
++    'write_exclusion': {
++        'range_count': sum(len(value) for value in journal['write_exclusion'].values()),
++        'sha256': exclusion_hash,
++    },
++    'ownership': {
++        'complete': journal['ownership']['complete'],
++        'unique_owner': journal['ownership']['unique_owner'],
++        'self_nonoverlap': journal['ownership']['self_nonoverlap'],
++        'journal_clusters': journal['ownership']['journal_clusters'],
++    },
++    'headers': {
++        'state': 'EMPTY',
++        'selected_generation': header['selected_generation'],
++        'slot_generations': [slot['generation'] for slot in header['slots']],
++        'max_entry_count': header['max_entry_count'],
++        'entry_area_zero_sha256': header['entry_area_zero_sha256'],
++    },
++}
++encoded = json.dumps(source, sort_keys=True, separators=(',', ':')).encode()
++print(base64.b64encode(encoded).decode('ascii'))
++PY
++)
+ losetup -d "$root_loop"
+ root_loop=
++source_image_hash_after=$(sha256sum "$image" | awk '{print $1}')
++[ "$source_image_hash_after" = "$source_image_hash_before" ]
++rm -f -- \
++    "$source_journal_report" \
++    "$resized_journal_report"
+ 
+ printf 'ESP_BYTES=%s\n' "$esp_bytes"
+ printf 'ROOT_BYTES=%s\n' "$root_bytes"
+@@ -193,6 +356,7 @@ printf 'ROOT_UUID=%s\n' "$root_uuid"
+ printf 'ROOT_LABEL=%s\n' "$root_label"
+ printf 'ESP_SHA256=%s\n' "$(sha256sum "$esp_output" | awk '{print $1}')"
+ printf 'ROOT_SHA256=%s\n' "$(sha256sum "$root_output" | awk '{print $1}')"
++printf 'ROOTHEALTH_JOURNAL_BASE64=%s\n' "$resized_journal_base64"
+ '@
+ 
+ New-Item -ItemType Directory -Path $workPath -Force | Out-Null
+@@ -212,7 +376,9 @@ try {
+         ConvertTo-WslPath -WindowsPath $espPayloadPath
+     ) (
+         ConvertTo-WslPath -WindowsPath $rootPayloadPath
+-    ) $GrowthReserveMiB
++    ) $GrowthReserveMiB (
++        ConvertTo-WslPath -WindowsPath $journalValidatorPath
++    ) $journalValidatorHash $sourceJournalBase64 $actualImageHash
+     if ($LASTEXITCODE -ne 0) {
+         throw "T1OS bundle payload construction failed (exit code $LASTEXITCODE)."
+     }
+@@ -228,7 +394,7 @@ try {
+     }
+     foreach ($requiredValue in @(
+         'ESP_BYTES', 'ROOT_BYTES', 'ROOT_UUID', 'ROOT_LABEL',
+-        'ESP_SHA256', 'ROOT_SHA256'
++        'ESP_SHA256', 'ROOT_SHA256', 'ROOTHEALTH_JOURNAL_BASE64'
+     )) {
+         if (-not $payloadValues.ContainsKey($requiredValue)) {
+             throw "Bundle construction did not report $requiredValue."
+@@ -251,6 +417,29 @@ try {
+     if ((Get-Item -LiteralPath $rootPayloadPath).Length -ne $rootBytes) {
+         throw 'The NTFS payload length is inconsistent.'
+     }
++    try {
++        $bundleJournalBytes = [System.Convert]::FromBase64String(
++            [string]$payloadValues.ROOTHEALTH_JOURNAL_BASE64
++        )
++        $bundleJournal = (
++            [System.Text.Encoding]::UTF8.GetString($bundleJournalBytes)
++        ) | ConvertFrom-Json
++    }
++    catch {
++        throw "Bundle construction returned an invalid RootHealth journal attestation: $($_.Exception.Message)"
++    }
++    if (
++        [string]$bundleJournal.state -cne 'resize-preserved-and-validated' -or
++        [string]$bundleJournal.path -cne '$Extend/$RootHealth' -or
++        [int64]$bundleJournal.logical_bytes -ne 134217728 -or
++        [string]$bundleJournal.required_flags -cne '0x00002007' -or
++        [int64]$bundleJournal.resize_validation.run_count -lt 1 -or
++        -not [bool]$bundleJournal.resize_validation.ownership.complete -or
++        -not [bool]$bundleJournal.resize_validation.ownership.unique_owner -or
++        -not [bool]$bundleJournal.resize_validation.ownership.self_nonoverlap
++    ) {
++        throw 'Bundle construction returned an incomplete resized RootHealth journal attestation.'
++    }
+ 
+     $minimumTargetBytes = 1MB + $espBytes + $rootBytes + 1MB
+     $bundleManifest = [ordered]@{
+@@ -273,6 +462,7 @@ try {
+         production = [bool]$imageManifest.production
+         secure_boot = [bool]$imageManifest.secure_boot
+         kernel_release = [string]$imageManifest.kernel_release
++        roothealth_journal = $bundleJournal
+         esp = [ordered]@{
+             entry = 'esp.img'
+             bytes = $espBytes
+diff --git a/scripts/create hardware usb image.ps1 b/scripts/create hardware usb image.ps1
+index 163946a..d739b7d 100755
+--- a/scripts/create hardware usb image.ps1	
++++ b/scripts/create hardware usb image.ps1	
+@@ -23,6 +23,12 @@ param(
+ 
+     [switch]$SkipCompatibilityValidation,
+ 
++    [Parameter(Mandatory)]
++    [string]$NtfscpPath,
++
++    [Parameter(Mandatory)]
++    [string]$NtfscpProvenancePath,
++
+     [switch]$Force
+ )
+ 
+@@ -61,6 +67,9 @@ $compatibilityReportPath = Join-Path $hardwareRoot 'desktop-compatibility-report
+ $buildSourcePath = Join-Path $projectRoot 'source\build software'
+ $driversSourcePath = Join-Path $projectRoot 'source\drivers'
+ $chromiumSoftwarePath = Join-Path $projectRoot 'source\software\chromium'
++$journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
++$NtfscpPath = [System.IO.Path]::GetFullPath($NtfscpPath)
++$NtfscpProvenancePath = [System.IO.Path]::GetFullPath($NtfscpProvenancePath)
+ $grubThemePath = Join-Path $projectRoot 'resource\entry\grub\t1os hardware theme.txt'
+ $grubBackgroundPath = Join-Path $projectRoot 'resource\entry\grub\t1os black background.png.base64'
+ $driveIconPath = Join-Path $projectRoot 'flash\T1OS Logo - Black Transparent.ico'
+@@ -174,7 +183,7 @@ foreach ($artifactPath in $outputArtifactPaths) {
+     }
+ }
+ 
+-foreach ($requiredFile in @($sourceRootImage, $kernelPath, $kernelReleasePath, $initramfsPath, $grubTemplate, $grubThemePath, $grubBackgroundPath, $driveIconPath, $modulesPath, $moduleLoaderPath, $firmwarePath, $firmwareManifestPath, $graphicsCataloguePath)) {
++foreach ($requiredFile in @($sourceRootImage, $kernelPath, $kernelReleasePath, $initramfsPath, $grubTemplate, $grubThemePath, $grubBackgroundPath, $driveIconPath, $modulesPath, $moduleLoaderPath, $firmwarePath, $firmwareManifestPath, $graphicsCataloguePath, $journalValidatorPath, $NtfscpPath, $NtfscpProvenancePath)) {
+     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+         throw "Required hardware-image input not found: $requiredFile"
+     }
+@@ -340,16 +349,46 @@ $wslBuildSource = ConvertTo-WslPath -WindowsPath $buildSourcePath
+ $wslDriversSource = ConvertTo-WslPath -WindowsPath $driversSourcePath
+ $wslChromiumSoftware = ConvertTo-WslPath -WindowsPath $chromiumSoftwarePath
+ $wslPartial = ConvertTo-WslPath -WindowsPath $partialPath
++$wslJournalValidator = ConvertTo-WslPath -WindowsPath $journalValidatorPath
++$wslNtfscp = ConvertTo-WslPath -WindowsPath $NtfscpPath
++$wslNtfscpProvenance = ConvertTo-WslPath -WindowsPath $NtfscpProvenancePath
+ $wslPassphrase = if ($EncryptRoot) { ConvertTo-WslPath -WindowsPath $PassphraseFile } else { '-' }
+ $encryptValue = if ($EncryptRoot) { '1' } else { '0' }
+ $productionValue = if ($Production) { '1' } else { '0' }
+ $secureBootValue = if ($secureBoot) { '1' } else { '0' }
+ $wslSecureBootKey = if ($secureBoot) { ConvertTo-WslPath -WindowsPath $SecureBootPrivateKey } else { '-' }
+ $wslSecureBootCertificate = if ($secureBoot) { ConvertTo-WslPath -WindowsPath $SecureBootCertificate } else { '-' }
++$journalValidatorHash = (
++    Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++).Hash.ToLowerInvariant()
++$ntfscpProvenanceHash = (
++    Get-FileHash -Algorithm SHA256 -LiteralPath $NtfscpProvenancePath
++).Hash.ToLowerInvariant()
++$ntfscpPreflightOutput = & wsl.exe -d Ubuntu -u root --exec env `
++    PYTHONDONTWRITEBYTECODE=1 `
++    python3 -B $wslJournalValidator verify-ntfscp `
++    $wslNtfscp $wslNtfscpProvenance
++if ($LASTEXITCODE -ne 0) {
++    throw 'The selected ntfscp lacks release-qualified pinned-d4 provenance.'
++}
++try {
++    $ntfscpAttestation = ($ntfscpPreflightOutput -join "`n") | ConvertFrom-Json
++}
++catch {
++    throw "Could not parse selected ntfscp provenance: $($_.Exception.Message)"
++}
++if (
++    [string]$ntfscpAttestation.state -cne 'release-qualified' -or
++    [string]$ntfscpAttestation.manifest_sha256 -cne $ntfscpProvenanceHash
++) {
++    throw 'The selected ntfscp attestation is not release-qualified or source-bound.'
++}
++$ntfscpBinaryHash = [string]$ntfscpAttestation.binary_sha256
+ 
+ $buildCommand = @'
+ set -euo pipefail
+ export LC_ALL=C
++export PYTHONDONTWRITEBYTECODE=1
+ 
+ source_image=$1
+ kernel=$2
+@@ -383,6 +422,12 @@ expected_kernel_release=${29}
+ drive_icon=${30}
+ chromium_source=${31}
+ source_root_sha256=${32}
++journal_validator=${33}
++journal_validator_sha256=${34}
++ntfscp_tool=${35}
++ntfscp_provenance=${36}
++ntfscp_provenance_sha256=${37}
++ntfscp_binary_sha256=${38}
+ 
+ for command_name in sgdisk losetup mkfs.vfat mkfs.ntfs ntfs-3g ntfsfix mount umount rsync grub-install blkid e2fsck fsck.vfat python3 stat cmp sha256sum file modinfo find; do
+     command -v "$command_name" >/dev/null 2>&1 || {
+@@ -390,6 +435,10 @@ for command_name in sgdisk losetup mkfs.vfat mkfs.ntfs ntfs-3g ntfsfix mount umo
+         exit 127
+     }
+ done
++[ -x "$ntfscp_tool" ] || { echo 'Selected pinned ntfscp is not executable.' >&2; exit 127; }
++[ -f "$journal_validator" ] && [ -f "$ntfscp_provenance" ]
++printf '%s  %s\n' "$journal_validator_sha256" "$journal_validator" | sha256sum -c -
++printf '%s  %s\n' "$ntfscp_provenance_sha256" "$ntfscp_provenance" | sha256sum -c -
+ if [ "$encrypt" = 1 ]; then
+     command -v cryptsetup >/dev/null 2>&1 || { echo 'cryptsetup is required for encryption.' >&2; exit 127; }
+ fi
+@@ -684,6 +733,20 @@ esac
+ expected_build="$work/expected-build"
+ expected_drivers="$work/expected-drivers"
+ mkdir -p "$source_mount" "$esp_mount" "$root_mount"
++ntfscp_attestation="$work/ntfscp-attestation.json"
++python3 -B "$journal_validator" verify-ntfscp \
++    "$ntfscp_tool" "$ntfscp_provenance" --report "$ntfscp_attestation"
++python3 -B - "$ntfscp_attestation" "$ntfscp_binary_sha256" <<'PY'
++import json
++import sys
++
++with open(sys.argv[1], encoding='utf-8') as handle:
++    report = json.load(handle)
++if report.get('state') != 'release-qualified':
++    raise SystemExit('selected ntfscp is not release-qualified')
++if report.get('binary_sha256') != sys.argv[2]:
++    raise SystemExit('selected ntfscp binary hash changed after PowerShell preflight')
++PY
+ stage_source_trees "$expected_build" "$expected_drivers"
+ expected_build_sha256=$(source_tree_sha256 "$expected_build")
+ expected_drivers_sha256=$(source_tree_sha256 "$expected_drivers")
+@@ -744,9 +807,11 @@ root_end=$((sector_count - 2049))
+ if [ "$encrypt" = 1 ]; then
+     root_type=8309
+     root_partition_name=T1OS_CRYPT
++    root_kind=luks
+ else
+     root_type=0700
+     root_partition_name=$root_label
++    root_kind=plain
+ fi
+ sgdisk --zap-all "$output"
+ sgdisk --clear \
+@@ -781,6 +846,150 @@ else
+ fi
+ 
+ mkfs.ntfs -F -Q -L "$root_label" "$root_device"
++journal_seed="$work/roothealth.seed"
++journal_seed_report="$work/roothealth-seed.json"
++journal_provision_report="$work/roothealth-provision.json"
++journal_initial_report="$work/roothealth-initial.json"
++journal_manifest="$work/roothealth-journal-manifest.json"
++python3 -B "$journal_validator" seed \
++    "$root_device" "$journal_seed" --report "$journal_seed_report"
++"$ntfscp_tool" -f -m "$root_device" "$journal_seed" '$Extend/$RootHealth'
++sync
++ntfs-3g "$root_device" "$root_mount" \
++    -o permissions,windows_names,big_writes,show_sys_files
++mounted_root=1
++python3 -B - "$root_mount/\$Extend/\$RootHealth" <<'PY'
++import os
++from pathlib import Path
++import struct
++import sys
++
++path = Path(sys.argv[1])
++required = 0x00002007
++os.setxattr(path, 'system.ntfs_attrib', struct.pack('<I', required))
++observed = struct.unpack('<I', os.getxattr(path, 'system.ntfs_attrib'))[0]
++if observed != required:
++    raise SystemExit(f'journal protected flags did not persist: 0x{observed:08x}')
++PY
++sync
++umount "$root_mount"
++mounted_root=0
++provision_arguments=(
++    provision-flags-device "$root_device"
++    --builder-image "$output"
++    --root-kind "$root_kind"
++    --expected-partition-name "$root_partition_name"
++    --report "$journal_provision_report"
++)
++if [ "$root_kind" = luks ]; then
++    provision_arguments+=(--expected-mapper-name "$mapper_name")
++fi
++python3 -B "$journal_validator" "${provision_arguments[@]}"
++python3 -B "$journal_validator" validate "$root_device" \
++    --require-one-run --require-zero-entry-area \
++    --report "$journal_initial_report"
++python3 -B - \
++    "$journal_seed_report" "$journal_provision_report" "$journal_initial_report" \
++    "$ntfscp_attestation" "$journal_manifest" \
++    "$journal_validator_sha256" "$ntfscp_provenance_sha256" <<'PY'
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++seed_path, provision_path, validation_path, tool_path, output_path = map(Path, sys.argv[1:6])
++validator_sha256, provenance_sha256 = sys.argv[6:8]
++
++def load(path):
++    with path.open(encoding='utf-8') as handle:
++        return json.load(handle)
++
++def digest(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++seed = load(seed_path)
++provision = load(provision_path)
++validation = load(validation_path)
++tool = load(tool_path)
++journal = validation['journal']
++header = journal['header']
++ownership = journal['ownership']
++exclusion = journal['write_exclusion']
++if validation.get('state') != 'structurally-valid' or not all(validation['checks'].values()):
++    raise SystemExit('fresh journal raw validation is incomplete')
++if journal['run_count'] != 1 or journal['logical_bytes'] != 134217728:
++    raise SystemExit('fresh journal is not the exact contiguous 128 MiB profile')
++if (
++    journal['standard_information_flags'] != '0x00002007'
++    or journal['file_name_flags'] != '0x00002007'
++    or journal['extend_i30_file_name_flags'] != '0x00002007'
++):
++    raise SystemExit('fresh journal protected flags are not exact 0x2007')
++if not all(ownership.get(key) is True for key in ('complete', 'unique_owner', 'self_nonoverlap')):
++    raise SystemExit('fresh journal ownership census is incomplete')
++if header['journal_uuid'] != seed['journal_uuid'] or validation['device']['serial'] != seed['volume_serial']:
++    raise SystemExit('fresh journal seed identity does not bind the NTFS volume')
++slot_generations = [slot['generation'] for slot in header['slots']]
++if header['selected_generation'] != 2 or slot_generations != [1, 2]:
++    raise SystemExit('fresh journal does not have canonical EMPTY dual headers')
++if any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit('fresh journal header is not EMPTY')
++if not header.get('entry_area_zero_sha256'):
++    raise SystemExit('fresh journal lacks a zero-entry-area digest')
++canonical_exclusion = json.dumps(exclusion, sort_keys=True, separators=(',', ':')).encode()
++identity = {
++    'volume_serial': validation['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_sha256 = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++manifest = {
++    'format': 1,
++    'state': 'provisioned-and-validated',
++    'path': '$Extend/$RootHealth',
++    **identity,
++    'record_locator': f"{journal['mft_record']}:{journal['mft_sequence']}",
++    'identity_sha256': identity_sha256,
++    'run_policy': 'ONE_AT_PROVISION_VALIDATED_AFTER_RESIZE',
++    'provisioning_run_count': 1,
++    'headers': {
++        'state': 'EMPTY',
++        'selected_generation': 2,
++        'slot_generations': slot_generations,
++        'max_entry_count': header['max_entry_count'],
++        'entry_area_zero_sha256': header['entry_area_zero_sha256'],
++    },
++    'ownership': {
++        'complete': True,
++        'unique_owner': True,
++        'self_nonoverlap': True,
++        'journal_clusters': ownership['journal_clusters'],
++    },
++    'provisioning_write_exclusion': {
++        'range_count': sum(len(value) for value in exclusion.values()),
++        'sha256': hashlib.sha256(canonical_exclusion).hexdigest(),
++    },
++    'provenance': {
++        'validator_sha256': validator_sha256,
++        'ntfscp_binary_sha256': tool['binary_sha256'],
++        'ntfscp_manifest_sha256': provenance_sha256,
++        'ntfs_next_commit': tool['upstream_commit'],
++        'ntfs_next_archive_sha256': tool['upstream_archive_sha256'],
++        'seed_report_sha256': digest(seed_path),
++        'provision_report_sha256': digest(provision_path),
++        'validation_report_sha256': digest(validation_path),
++    },
++}
++with output_path.open('x', encoding='utf-8') as handle:
++    json.dump(manifest, handle, indent=2, sort_keys=True)
++    handle.write('\n')
++PY
++rm -f -- "$journal_seed"
+ mount -o ro "$source_loop" "$source_mount"
+ mounted_source=1
+ ntfs-3g "$root_device" "$root_mount" -o permissions,windows_names,big_writes
+@@ -1181,7 +1390,7 @@ export T1OS_NVIDIA_OPEN_DRIVER_RUNFILE_SHA256="$nvidia_open_driver_runfile_sha25
+ export T1OS_GRAPHICS_CATALOGUE_SHA256="$graphics_catalogue_sha256"
+ export T1OS_FIRMWARE_MANIFEST_SHA256="$firmware_manifest_sha256"
+ export T1OS_KERNEL_RELEASE="$expected_kernel_release"
+-python3 - "$esp_mount/T1OS/image-manifest.json" <<'PY'
++python3 -B - "$esp_mount/T1OS/image-manifest.json" <<'PY'
+ import json
+ import os
+ import platform
+@@ -1222,6 +1431,103 @@ PY
+ 
+ sync
+ umount "$root_mount"; mounted_root=0
++python3 -B "$journal_validator" validate "$root_device" \
++    --require-one-run --require-zero-entry-area \
++    --report "$work/roothealth-final.json"
++python3 -B - \
++    "$journal_manifest" "$work/roothealth-final.json" \
++    "$esp_mount/T1OS/image-manifest.json" <<'PY'
++import hashlib
++import json
++import os
++from pathlib import Path
++import sys
++
++with Path(sys.argv[1]).open(encoding='utf-8') as handle:
++    expected = json.load(handle)
++with Path(sys.argv[2]).open(encoding='utf-8') as handle:
++    report = json.load(handle)
++embedded_path = Path(sys.argv[3])
++journal = report['journal']
++header = journal['header']
++identity = {
++    'volume_serial': report['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_hash = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++exclusion_hash = hashlib.sha256(
++    json.dumps(
++        journal['write_exclusion'], sort_keys=True, separators=(',', ':')
++    ).encode()
++).hexdigest()
++if identity_hash != expected['identity_sha256']:
++    raise SystemExit('final journal identity changed after root population')
++if exclusion_hash != expected['provisioning_write_exclusion']['sha256']:
++    raise SystemExit('final journal physical exclusions changed during image build')
++if journal['run_count'] != 1 or not all(report['checks'].values()):
++    raise SystemExit('final image lost the one-run complete journal proof')
++if any(journal[key] != '0x00002007' for key in (
++    'standard_information_flags', 'file_name_flags',
++    'extend_i30_file_name_flags', 'required_protected_flags'
++)):
++    raise SystemExit('final image journal flags changed')
++if not all(journal['ownership'].get(key) is True for key in (
++    'complete', 'unique_owner', 'self_nonoverlap'
++)):
++    raise SystemExit('final image journal ownership proof is incomplete')
++if header['selected_generation'] != 2 or \
++        [slot['generation'] for slot in header['slots']] != [1, 2] or \
++        any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit('final image journal headers are not canonical EMPTY')
++
++def file_digest(path):
++    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
++
++expected['final_validation'] = {
++    'report_sha256': file_digest(sys.argv[2]),
++    'run_count': journal['run_count'],
++    'write_exclusion': {
++        'range_count': sum(len(value) for value in journal['write_exclusion'].values()),
++        'sha256': exclusion_hash,
++    },
++    'ownership': {
++        'complete': journal['ownership']['complete'],
++        'unique_owner': journal['ownership']['unique_owner'],
++        'self_nonoverlap': journal['ownership']['self_nonoverlap'],
++        'journal_clusters': journal['ownership']['journal_clusters'],
++    },
++    'headers': {
++        'state': 'EMPTY',
++        'selected_generation': header['selected_generation'],
++        'slot_generations': [slot['generation'] for slot in header['slots']],
++        'max_entry_count': header['max_entry_count'],
++        'entry_area_zero_sha256': header['entry_area_zero_sha256'],
++    },
++}
++
++def atomic_json(path, value):
++    temporary = path.with_name(path.name + '.roothealth-tmp')
++    if temporary.exists():
++        raise SystemExit(f'refusing stale journal manifest temporary file: {temporary}')
++    with temporary.open('x', encoding='utf-8') as handle:
++        json.dump(value, handle, indent=2, sort_keys=True)
++        handle.write('\n')
++        handle.flush()
++        os.fsync(handle.fileno())
++    os.replace(temporary, path)
++
++atomic_json(Path(sys.argv[1]), expected)
++with embedded_path.open(encoding='utf-8') as handle:
++    embedded = json.load(handle)
++embedded['roothealth_journal'] = expected
++atomic_json(embedded_path, embedded)
++PY
+ umount "$esp_mount"; mounted_esp=0
+ umount "$source_mount"; mounted_source=0
+ 
+@@ -1254,6 +1560,13 @@ printf 'LUKS_UUID=%s\n' "$luks_uuid"
+ printf 'BUILD_SOURCE_SHA256=%s\n' "$expected_build_sha256"
+ printf 'DRIVERS_SOURCE_SHA256=%s\n' "$expected_drivers_sha256"
+ printf 'CHROMIUM_SOURCE_SHA256=%s\n' "$expected_chromium_source_sha256"
++python3 -B - "$journal_manifest" <<'PY'
++import base64
++from pathlib import Path
++import sys
++
++print('ROOTHEALTH_JOURNAL_BASE64=' + base64.b64encode(Path(sys.argv[1]).read_bytes()).decode('ascii'))
++PY
+ '@
+ 
+ $buildScriptPath = Join-Path (
+@@ -1269,7 +1582,7 @@ $buildExitCode = 1
+ $buildInvocationError = $null
+ try {
+     try {
+-        $buildOutput = & wsl.exe -d Ubuntu -u root --exec bash $wslBuildScript $wslSource $wslKernel $wslInitramfs $wslModules $wslFirmware $wslGrubTemplate $wslPartial $ImageSizeGiB $encryptValue $wslPassphrase $productionValue $secureBootValue $wslSecureBootKey $wslSecureBootCertificate $SecureBootGraphics $PreferredAudioCodec $wslGrubTheme $wslCompatibilityReport $wslGrubBackground $rootVolumeLabel $wslBuildSource $wslDriversSource $wslGraphicsCatalogue $wslFirmwareManifest $nvidiaOpenDriverVersion $nvidiaOpenDriverRunfileHash $graphicsCatalogueHash $firmwareManifestHash $kernelRelease $wslDriveIcon $wslChromiumSoftware $sourceRootHashBefore
++        $buildOutput = & wsl.exe -d Ubuntu -u root --exec bash $wslBuildScript $wslSource $wslKernel $wslInitramfs $wslModules $wslFirmware $wslGrubTemplate $wslPartial $ImageSizeGiB $encryptValue $wslPassphrase $productionValue $secureBootValue $wslSecureBootKey $wslSecureBootCertificate $SecureBootGraphics $PreferredAudioCodec $wslGrubTheme $wslCompatibilityReport $wslGrubBackground $rootVolumeLabel $wslBuildSource $wslDriversSource $wslGraphicsCatalogue $wslFirmwareManifest $nvidiaOpenDriverVersion $nvidiaOpenDriverRunfileHash $graphicsCatalogueHash $firmwareManifestHash $kernelRelease $wslDriveIcon $wslChromiumSoftware $sourceRootHashBefore $wslJournalValidator $journalValidatorHash $wslNtfscp $wslNtfscpProvenance $ntfscpProvenanceHash $ntfscpBinaryHash
+         $buildExitCode = $LASTEXITCODE
+     }
+     catch {
+@@ -1313,12 +1626,16 @@ $luksUuidLine = $buildOutput | Where-Object { $_ -match '^LUKS_UUID=' } | Select
+ $buildSourceHashLine = $buildOutput | Where-Object { $_ -match '^BUILD_SOURCE_SHA256=' } | Select-Object -Last 1
+ $driversSourceHashLine = $buildOutput | Where-Object { $_ -match '^DRIVERS_SOURCE_SHA256=' } | Select-Object -Last 1
+ $chromiumSourceHashLine = $buildOutput | Where-Object { $_ -match '^CHROMIUM_SOURCE_SHA256=' } | Select-Object -Last 1
++$journalManifestLine = $buildOutput | Where-Object { $_ -match '^ROOTHEALTH_JOURNAL_BASE64=' } | Select-Object -Last 1
+ if (-not $rootUuidLine) {
+     throw 'The image build did not report its root UUID.'
+ }
+ if (-not $buildSourceHashLine -or -not $driversSourceHashLine -or -not $chromiumSourceHashLine) {
+     throw 'The image build did not report its source provenance hashes.'
+ }
++if (-not $journalManifestLine) {
++    throw 'The image build did not report its validated RootHealth journal manifest.'
++}
+ $rootUuid = ($rootUuidLine -split '=', 2)[1]
+ $luksUuid = if ($luksUuidLine) { ($luksUuidLine -split '=', 2)[1] } else { '' }
+ $buildSourceHash = ($buildSourceHashLine -split '=', 2)[1]
+@@ -1331,6 +1648,31 @@ if (
+ ) {
+     throw 'The image build reported invalid source provenance hashes.'
+ }
++try {
++    $journalManifestBytes = [System.Convert]::FromBase64String(
++        ($journalManifestLine -split '=', 2)[1]
++    )
++    $journalManifestJson = [System.Text.Encoding]::UTF8.GetString($journalManifestBytes)
++    $rootHealthJournal = $journalManifestJson | ConvertFrom-Json
++}
++catch {
++    throw "The image build reported an invalid RootHealth journal manifest: $($_.Exception.Message)"
++}
++if (
++    [string]$rootHealthJournal.state -cne 'provisioned-and-validated' -or
++    [string]$rootHealthJournal.path -cne '$Extend/$RootHealth' -or
++    [int64]$rootHealthJournal.logical_bytes -ne 134217728 -or
++    [string]$rootHealthJournal.required_flags -cne '0x00002007' -or
++    [string]$rootHealthJournal.headers.state -cne 'EMPTY' -or
++    -not [bool]$rootHealthJournal.ownership.complete -or
++    -not [bool]$rootHealthJournal.ownership.unique_owner -or
++    -not [bool]$rootHealthJournal.ownership.self_nonoverlap -or
++    [string]$rootHealthJournal.provenance.validator_sha256 -cne $journalValidatorHash -or
++    [string]$rootHealthJournal.provenance.ntfscp_binary_sha256 -cne $ntfscpBinaryHash -or
++    [string]$rootHealthJournal.provenance.ntfscp_manifest_sha256 -cne $ntfscpProvenanceHash
++) {
++    throw 'The image build returned an incomplete or source-unbound RootHealth journal manifest.'
++}
+ 
+ $imageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $partialPath).Hash.ToLowerInvariant()
+ 
+@@ -1364,8 +1706,9 @@ $manifest = [ordered]@{
+     drivers_source_sha256 = $driversSourceHash
+     chromium_source_sha256 = $chromiumSourceHash
+     source_root_sha256 = $sourceRootHashBefore
++    roothealth_journal = $rootHealthJournal
+ }
+-$manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $partialManifestPath -Encoding utf8
++$manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $partialManifestPath -Encoding utf8
+ 
+ # Keep the last validated image and manifest until the replacement and its
+ # sidecar have both been built. If either final move fails, restore the pair.
+diff --git a/scripts/flash hardware usb.ps1 b/scripts/flash hardware usb.ps1
+index f6866d3..99e68a6 100755
+--- a/scripts/flash hardware usb.ps1	
++++ b/scripts/flash hardware usb.ps1	
+@@ -377,6 +377,52 @@ function Open-T1OSBundle {
+         if ($rootUuid -notmatch '^[0-9A-Fa-f]{16}$') {
+             throw 'The bundle contains an invalid NTFS root UUID.'
+         }
++        $rootHealthJournal = $manifest.roothealth_journal
++        $journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
++        if (-not (Test-Path -LiteralPath $journalValidatorPath -PathType Leaf)) {
++            throw "RootHealth journal validator not found: $journalValidatorPath"
++        }
++        $journalValidatorHash = (
++            Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++        ).Hash.ToLowerInvariant()
++        $slotGenerations = @($rootHealthJournal.resize_validation.headers.slot_generations)
++        if (
++            $null -eq $rootHealthJournal -or
++            [int]$rootHealthJournal.format -ne 1 -or
++            [string]$rootHealthJournal.state -cne 'resize-preserved-and-validated' -or
++            [string]$rootHealthJournal.path -cne '$Extend/$RootHealth' -or
++            [int64]$rootHealthJournal.logical_bytes -ne 134217728 -or
++            [string]$rootHealthJournal.required_flags -cne '0x00002007' -or
++            [string]$rootHealthJournal.volume_serial -notmatch '^[0-9A-F]{16}$' -or
++            [string]$rootHealthJournal.journal_uuid -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' -or
++            [int64]$rootHealthJournal.mft_record -le 0 -or
++            [int64]$rootHealthJournal.mft_sequence -le 0 -or
++            [string]$rootHealthJournal.record_locator -cne "$($rootHealthJournal.mft_record):$($rootHealthJournal.mft_sequence)" -or
++            [string]$rootHealthJournal.identity_sha256 -notmatch '^[0-9a-f]{64}$' -or
++            [string]$rootHealthJournal.run_policy -cne 'VALIDATED_AFTER_RESIZE' -or
++            [int64]$rootHealthJournal.resize_validation.run_count -lt 1 -or
++            [string]$rootHealthJournal.resize_validation.report_sha256 -notmatch '^[0-9a-f]{64}$' -or
++            [string]$rootHealthJournal.resize_validation.write_exclusion.sha256 -notmatch '^[0-9a-f]{64}$' -or
++            [int64]$rootHealthJournal.resize_validation.write_exclusion.range_count -lt 1 -or
++            [string]$rootHealthJournal.resize_validation.headers.state -cne 'EMPTY' -or
++            [int64]$rootHealthJournal.resize_validation.headers.selected_generation -ne 2 -or
++            $slotGenerations.Count -ne 2 -or
++            [int64]$slotGenerations[0] -ne 1 -or
++            [int64]$slotGenerations[1] -ne 2 -or
++            [int64]$rootHealthJournal.resize_validation.headers.max_entry_count -ne 4096 -or
++            [string]$rootHealthJournal.resize_validation.headers.entry_area_zero_sha256 -notmatch '^[0-9a-f]{64}$' -or
++            -not [bool]$rootHealthJournal.resize_validation.ownership.complete -or
++            -not [bool]$rootHealthJournal.resize_validation.ownership.unique_owner -or
++            -not [bool]$rootHealthJournal.resize_validation.ownership.self_nonoverlap -or
++            [int64]$rootHealthJournal.resize_validation.ownership.journal_clusters -ne 32768 -or
++            [string]$rootHealthJournal.provenance.validator_sha256 -cne $journalValidatorHash -or
++            [string]$rootHealthJournal.provenance.ntfscp_binary_sha256 -notmatch '^[0-9a-f]{64}$' -or
++            [string]$rootHealthJournal.provenance.ntfscp_manifest_sha256 -notmatch '^[0-9a-f]{64}$' -or
++            [string]$rootHealthJournal.provenance.ntfs_next_commit -cne 'd4f481df6926557f7b18b471a43313652dec6f7e' -or
++            [string]$rootHealthJournal.provenance.ntfs_next_archive_sha256 -cne '13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5'
++        ) {
++            throw 'The bundle lacks a complete source-bound resize-preserved RootHealth journal attestation.'
++        }
+ 
+         $espEntry = $archive.GetEntry([string]$manifest.esp.entry)
+         $rootEntry = $archive.GetEntry([string]$manifest.root.entry)
+@@ -453,6 +499,7 @@ function Open-T1OSBundle {
+             rootBytes = $rootBytes
+             espHash = $espHash
+             rootHash = $rootHash
++            roothealthJournal = $rootHealthJournal
+         }
+         return [pscustomobject]@{
+             FileStream = $fileStream
+@@ -1361,7 +1408,7 @@ function Install-T1OSBundle {
+ 
+ if ($InspectImage) {
+     if ([System.IO.Path]::GetExtension($ImagePath).ToLowerInvariant() -eq '.t1os') {
+-        Get-T1OSBundleLayout -Path $ImagePath | ConvertTo-Json -Compress
++        Get-T1OSBundleLayout -Path $ImagePath | ConvertTo-Json -Depth 12 -Compress
+     }
+     else {
+         Get-T1OSImageLayout -Path $ImagePath -RequireFilenameVersion | ConvertTo-Json -Compress
+@@ -1476,6 +1523,29 @@ else {
+         if ([string]$manifest.root_filesystem -cne 'ntfs') {
+             throw 'The validated image manifest does not identify an NTFS root filesystem.'
+         }
++        $imageJournal = $manifest.roothealth_journal
++        $journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
++        if (-not (Test-Path -LiteralPath $journalValidatorPath -PathType Leaf)) {
++            throw "RootHealth journal validator not found: $journalValidatorPath"
++        }
++        $journalValidatorHash = (
++            Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++        ).Hash.ToLowerInvariant()
++        if (
++            $null -eq $imageJournal -or
++            [int]$imageJournal.format -ne 1 -or
++            [string]$imageJournal.state -cne 'provisioned-and-validated' -or
++            [string]$imageJournal.path -cne '$Extend/$RootHealth' -or
++            [int64]$imageJournal.logical_bytes -ne 134217728 -or
++            [string]$imageJournal.required_flags -cne '0x00002007' -or
++            [string]$imageJournal.headers.state -cne 'EMPTY' -or
++            -not [bool]$imageJournal.ownership.complete -or
++            -not [bool]$imageJournal.ownership.unique_owner -or
++            -not [bool]$imageJournal.ownership.self_nonoverlap -or
++            [string]$imageJournal.provenance.validator_sha256 -cne $journalValidatorHash
++        ) {
++            throw 'The validated image manifest lacks its source-bound RootHealth journal attestation.'
++        }
+     }
+ 
+     $imageHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ImagePath).Hash.ToLowerInvariant()
+diff --git b/scripts/roothealth journal fixtures.py b/scripts/roothealth journal fixtures.py
+new file mode 100644
+index 0000000..275c2c6
+--- /dev/null
++++ b/scripts/roothealth journal fixtures.py	
+@@ -0,0 +1,302 @@
++import hashlib
++import importlib.util
++import os
++import pathlib
++import sys
++
++validator_path = pathlib.Path(sys.argv[1])
++image_path = pathlib.Path(sys.argv[2])
++mode = sys.argv[3]
++spec = importlib.util.spec_from_file_location('t1os_journal_validator', validator_path)
++if spec is None or spec.loader is None:
++    raise SystemExit('could not load the journal validator')
++module = importlib.util.module_from_spec(spec)
++sys.modules[spec.name] = module
++spec.loader.exec_module(module)
++
++
++def write_ranges(handle, ranges, payload):
++    cursor = 0
++    for item in ranges:
++        take = item['bytes']
++        handle.seek(item['device_offset'])
++        if handle.write(payload[cursor:cursor + take]) != take:
++            raise SystemExit('short negative-fixture write')
++        cursor += take
++    if cursor != len(payload):
++        raise SystemExit('negative-fixture physical mapping is incomplete')
++
++
++def write_stream(handle, volume, runs, offset, payload):
++    ranges = volume.stream_physical_ranges(runs, offset, len(payload))
++    write_ranges(handle, ranges, payload)
++
++
++def rewrite_digest(block):
++    block[module.SUPERBLOCK_DIGEST_OFFSET:] = hashlib.sha256(
++        block[:module.SUPERBLOCK_DIGEST_OFFSET]
++    ).digest()
++
++
++def locate_named_record(volume, expected):
++    matches = []
++    count = volume.mft_data_size // volume.record_size
++    for number in range(count):
++        try:
++            record = volume.record(number)
++        except module.ValidationError:
++            continue
++        if not record.in_use:
++            continue
++        for attribute in record.attributes:
++            if attribute.type_code != module.AT_FILE_NAME:
++                continue
++            details = module.filename_details(attribute)
++            if details['name'] == expected and details['parent_record'] == module.EXTEND_RECORD:
++                matches.append(record)
++    if len({record.number for record in matches}) != 1:
++        raise SystemExit(f'could not uniquely find negative-fixture record {expected!r}')
++    return matches[0]
++
++
++def locate_attribute_offset(fixed, type_code, attribute_name=''):
++    cursor = module.u16(fixed, 20)
++    used = module.u32(fixed, 24)
++    while cursor + 4 <= used:
++        actual = module.u32(fixed, cursor)
++        if actual == module.AT_END:
++            break
++        length = module.u32(fixed, cursor + 4)
++        name_length = fixed[cursor + 9]
++        name_offset = module.u16(fixed, cursor + 10)
++        name = ''
++        if name_length:
++            name = fixed[
++                cursor + name_offset:cursor + name_offset + name_length * 2
++            ].decode('utf-16le')
++        if actual == type_code and name == attribute_name:
++            return cursor
++        cursor += length
++    raise SystemExit('could not locate negative-fixture attribute')
++
++
++def assert_not_fixup_tail(volume, offsets):
++    for offset in offsets:
++        if offset % volume.sector_size in (volume.sector_size - 2, volume.sector_size - 1):
++            raise SystemExit('negative-fixture patch would overwrite an MFT fixup tail')
++
++
++with image_path.open('r+b', buffering=0) as handle:
++    volume = module.NtfsVolume(handle)
++    journal_record, _ = module.find_journal(volume)
++    journal_data = volume.unnamed_data(journal_record)
++    journal_runs = journal_data.runs()
++
++    if mode in {
++        'torn-one', 'torn-both', 'misbound-serial', 'uuid-disagreement',
++        'nonempty-transaction-kind', 'invalid-entry-cap',
++    }:
++        headers = bytearray(volume.read_stream(journal_runs, 0, module.ENTRY_AREA_START))
++        slots = [0] if mode in {'torn-one', 'uuid-disagreement'} else [
++            0, module.SUPERBLOCK_SIZE
++        ]
++        if mode in {'torn-one', 'torn-both'}:
++            for slot in slots:
++                headers[slot] ^= 0x80
++        elif mode == 'misbound-serial':
++            for slot in slots:
++                block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
++                wrong = module.u64(block, 0x028) ^ 1
++                block[0x028:0x030] = wrong.to_bytes(8, 'little')
++                rewrite_digest(block)
++                headers[slot:slot + module.SUPERBLOCK_SIZE] = block
++        elif mode == 'uuid-disagreement':
++            slot = module.SUPERBLOCK_SIZE
++            block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
++            block[0x030] ^= 0x01
++            rewrite_digest(block)
++            headers[slot:slot + module.SUPERBLOCK_SIZE] = block
++        else:
++            for slot in slots:
++                block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
++                if mode == 'nonempty-transaction-kind':
++                    block[0x0A0:0x0A4] = (1).to_bytes(4, 'little')
++                else:
++                    block[0x0A4:0x0A8] = (0).to_bytes(4, 'little')
++                rewrite_digest(block)
++                headers[slot:slot + module.SUPERBLOCK_SIZE] = block
++        write_stream(handle, volume, journal_runs, 0, headers)
++    elif mode == 'nonzero-entry':
++        write_stream(handle, volume, journal_runs, module.ENTRY_AREA_START, b'X')
++    elif mode.startswith('missing-protected-'):
++        selected = mode.removeprefix('missing-protected-')
++        copy_sets = {
++            'standard': frozenset(('standard',)),
++            'file-name': frozenset(('file_name',)),
++            'index': frozenset(('index',)),
++            'all': frozenset(('standard', 'file_name', 'index')),
++        }
++        if selected not in copy_sets:
++            raise SystemExit(f'unknown protected-flag copy: {selected}')
++        required = module.REQUIRED_PROTECTED_FLAGS
++        module.rewrite_journal_flag_copies(
++            handle,
++            volume,
++            journal_record,
++            expected_flags=(required, required, required),
++            desired_flags=required & ~module.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
++            copies=copy_sets[selected],
++        )
++    elif mode == 'clear-bitmap':
++        first_lcn = journal_runs[0].lcn
++        if first_lcn is None:
++            raise SystemExit('journal fixture unexpectedly begins with a sparse run')
++        bitmap = volume.unnamed_data(volume.record(module.BITMAP_RECORD))
++        bitmap_runs = bitmap.runs()
++        byte_offset = first_lcn >> 3
++        original = volume.read_stream(bitmap_runs, byte_offset, 1)[0]
++        changed = bytes([original & ~(1 << (first_lcn & 7))])
++        if changed[0] == original:
++            raise SystemExit('journal fixture bitmap bit was already clear')
++        write_stream(handle, volume, bitmap_runs, byte_offset, changed)
++    elif mode == 'clear-mft-bitmap':
++        mft = volume.record(0)
++        bitmap_attributes = [
++            item for item in mft.attributes
++            if item.type_code == module.AT_BITMAP and item.name == ''
++        ]
++        if len(bitmap_attributes) != 1:
++            raise SystemExit('fixture lacks one exact $MFT/$BITMAP')
++        bitmap_attribute = bitmap_attributes[0]
++        byte_offset = journal_record.number >> 3
++        bit = journal_record.number & 7
++        if bitmap_attribute.nonresident:
++            bitmap_runs = bitmap_attribute.runs()
++            original = volume.read_stream(bitmap_runs, byte_offset, 1)[0]
++            changed = bytes([original & ~(1 << bit)])
++            write_stream(handle, volume, bitmap_runs, byte_offset, changed)
++        else:
++            logical = module.read_file_record_logical(volume, 0)
++            value_offset = module.attribute_value_start(bitmap_attribute)
++            original = logical[value_offset + byte_offset]
++            logical[value_offset + byte_offset] = original & ~(1 << bit)
++            module.write_file_record_logical(handle, volume, 0, logical)
++        if not (original & (1 << bit)):
++            raise SystemExit('journal fixture MFT bitmap bit was already clear')
++    elif mode == 'self-overlap':
++        record_offset = journal_record.number * volume.record_size
++        raw = volume.read_stream(volume.mft_runs, record_offset, volume.record_size)
++        fixed = bytearray(volume.apply_fixups(raw))
++        attribute = locate_attribute_offset(fixed, module.AT_DATA)
++        attribute_length = module.u32(fixed, attribute + 4)
++        mapping_offset = module.u16(fixed, attribute + 32)
++        mapping = attribute + mapping_offset
++        available = attribute_length - mapping_offset
++        first_lcn = journal_runs[0].lcn
++        clusters = journal_runs[0].length
++        if first_lcn is None or clusters < 4 or len(journal_runs) != 1:
++            raise SystemExit('self-overlap fixture requires one mapped journal run')
++
++        def unsigned(value):
++            width = max(1, (value.bit_length() + 7) // 8)
++            return value.to_bytes(width, 'little')
++
++        def signed(value):
++            for width in range(1, 9):
++                try:
++                    return value.to_bytes(width, 'little', signed=True)
++                except OverflowError:
++                    pass
++            raise SystemExit('self-overlap delta exceeds signed 64-bit')
++
++        first_length = clusters // 2
++        second_length = clusters - first_length
++        first_length_bytes = unsigned(first_length)
++        first_offset_bytes = signed(first_lcn)
++        second_length_bytes = unsigned(second_length)
++        second_offset_bytes = signed(1)
++        encoded = (
++            bytes([(len(first_offset_bytes) << 4) | len(first_length_bytes)])
++            + first_length_bytes + first_offset_bytes
++            + bytes([(len(second_offset_bytes) << 4) | len(second_length_bytes)])
++            + second_length_bytes + second_offset_bytes + b'\0'
++        )
++        if len(encoded) > available:
++            old_end = attribute + attribute_length
++            used = module.u32(fixed, 24)
++            if (
++                old_end + 8 != used
++                or module.u32(fixed, old_end) != module.AT_END
++                or used + 8 > len(fixed)
++                or len(encoded) > available + 8
++            ):
++                raise SystemExit('journal mapping-pairs record has no safe tail expansion')
++            fixed[old_end + 8:old_end + 16] = fixed[old_end:old_end + 8]
++            fixed[old_end:old_end + 8] = b'\0' * 8
++            attribute_length += 8
++            available += 8
++            fixed[attribute + 4:attribute + 8] = attribute_length.to_bytes(4, 'little')
++            fixed[24:28] = (used + 8).to_bytes(4, 'little')
++        fixed[mapping:mapping + len(encoded)] = encoded
++        module.write_file_record_logical(handle, volume, journal_record.number, fixed)
++    elif mode == 'duplicate-owner':
++        ordinary = locate_named_record(volume, '$Ordinary0')
++        logical = module.read_file_record_logical(volume, ordinary.number)
++        attribute = locate_attribute_offset(logical, module.AT_DATA)
++        mapping = attribute + module.u16(logical, attribute + 32)
++        header = logical[mapping]
++        length_width = header & 0x0F
++        offset_width = header >> 4
++        first_lcn = journal_runs[0].lcn
++        if offset_width == 0 or first_lcn is None:
++            raise SystemExit('ordinary owner fixture lacks a mapped first run')
++        patch_start = mapping + 1 + length_width
++        patch = int(first_lcn).to_bytes(offset_width, 'little', signed=True)
++        logical[patch_start:patch_start + len(patch)] = patch
++        module.write_file_record_logical(handle, volume, ordinary.number, logical)
++    elif mode == 'overlap-protected':
++        record_offset = journal_record.number * volume.record_size
++        raw = volume.read_stream(volume.mft_runs, record_offset, volume.record_size)
++        fixed = volume.apply_fixups(raw)
++        attribute = locate_attribute_offset(fixed, module.AT_DATA)
++        mapping = attribute + module.u16(fixed, attribute + 32)
++        header = fixed[mapping]
++        length_width = header & 0x0F
++        offset_width = header >> 4
++        if offset_width == 0:
++            raise SystemExit('journal fixture has a sparse first run')
++        patch_start = mapping + 1 + length_width
++        patch = int(volume.mft_lcn).to_bytes(offset_width, 'little', signed=True)
++        assert_not_fixup_tail(volume, range(patch_start, patch_start + len(patch)))
++        write_stream(
++            handle,
++            volume,
++            volume.mft_runs,
++            record_offset + patch_start,
++            patch,
++        )
++    elif mode == 'duplicate-name':
++        duplicate = locate_named_record(volume, '$Duplicate0')
++        record_offset = duplicate.number * volume.record_size
++        raw = volume.read_stream(volume.mft_runs, record_offset, volume.record_size)
++        fixed = volume.apply_fixups(raw)
++        attribute = locate_attribute_offset(fixed, module.AT_FILE_NAME)
++        value_offset = module.u16(fixed, attribute + 20)
++        name_length_offset = attribute + value_offset + 64
++        name_offset = attribute + value_offset + 66
++        old_length = fixed[name_length_offset]
++        replacement = '$RootHealth'.encode('utf-16le')
++        if old_length * 2 != len(replacement):
++            raise SystemExit('duplicate-name fixture does not have an equal-length source')
++        assert_not_fixup_tail(volume, range(name_offset, name_offset + len(replacement)))
++        write_stream(
++            handle,
++            volume,
++            volume.mft_runs,
++            record_offset + name_offset,
++            replacement,
++        )
++    else:
++        raise SystemExit(f'unknown negative-fixture mutation: {mode}')
++    handle.flush()
++    os.fsync(handle.fileno())
+diff --git a/scripts/test hardware usb bundle.ps1 b/scripts/test hardware usb bundle.ps1
+index e1cbdb3..4148c4e 100755
+--- a/scripts/test hardware usb bundle.ps1	
++++ b/scripts/test hardware usb bundle.ps1	
+@@ -22,6 +22,10 @@ if (-not (Test-Path -LiteralPath $BundlePath -PathType Leaf)) {
+ }
+ 
+ $flashScript = Join-Path $PSScriptRoot 'flash hardware usb.ps1'
++$journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
++if (-not (Test-Path -LiteralPath $journalValidatorPath -PathType Leaf)) {
++    throw "RootHealth journal validator not found: $journalValidatorPath"
++}
+ $layoutJson = & pwsh -NoLogo -NoProfile -NonInteractive `
+     -ExecutionPolicy Bypass `
+     -File $flashScript `
+@@ -34,6 +38,25 @@ $layout = $layoutJson | ConvertFrom-Json
+ if (-not $layout.valid -or -not $layout.bundle) {
+     throw 'The selected file did not inspect as a valid T1OS bundle.'
+ }
++$journalValidatorHash = (
++    Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++).Hash.ToLowerInvariant()
++$expectedJournal = $layout.roothealthJournal
++if (
++    $null -eq $expectedJournal -or
++    [string]$expectedJournal.state -cne 'resize-preserved-and-validated' -or
++    [string]$expectedJournal.path -cne '$Extend/$RootHealth' -or
++    [int64]$expectedJournal.logical_bytes -ne 134217728 -or
++    [string]$expectedJournal.required_flags -cne '0x00002007' -or
++    [string]$expectedJournal.provenance.validator_sha256 -cne $journalValidatorHash
++) {
++    throw 'The inspected bundle lacks its source-bound RootHealth journal attestation.'
++}
++$expectedJournalBase64 = [System.Convert]::ToBase64String(
++    [System.Text.Encoding]::UTF8.GetBytes(
++        ($expectedJournal | ConvertTo-Json -Depth 12 -Compress)
++    )
++)
+ 
+ if (-not $TargetSizesGiB -or $TargetSizesGiB.Count -eq 0) {
+     $minimumGiB = [int][math]::Ceiling([long]$layout.minimumTargetBytes / 1GB)
+@@ -64,6 +87,8 @@ $shellPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+ )
+ $shell = @'
+ set -euo pipefail
++export LC_ALL=C
++export PYTHONDONTWRITEBYTECODE=1
+ trap 'status=$?; echo "T1OS bundle validation command failed at line $LINENO: $BASH_COMMAND" >&2; exit "$status"' ERR
+ 
+ bundle=$1
+@@ -75,7 +100,10 @@ root_bytes=$6
+ esp_hash=$7
+ root_hash=$8
+ expected_production=$9
+-shift 9
++roothealth_journal_validator=${10}
++roothealth_journal_validator_sha256=${11}
++expected_journal_base64=${12}
++shift 12
+ 
+ for command_name in awk blkid blockdev cmp dd find fsck.vfat grep losetup mount.ntfs-3g ntfsfix ntfsresize python3 rm sgdisk sha256sum sort stat tr truncate umount; do
+     command -v "$command_name" >/dev/null 2>&1 || {
+@@ -99,7 +127,67 @@ cleanup() {
+ }
+ trap cleanup EXIT
+ 
+-python3 - "$bundle" "$work" <<'PY'
++validate_journal() {
++    local target=$1
++    local report=$2
++    local stage=$3
++    local hash_target=$4
++    local before_hash=$5
++
++    python3 -B "$roothealth_journal_validator" validate "$target" \
++        --require-zero-entry-area --report "$report" >/dev/null
++    python3 -B - "$report" "$expected_journal_base64" "$stage" <<'PY'
++import base64
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++report_path = Path(sys.argv[1])
++with report_path.open(encoding='utf-8') as handle:
++    report = json.load(handle)
++expected = json.loads(base64.b64decode(sys.argv[2], validate=True).decode('utf-8'))
++stage = sys.argv[3]
++journal = report['journal']
++header = journal['header']
++identity = {
++    'volume_serial': report['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_hash = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++if report.get('state') != 'structurally-valid' or not all(report['checks'].values()):
++    raise SystemExit(f'{stage} RootHealth journal validation is incomplete')
++if identity_hash != expected.get('identity_sha256') or journal['run_count'] < 1:
++    raise SystemExit(f'{stage} RootHealth identity or run profile changed')
++if stage == 'compact' and journal['run_count'] != expected['resize_validation']['run_count']:
++    raise SystemExit('compact RootHealth run count differs from its bundle attestation')
++if any(journal[key] != '0x00002007' for key in (
++    'standard_information_flags', 'file_name_flags',
++    'extend_i30_file_name_flags', 'required_protected_flags',
++)):
++    raise SystemExit(f'{stage} RootHealth protected flags changed')
++if not all(journal['ownership'].get(key) is True for key in (
++    'complete', 'unique_owner', 'self_nonoverlap',
++)):
++    raise SystemExit(f'{stage} RootHealth ownership proof is incomplete')
++if header['selected_generation'] != 2 or \
++        [slot['generation'] for slot in header['slots']] != [1, 2] or \
++        any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit(f'{stage} RootHealth headers are not canonical EMPTY')
++print(journal['run_count'])
++PY
++    local after_hash
++    after_hash=$(sha256sum "$hash_target" | awk '{print $1}')
++    [ "$after_hash" = "$before_hash" ]
++}
++
++python3 -B - "$bundle" "$work" <<'PY'
+ import pathlib
+ import sys
+ import zipfile
+@@ -118,6 +206,11 @@ PY
+ [ "$(stat -c %s "$work/root.ntfs.img")" = "$root_bytes" ]
+ [ "$(sha256sum "$work/esp.img" | awk '{print $1}')" = "$esp_hash" ]
+ [ "$(sha256sum "$work/root.ntfs.img" | awk '{print $1}')" = "$root_hash" ]
++printf '%s  %s\n' "$roothealth_journal_validator_sha256" "$roothealth_journal_validator" | sha256sum -c -
++compact_root_hash=$(sha256sum "$work/root.ntfs.img" | awk '{print $1}')
++compact_run_count=$(validate_journal \
++    "$work/root.ntfs.img" "$work/compact-roothealth.json" compact \
++    "$work/root.ntfs.img" "$compact_root_hash")
+ 
+ mkdir "$root_mount"
+ esp_sectors=$((esp_bytes / 512))
+@@ -154,6 +247,10 @@ for size_gib in "$@"; do
+     ntfsresize --check --force --no-action "$root_device" >/dev/null
+     [ "$(blkid -s UUID -o value "$root_device")" = "$expected_uuid" ]
+     [ "$(blkid -s LABEL -o value "$root_device")" = "$expected_label" ]
++    target_hash_before_journal=$(sha256sum "$disk" | awk '{print $1}')
++    expanded_run_count=$(validate_journal \
++        "$root_device" "$work/expanded-${size_gib}-roothealth.json" \
++        "expanded-${size_gib}GiB" "$disk" "$target_hash_before_journal")
+ 
+     mount.ntfs-3g -o ro "$root_device" "$root_mount"
+     mounted=1
+@@ -181,9 +278,10 @@ for size_gib in "$@"; do
+     losetup -d "$loop"
+     loop=
+     rm -f -- "$disk"
+-    printf 'Validated %s GiB target: root_bytes=%s label=%s version=%s\n' \
++    printf 'Validated %s GiB target: root_bytes=%s label=%s version=%s journal_runs=%s compact_runs=%s\n' \
+         "$size_gib" "$expanded_root_bytes" \
+-        "$expected_label" "$expected_version"
++        "$expected_label" "$expected_version" \
++        "$expanded_run_count" "$compact_run_count"
+ done
+ '@
+ 
+@@ -213,7 +311,9 @@ try {
+         [string]$layout.rootHash
+     ) (
+         [string][bool]$layout.production
+-    ) @($TargetSizesGiB)
++    ) (
++        ConvertTo-WslPath -WindowsPath $journalValidatorPath
++    ) $journalValidatorHash $expectedJournalBase64 @($TargetSizesGiB)
+     if ($LASTEXITCODE -ne 0) {
+         throw "Capacity-independent bundle validation failed (exit code $LASTEXITCODE)."
+     }
+diff --git a/scripts/test roothealth journal.ps1 b/scripts/test roothealth journal.ps1
+index 8f57cde..8d2f80c 100755
+--- a/scripts/test roothealth journal.ps1	
++++ b/scripts/test roothealth journal.ps1	
+@@ -1,10 +1,15 @@
+ [CmdletBinding()]
+ param(
+-    [string]$NtfscpPath
++    [Parameter(Mandatory)]
++    [string]$NtfscpPath,
++
++    [Parameter(Mandatory)]
++    [string]$NtfscpProvenancePath
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+ $validator = Join-Path $PSScriptRoot 'validate roothealth journal.py'
++$fixtures = Join-Path $PSScriptRoot 'roothealth journal fixtures.py'
+ 
+ function ConvertTo-WslPath {
+     param([Parameter(Mandatory)][string]$WindowsPath)
+@@ -22,18 +27,84 @@ if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+ if (-not (Test-Path -LiteralPath $validator -PathType Leaf)) {
+     throw "The roothealth journal validator is missing: $validator"
+ }
++if (-not (Test-Path -LiteralPath $fixtures -PathType Leaf)) {
++    throw "The roothealth journal fixture helper is missing: $fixtures"
++}
+ 
+-$wslValidator = ConvertTo-WslPath -WindowsPath $validator
+-$wslNtfscp = if ([string]::IsNullOrWhiteSpace($NtfscpPath)) {
+-    'ntfscp'
++$integrationRequirements = [ordered]@{
++    'create hardware usb image.ps1' = @(
++        'verify-ntfscp',
++        'provision-flags-device "$root_device"',
++        '--builder-image "$output"',
++        '--require-one-run --require-zero-entry-area',
++        'ROOTHEALTH_JOURNAL_BASE64=',
++        'roothealth_journal = $rootHealthJournal'
++    )
++    'validate hardware usb image.ps1' = @(
++        'roothealth_journal_validator',
++        '--require-one-run --require-zero-entry-area',
++        'image_hash_after=$(sha256sum "$image"',
++        "embedded.get('roothealth_journal')"
++    )
++    'create hardware usb bundle.ps1' = @(
++        'source_journal_report=',
++        'resize-preserved-and-validated',
++        '--require-zero-entry-area',
++        'ROOTHEALTH_JOURNAL_BASE64'
++    )
++    'test hardware usb bundle.ps1' = @(
++        'validate_journal()',
++        'expanded-${size_gib}-roothealth.json',
++        'RootHealth ownership proof is incomplete',
++        'target_hash_before_journal'
++    )
++    'flash hardware usb.ps1' = @(
++        'resize-preserved-and-validated',
++        'roothealthJournal = $rootHealthJournal',
++        'ConvertTo-Json -Depth 12 -Compress'
++    )
+ }
+-else {
+-    $resolvedNtfscp = [System.IO.Path]::GetFullPath($NtfscpPath)
+-    if (-not (Test-Path -LiteralPath $resolvedNtfscp -PathType Leaf)) {
+-        throw "The selected pinned ntfscp is missing: $resolvedNtfscp"
++foreach ($entry in $integrationRequirements.GetEnumerator()) {
++    $path = Join-Path $PSScriptRoot $entry.Key
++    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
++        throw "RootHealth journal integration input is missing: $path"
+     }
+-    ConvertTo-WslPath -WindowsPath $resolvedNtfscp
++    $tokens = $null
++    $parseErrors = $null
++    [void][System.Management.Automation.Language.Parser]::ParseFile(
++        $path,
++        [ref]$tokens,
++        [ref]$parseErrors
++    )
++    if ($parseErrors.Count -ne 0) {
++        throw "RootHealth journal integration script has a PowerShell parse error: $path"
++    }
++    $text = Get-Content -LiteralPath $path -Raw
++    foreach ($marker in $entry.Value) {
++        if (-not $text.Contains($marker, [StringComparison]::Ordinal)) {
++            throw "RootHealth journal integration marker is missing from $($entry.Key): $marker"
++        }
++    }
++}
++$imageBuilderText = Get-Content -LiteralPath (
++    Join-Path $PSScriptRoot 'create hardware usb image.ps1'
++) -Raw
++if ($imageBuilderText.Contains('--allow-proposed-test-tool', [StringComparison]::Ordinal)) {
++    throw 'The production image builder must never accept proposed-test-only ntfscp provenance.'
++}
++
++$wslValidator = ConvertTo-WslPath -WindowsPath $validator
++$wslFixtures = ConvertTo-WslPath -WindowsPath $fixtures
++$resolvedNtfscp = [System.IO.Path]::GetFullPath($NtfscpPath)
++if (-not (Test-Path -LiteralPath $resolvedNtfscp -PathType Leaf)) {
++    throw "The selected pinned ntfscp is missing: $resolvedNtfscp"
++}
++$resolvedNtfscpProvenance = [System.IO.Path]::GetFullPath($NtfscpProvenancePath)
++if (-not (Test-Path -LiteralPath $resolvedNtfscpProvenance -PathType Leaf)) {
++    throw "The selected ntfscp provenance manifest is missing: $resolvedNtfscpProvenance"
+ }
++$wslNtfscp = ConvertTo-WslPath -WindowsPath $resolvedNtfscp
++$wslNtfscpProvenance = ConvertTo-WslPath -WindowsPath $resolvedNtfscpProvenance
+ $testScript = @'
+ set -euo pipefail
+ export LC_ALL=C
+@@ -42,9 +113,12 @@ umask 077
+ 
+ validator=$1
+ ntfscp_tool=$2
++ntfscp_provenance=$3
++mutator=$4
+ required_commands=(
+-    awk blockdev cat cp grep ln losetup mkdir mkfs.ntfs mktemp mount.ntfs-3g mv
+-    ntfsresize python3 rm sed sha256sum stat sync tail truncate umount
++    awk blockdev cp cryptsetup dd dmsetup grep ln losetup mkdir mkfs.ntfs
++    mktemp mount.ntfs-3g mv ntfsclone ntfsresize python3 rm sed sgdisk sha256sum
++    stat sync tail truncate umount
+ )
+ missing=()
+ for command_name in "${required_commands[@]}"; do
+@@ -62,14 +136,24 @@ command -v "$ntfscp_tool" >/dev/null 2>&1 || {
+     echo "The selected ntfscp is unavailable in WSL: $ntfscp_tool" >&2
+     exit 127
+ }
+-
+ work=$(mktemp -d /var/tmp/roothealth-journal-test.XXXXXX)
+ case "$work" in
+     /var/tmp/roothealth-journal-test.*) ;;
+     *) echo "Unexpected roothealth journal-test path: $work" >&2; exit 1 ;;
+ esac
++python3 -B "$validator" verify-ntfscp \
++    "$ntfscp_tool" "$ntfscp_provenance" \
++    --allow-proposed-test-tool \
++    --report "$work/ntfscp-provenance.json"
++if python3 -B "$validator" verify-ntfscp \
++        "$ntfscp_tool" "$ntfscp_provenance" >/dev/null 2>&1; then
++    echo 'Proposed test-only ntfscp provenance passed the release gate.' >&2
++    exit 1
++fi
+ 
+ active_loop=
++active_mapper=
++active_holder=
+ mounted=0
+ mount_root="$work/mount"
+ mkdir "$mount_root"
+@@ -83,6 +167,13 @@ cleanup() {
+             cleanup_failed=1
+         fi
+     fi
++    if [ -n "$active_holder" ]; then
++        if dmsetup remove "$active_holder"; then
++            active_holder=
++        else
++            cleanup_failed=1
++        fi
++    fi
+     if [ "$mounted" = 0 ] && [ -n "$active_loop" ]; then
+         if losetup --detach "$active_loop"; then
+             active_loop=
+@@ -90,6 +181,13 @@ cleanup() {
+             cleanup_failed=1
+         fi
+     fi
++    if [ -n "$active_mapper" ]; then
++        if cryptsetup close "$active_mapper"; then
++            active_mapper=
++        else
++            cleanup_failed=1
++        fi
++    fi
+     if [ "$cleanup_failed" = 0 ]; then
+         case "$work" in
+             /var/tmp/roothealth-journal-test.*) rm -rf -- "$work" ;;
+@@ -113,14 +211,20 @@ truncate -s 1G "$image"
+ active_loop=$(losetup --find --show "$image")
+ mkfs.ntfs -F -Q -L 'T1OS JOURNAL TEST' "$active_loop" >/dev/null
+ [ "$(blockdev --getss "$active_loop")" = 512 ]
++public_block_before=$(sha256sum "$image" | awk '{print $1}')
++if python3 -B "$validator" provision-flags "$active_loop" >/dev/null 2>&1; then
++    echo 'Public regular-file journal provisioner accepted a block device.' >&2
++    exit 1
++fi
++[ "$(sha256sum "$image" | awk '{print $1}')" = "$public_block_before" ]
+ 
+-python3 "$validator" seed "$active_loop" "$seed" --report "$seed_report"
++python3 -B "$validator" seed "$active_loop" "$seed" --report "$seed_report"
+ [ "$(stat -c %s "$seed")" = 134217728 ]
+ "$ntfscp_tool" -f -m "$active_loop" "$seed" '$Extend/$RootHealth'
+ sync
+ mount.ntfs-3g -o rw,permissions,show_sys_files "$active_loop" "$mount_root"
+ mounted=1
+-python3 - "$mount_root/\$Extend/\$RootHealth" <<'PY'
++python3 -B - "$mount_root/\$Extend/\$RootHealth" <<'PY'
+ import os
+ from pathlib import Path
+ import struct
+@@ -140,9 +244,307 @@ umount "$mount_root"
+ mounted=0
+ losetup --detach "$active_loop"
+ active_loop=
+-python3 "$validator" provision-flags "$image" >/dev/null
++
++create_builder_disk() {
++    disk=$1
++    root_type=$2
++    root_name=$3
++    truncate -s 2G "$disk"
++    disk_sectors=$(($(stat -c %s "$disk") / 512))
++    root_end=$((disk_sectors - 2049))
++    sgdisk --zap-all "$disk" >/dev/null
++    sgdisk --clear \
++        --new=1:2048:+16M --typecode=1:ef00 --change-name=1:T1OS_TEST_ESP \
++        --new=2:0:"$root_end" --typecode=2:"$root_type" \
++        --change-name=2:"$root_name" "$disk" >/dev/null
++    sgdisk --verify "$disk" >/dev/null
++}
++
++attach_builder_disk() {
++    disk=$1
++    active_loop=$(losetup --find --show --partscan "$disk")
++    for unused in 1 2 3 4 5; do
++        [ -b "${active_loop}p1" ] && [ -b "${active_loop}p2" ] && return 0
++        sleep 0.2
++    done
++    echo "Builder partition devices did not appear for $disk" >&2
++    return 1
++}
++
++plain_disk="$work/plain-gpt.img.building"
++plain_name='T1OS JOURNAL TEST'
++plain_report="$work/plain-block-provision.json"
++create_builder_disk "$plain_disk" 0700 "$plain_name"
++attach_builder_disk "$plain_disk"
++ntfsclone --quiet --force --overwrite "${active_loop}p2" "$image"
++sync
++plain_before=$(sha256sum "$plain_disk" | awk '{print $1}')
++
++python3 -B - "$plain_disk" "$work/backup-gpt.bin" <<'PY'
++import os
++from pathlib import Path
++import struct
++import sys
++import zlib
++
++image = Path(sys.argv[1])
++saved = Path(sys.argv[2])
++with image.open('r+b', buffering=0) as handle:
++    handle.seek(-512, os.SEEK_END)
++    original = handle.read(512)
++    if len(original) != 512 or original[:8] != b'EFI PART':
++        raise SystemExit('fixture backup GPT header is unavailable')
++    saved.write_bytes(original)
++    changed = bytearray(original)
++    changed[56] ^= 1
++    header_size = struct.unpack_from('<I', changed, 12)[0]
++    struct.pack_into('<I', changed, 16, 0)
++    struct.pack_into('<I', changed, 16, zlib.crc32(changed[:header_size]) & 0xffffffff)
++    handle.seek(-512, os.SEEK_END)
++    if handle.write(changed) != len(changed):
++        raise SystemExit('short backup GPT mutation')
++    handle.flush()
++    os.fsync(handle.fileno())
++PY
++if python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++        --builder-image "$plain_disk" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted valid but disagreeing GPT headers.' >&2
++    exit 1
++fi
++python3 -B - "$plain_disk" "$work/backup-gpt.bin" <<'PY'
++import os
++from pathlib import Path
++import sys
++
++image = Path(sys.argv[1])
++original = Path(sys.argv[2]).read_bytes()
++with image.open('r+b', buffering=0) as handle:
++    handle.seek(-512, os.SEEK_END)
++    if handle.write(original) != len(original):
++        raise SystemExit('short backup GPT restore')
++    handle.flush()
++    os.fsync(handle.fileno())
++PY
++rm -f -- "$work/backup-gpt.bin"
++
++wrong_builder="$work/wrong-backing.img.building"
++truncate -s 2G "$wrong_builder"
++if python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++        --builder-image "$wrong_builder" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted the wrong .building backing inode.' >&2
++    exit 1
++fi
++rm -f -- "$wrong_builder"
++if python3 -B "$validator" provision-flags-device "${active_loop}p1" \
++        --builder-image "$plain_disk" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a non-root GPT partition.' >&2
++    exit 1
++fi
++ln -s "$plain_disk" "$work/plain-alias.img.building"
++if python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++        --builder-image "$work/plain-alias.img.building" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a symlinked .building image.' >&2
++    exit 1
++fi
++rm -f -- "$work/plain-alias.img.building"
++ln -s "${active_loop}p2" "$work/plain-target-link"
++if python3 -B "$validator" provision-flags-device "$work/plain-target-link" \
++        --builder-image "$plain_disk" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a non-mapper target symlink.' >&2
++    exit 1
++fi
++rm -f -- "$work/plain-target-link"
++
++mount.ntfs-3g -o ro "${active_loop}p2" "$mount_root"
++mounted=1
++if python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++        --builder-image "$plain_disk" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a mounted NTFS target.' >&2
++    exit 1
++fi
++umount "$mount_root"
++mounted=0
++
++active_holder="rhjournal-holder-$$"
++plain_sectors=$(blockdev --getsz "${active_loop}p2")
++dmsetup create "$active_holder" --table \
++    "0 $plain_sectors linear ${active_loop}p2 0"
++if python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++        --builder-image "$plain_disk" --root-kind plain \
++        --expected-partition-name "$plain_name" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a root partition with an extra holder.' >&2
++    exit 1
++fi
++dmsetup remove "$active_holder"
++active_holder=
++
++[ "$(sha256sum "$plain_disk" | awk '{print $1}')" = "$plain_before" ]
++python3 -B "$validator" provision-flags-device "${active_loop}p2" \
++    --builder-image "$plain_disk" --root-kind plain \
++    --expected-partition-name "$plain_name" --report "$plain_report"
++python3 -B "$validator" validate "${active_loop}p2" \
++    --require-one-run --require-zero-entry-area >/dev/null
++python3 -B - "$plain_report" <<'PY'
++import json
++import sys
++
++with open(sys.argv[1], encoding='utf-8') as handle:
++    report = json.load(handle)
++binding = report.get('builder_binding', {})
++raw = binding.get('binding', {})
++gpt = raw.get('gpt_partition', {})
++if binding.get('mode') != 'LOOP_BACKED_BUILDING_BLOCK':
++    raise SystemExit('plain block report lacks builder-only mode binding')
++if raw.get('root_kind') != 'plain' or gpt.get('number') != 2:
++    raise SystemExit('plain block report lacks exact GPT partition-2 binding')
++if gpt.get('type_guid') != 'ebd0a0a2-b9e5-4433-87c0-68b6b72699c7':
++    raise SystemExit('plain block report has the wrong GPT type')
++if raw.get('dm') != {'dm_name': None, 'dm_uuid': None}:
++    raise SystemExit('plain block report unexpectedly contains a dm layer')
++PY
++losetup --detach "$active_loop"
++active_loop=
++
++retarget_disk="$work/retarget-gpt.img.building"
++retarget_old="$work/retarget-gpt.img.old"
++create_builder_disk "$retarget_disk" 0700 "$plain_name"
++attach_builder_disk "$retarget_disk"
++ntfsclone --quiet --force --overwrite "${active_loop}p2" "$image"
++sync
++python3 -B - "$validator" "$retarget_disk" "$retarget_old" \
++        "${active_loop}p2" "$plain_name" <<'PY'
++import importlib.util
++import os
++from pathlib import Path
++import sys
++
++validator_path = Path(sys.argv[1])
++builder = Path(sys.argv[2])
++old = Path(sys.argv[3])
++target = Path(sys.argv[4])
++partition_name = sys.argv[5]
++spec = importlib.util.spec_from_file_location('journal_retarget_validator', validator_path)
++if spec is None or spec.loader is None:
++    raise SystemExit('could not load validator for retarget fixture')
++module = importlib.util.module_from_spec(spec)
++sys.modules[spec.name] = module
++spec.loader.exec_module(module)
++original = module.provision_flags_on_handle
++
++def retarget_after_write(*args, **kwargs):
++    report = original(*args, **kwargs)
++    size = builder.stat().st_size
++    builder.rename(old)
++    descriptor = os.open(builder, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
++    try:
++        os.ftruncate(descriptor, size)
++        os.fsync(descriptor)
++    finally:
++        os.close(descriptor)
++    return report
++
++module.provision_flags_on_handle = retarget_after_write
++try:
++    module.provision_protected_flags_device(
++        target, builder, 'plain', partition_name, None
++    )
++except module.ValidationError:
++    pass
++else:
++    raise SystemExit('block provisioner accepted a retargeted .building path')
++if not builder.is_file() or not old.is_file():
++    raise SystemExit('retarget fixture did not preserve both inode identities')
++PY
++losetup --detach "$active_loop"
++active_loop=
++rm -f -- "$retarget_disk" "$retarget_old"
++
++luks_disk="$work/luks-gpt.img.building"
++luks_name=T1OS_CRYPT
++luks_report="$work/luks-block-provision.json"
++luks_key="$work/luks.key"
++printf 'roothealth-journal-fixture-key\n' > "$luks_key"
++create_builder_disk "$luks_disk" 8309 "$luks_name"
++attach_builder_disk "$luks_disk"
++
++active_holder="rhjournal-linear-$$"
++luks_sectors=$(blockdev --getsz "${active_loop}p2")
++dmsetup create "$active_holder" --table \
++    "0 $luks_sectors linear ${active_loop}p2 0"
++if python3 -B "$validator" provision-flags-device "/dev/mapper/$active_holder" \
++        --builder-image "$luks_disk" --root-kind luks \
++        --expected-partition-name "$luks_name" \
++        --expected-mapper-name "$active_holder" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a non-crypt single-slave dm target.' >&2
++    exit 1
++fi
++dmsetup remove "$active_holder"
++active_holder=
++
++cryptsetup luksFormat --batch-mode --type luks2 --label T1OS_CRYPT \
++    --key-file "$luks_key" "${active_loop}p2"
++active_mapper="rhjournal-crypt-$$"
++cryptsetup open --type luks --key-file "$luks_key" \
++    "${active_loop}p2" "$active_mapper"
++mapper_device="/dev/mapper/$active_mapper"
++ntfsclone --quiet --force --overwrite "$mapper_device" "$image"
++sync
++luks_before=$(sha256sum "$luks_disk" | awk '{print $1}')
++if python3 -B "$validator" provision-flags-device "$mapper_device" \
++        --builder-image "$luks_disk" --root-kind luks \
++        --expected-partition-name "$luks_name" \
++        --expected-mapper-name wrong-mapper >/dev/null 2>&1; then
++    echo 'Block provisioner accepted the wrong dm-crypt mapper name.' >&2
++    exit 1
++fi
++mount.ntfs-3g -o ro "$mapper_device" "$mount_root"
++mounted=1
++if python3 -B "$validator" provision-flags-device "$mapper_device" \
++        --builder-image "$luks_disk" --root-kind luks \
++        --expected-partition-name "$luks_name" \
++        --expected-mapper-name "$active_mapper" >/dev/null 2>&1; then
++    echo 'Block provisioner accepted a mounted dm-crypt target.' >&2
++    exit 1
++fi
++umount "$mount_root"
++mounted=0
++[ "$(sha256sum "$luks_disk" | awk '{print $1}')" = "$luks_before" ]
++python3 -B "$validator" provision-flags-device "$mapper_device" \
++    --builder-image "$luks_disk" --root-kind luks \
++    --expected-partition-name "$luks_name" \
++    --expected-mapper-name "$active_mapper" --report "$luks_report"
++python3 -B "$validator" validate "$mapper_device" \
++    --require-one-run --require-zero-entry-area >/dev/null
++python3 -B - "$luks_report" "$active_mapper" <<'PY'
++import json
++import sys
++
++with open(sys.argv[1], encoding='utf-8') as handle:
++    report = json.load(handle)
++raw = report.get('builder_binding', {}).get('binding', {})
++dm = raw.get('dm', {})
++if raw.get('root_kind') != 'luks' or dm.get('dm_name') != sys.argv[2]:
++    raise SystemExit('encrypted block report lacks exact dm-crypt binding')
++if not str(dm.get('dm_uuid', '')).startswith('CRYPT-LUKS2-'):
++    raise SystemExit('encrypted block report lacks a LUKS2 dm UUID')
++if raw.get('gpt_partition', {}).get('type_guid') != \
++        'ca7d7ccb-63ed-4c53-861c-1742536059cc':
++    raise SystemExit('encrypted block report has the wrong GPT type')
++PY
++cryptsetup close "$active_mapper"
++active_mapper=
++losetup --detach "$active_loop"
++active_loop=
++
++python3 -B "$validator" provision-flags "$image" >/dev/null
+ active_loop=$(losetup --find --show "$image")
+-python3 "$validator" validate "$active_loop" \
++python3 -B "$validator" validate "$active_loop" \
+     --require-one-run \
+     --require-zero-entry-area \
+     --report "$initial_report"
+@@ -152,13 +554,13 @@ active_loop=
+ mv "$image" "$final_image"
+ image="$final_image"
+ final_sha=$(sha256sum "$image" | awk '{print $1}')
+-if python3 "$validator" provision-flags "$image" >/dev/null 2>&1; then
++if python3 -B "$validator" provision-flags "$image" >/dev/null 2>&1; then
+     echo 'Builder-only journal flag updater accepted a non-.building target.' >&2
+     exit 1
+ fi
+ [ "$(sha256sum "$image" | awk '{print $1}')" = "$final_sha" ]
+ ln -s "$image" "$work/alias.building"
+-if python3 "$validator" provision-flags "$work/alias.building" >/dev/null 2>&1; then
++if python3 -B "$validator" provision-flags "$work/alias.building" >/dev/null 2>&1; then
+     echo 'Builder-only journal flag updater accepted a symlink target.' >&2
+     exit 1
+ fi
+@@ -166,224 +568,13 @@ fi
+ rm -f "$work/alias.building"
+ cp --reflink=auto --sparse=always -- "$image" "$work/already-final.building"
+ stale_sha=$(sha256sum "$work/already-final.building" | awk '{print $1}')
+-if python3 "$validator" provision-flags "$work/already-final.building" \
++if python3 -B "$validator" provision-flags "$work/already-final.building" \
+         >/dev/null 2>&1; then
+     echo 'Builder-only journal flag updater accepted a non-fresh final image.' >&2
+     exit 1
+ fi
+ [ "$(sha256sum "$work/already-final.building" | awk '{print $1}')" = "$stale_sha" ]
+ rm -f "$work/already-final.building"
+-mutator="$work/mutate.py"
+-cat > "$mutator" <<'PY'
+-import hashlib
+-import importlib.util
+-import os
+-import pathlib
+-import sys
+-
+-validator_path = pathlib.Path(sys.argv[1])
+-image_path = pathlib.Path(sys.argv[2])
+-mode = sys.argv[3]
+-spec = importlib.util.spec_from_file_location('t1os_journal_validator', validator_path)
+-if spec is None or spec.loader is None:
+-    raise SystemExit('could not load the journal validator')
+-module = importlib.util.module_from_spec(spec)
+-sys.modules[spec.name] = module
+-spec.loader.exec_module(module)
+-
+-
+-def write_ranges(handle, ranges, payload):
+-    cursor = 0
+-    for item in ranges:
+-        take = item['bytes']
+-        handle.seek(item['device_offset'])
+-        if handle.write(payload[cursor:cursor + take]) != take:
+-            raise SystemExit('short negative-fixture write')
+-        cursor += take
+-    if cursor != len(payload):
+-        raise SystemExit('negative-fixture physical mapping is incomplete')
+-
+-
+-def write_stream(handle, volume, runs, offset, payload):
+-    ranges = volume.stream_physical_ranges(runs, offset, len(payload))
+-    write_ranges(handle, ranges, payload)
+-
+-
+-def rewrite_digest(block):
+-    block[module.SUPERBLOCK_DIGEST_OFFSET:] = hashlib.sha256(
+-        block[:module.SUPERBLOCK_DIGEST_OFFSET]
+-    ).digest()
+-
+-
+-def locate_named_record(volume, expected):
+-    matches = []
+-    count = volume.mft_data_size // volume.record_size
+-    for number in range(count):
+-        try:
+-            record = volume.record(number)
+-        except module.ValidationError:
+-            continue
+-        if not record.in_use:
+-            continue
+-        for attribute in record.attributes:
+-            if attribute.type_code != module.AT_FILE_NAME:
+-                continue
+-            details = module.filename_details(attribute)
+-            if details['name'] == expected and details['parent_record'] == module.EXTEND_RECORD:
+-                matches.append(record)
+-    if len({record.number for record in matches}) != 1:
+-        raise SystemExit(f'could not uniquely find negative-fixture record {expected!r}')
+-    return matches[0]
+-
+-
+-def locate_attribute_offset(fixed, type_code, attribute_name=''):
+-    cursor = module.u16(fixed, 20)
+-    used = module.u32(fixed, 24)
+-    while cursor + 4 <= used:
+-        actual = module.u32(fixed, cursor)
+-        if actual == module.AT_END:
+-            break
+-        length = module.u32(fixed, cursor + 4)
+-        name_length = fixed[cursor + 9]
+-        name_offset = module.u16(fixed, cursor + 10)
+-        name = ''
+-        if name_length:
+-            name = fixed[
+-                cursor + name_offset:cursor + name_offset + name_length * 2
+-            ].decode('utf-16le')
+-        if actual == type_code and name == attribute_name:
+-            return cursor
+-        cursor += length
+-    raise SystemExit('could not locate negative-fixture attribute')
+-
+-
+-def assert_not_fixup_tail(volume, offsets):
+-    for offset in offsets:
+-        if offset % volume.sector_size in (volume.sector_size - 2, volume.sector_size - 1):
+-            raise SystemExit('negative-fixture patch would overwrite an MFT fixup tail')
+-
+-
+-with image_path.open('r+b', buffering=0) as handle:
+-    volume = module.NtfsVolume(handle)
+-    journal_record, _ = module.find_journal(volume)
+-    journal_data = volume.unnamed_data(journal_record)
+-    journal_runs = journal_data.runs()
+-
+-    if mode in {
+-        'torn-one', 'torn-both', 'misbound-serial', 'uuid-disagreement',
+-        'nonempty-transaction-kind', 'invalid-entry-cap',
+-    }:
+-        headers = bytearray(volume.read_stream(journal_runs, 0, module.ENTRY_AREA_START))
+-        slots = [0] if mode in {'torn-one', 'uuid-disagreement'} else [
+-            0, module.SUPERBLOCK_SIZE
+-        ]
+-        if mode in {'torn-one', 'torn-both'}:
+-            for slot in slots:
+-                headers[slot] ^= 0x80
+-        elif mode == 'misbound-serial':
+-            for slot in slots:
+-                block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
+-                wrong = module.u64(block, 0x028) ^ 1
+-                block[0x028:0x030] = wrong.to_bytes(8, 'little')
+-                rewrite_digest(block)
+-                headers[slot:slot + module.SUPERBLOCK_SIZE] = block
+-        elif mode == 'uuid-disagreement':
+-            slot = module.SUPERBLOCK_SIZE
+-            block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
+-            block[0x030] ^= 0x01
+-            rewrite_digest(block)
+-            headers[slot:slot + module.SUPERBLOCK_SIZE] = block
+-        else:
+-            for slot in slots:
+-                block = bytearray(headers[slot:slot + module.SUPERBLOCK_SIZE])
+-                if mode == 'nonempty-transaction-kind':
+-                    block[0x0A0:0x0A4] = (1).to_bytes(4, 'little')
+-                else:
+-                    block[0x0A4:0x0A8] = (0).to_bytes(4, 'little')
+-                rewrite_digest(block)
+-                headers[slot:slot + module.SUPERBLOCK_SIZE] = block
+-        write_stream(handle, volume, journal_runs, 0, headers)
+-    elif mode == 'nonzero-entry':
+-        write_stream(handle, volume, journal_runs, module.ENTRY_AREA_START, b'X')
+-    elif mode.startswith('missing-protected-'):
+-        selected = mode.removeprefix('missing-protected-')
+-        copy_sets = {
+-            'standard': frozenset(('standard',)),
+-            'file-name': frozenset(('file_name',)),
+-            'index': frozenset(('index',)),
+-            'all': frozenset(('standard', 'file_name', 'index')),
+-        }
+-        if selected not in copy_sets:
+-            raise SystemExit(f'unknown protected-flag copy: {selected}')
+-        required = module.REQUIRED_PROTECTED_FLAGS
+-        module.rewrite_journal_flag_copies(
+-            handle,
+-            volume,
+-            journal_record,
+-            expected_flags=(required, required, required),
+-            desired_flags=required & ~module.FILE_ATTRIBUTE_NOT_CONTENT_INDEXED,
+-            copies=copy_sets[selected],
+-        )
+-    elif mode == 'clear-bitmap':
+-        first_lcn = journal_runs[0].lcn
+-        if first_lcn is None:
+-            raise SystemExit('journal fixture unexpectedly begins with a sparse run')
+-        bitmap = volume.unnamed_data(volume.record(module.BITMAP_RECORD))
+-        bitmap_runs = bitmap.runs()
+-        byte_offset = first_lcn >> 3
+-        original = volume.read_stream(bitmap_runs, byte_offset, 1)[0]
+-        changed = bytes([original & ~(1 << (first_lcn & 7))])
+-        if changed[0] == original:
+-            raise SystemExit('journal fixture bitmap bit was already clear')
+-        write_stream(handle, volume, bitmap_runs, byte_offset, changed)
+-    elif mode == 'overlap-protected':
+-        record_offset = journal_record.number * volume.record_size
+-        raw = volume.read_stream(volume.mft_runs, record_offset, volume.record_size)
+-        fixed = volume.apply_fixups(raw)
+-        attribute = locate_attribute_offset(fixed, module.AT_DATA)
+-        mapping = attribute + module.u16(fixed, attribute + 32)
+-        header = fixed[mapping]
+-        length_width = header & 0x0F
+-        offset_width = header >> 4
+-        if offset_width == 0:
+-            raise SystemExit('journal fixture has a sparse first run')
+-        patch_start = mapping + 1 + length_width
+-        patch = int(volume.mft_lcn).to_bytes(offset_width, 'little', signed=True)
+-        assert_not_fixup_tail(volume, range(patch_start, patch_start + len(patch)))
+-        write_stream(
+-            handle,
+-            volume,
+-            volume.mft_runs,
+-            record_offset + patch_start,
+-            patch,
+-        )
+-    elif mode == 'duplicate-name':
+-        duplicate = locate_named_record(volume, '$Duplicate0')
+-        record_offset = duplicate.number * volume.record_size
+-        raw = volume.read_stream(volume.mft_runs, record_offset, volume.record_size)
+-        fixed = volume.apply_fixups(raw)
+-        attribute = locate_attribute_offset(fixed, module.AT_FILE_NAME)
+-        value_offset = module.u16(fixed, attribute + 20)
+-        name_length_offset = attribute + value_offset + 64
+-        name_offset = attribute + value_offset + 66
+-        old_length = fixed[name_length_offset]
+-        replacement = '$RootHealth'.encode('utf-16le')
+-        if old_length * 2 != len(replacement):
+-            raise SystemExit('duplicate-name fixture does not have an equal-length source')
+-        assert_not_fixup_tail(volume, range(name_offset, name_offset + len(replacement)))
+-        write_stream(
+-            handle,
+-            volume,
+-            volume.mft_runs,
+-            record_offset + name_offset,
+-            replacement,
+-        )
+-    else:
+-        raise SystemExit(f'unknown negative-fixture mutation: {mode}')
+-    handle.flush()
+-    os.fsync(handle.fileno())
+-PY
+-
+ expect_rejected() {
+     mode=$1
+     fixture="$work/reject-${mode}.ntfs"
+@@ -395,8 +586,19 @@ expect_rejected() {
+         losetup --detach "$active_loop"
+         active_loop=
+     fi
+-    python3 "$mutator" "$validator" "$fixture" "$mode"
+-    if python3 "$validator" validate "$fixture" \
++    if [ "$mode" = duplicate-owner ]; then
++        ordinary_source="$work/ordinary-owner.bin"
++        printf 'ordinary-owner' > "$ordinary_source"
++        truncate -s 4096 "$ordinary_source"
++        active_loop=$(losetup --find --show "$fixture")
++        "$ntfscp_tool" -f -m "$active_loop" "$ordinary_source" \
++            '$Extend/$Ordinary0'
++        sync
++        losetup --detach "$active_loop"
++        active_loop=
++    fi
++    python3 -B "$mutator" "$validator" "$fixture" "$mode"
++    if python3 -B "$validator" validate "$fixture" \
+         --require-one-run --require-zero-entry-area >/dev/null 2>&1; then
+         echo "Journal validator falsely approved negative fixture: $mode" >&2
+         exit 1
+@@ -408,7 +610,8 @@ for negative_case in \
+     torn-one torn-both misbound-serial uuid-disagreement nonzero-entry \
+     nonempty-transaction-kind invalid-entry-cap missing-protected-standard \
+     missing-protected-file-name missing-protected-index missing-protected-all \
+-    clear-bitmap duplicate-name overlap-protected; do
++    clear-bitmap clear-mft-bitmap duplicate-name duplicate-owner \
++    overlap-protected self-overlap; do
+     expect_rejected "$negative_case"
+ done
+ 
+@@ -432,17 +635,17 @@ if [ "$shrink_bytes" -ge $((1024 * 1024 * 1024)) ]; then
+ fi
+ ntfsresize --force --no-progress-bar --size "$shrink_bytes" "$active_loop" >/dev/null
+ sync
+-python3 "$validator" validate "$active_loop" \
++python3 -B "$validator" validate "$active_loop" \
+     --require-zero-entry-area \
+     --report "$shrink_report"
+ 
+ ntfsresize --force --no-progress-bar "$active_loop" >/dev/null
+ sync
+-python3 "$validator" validate "$active_loop" \
++python3 -B "$validator" validate "$active_loop" \
+     --require-zero-entry-area \
+     --report "$expand_report"
+ 
+-python3 - "$seed_report" "$initial_report" "$shrink_report" "$expand_report" <<'PY'
++python3 -B - "$seed_report" "$initial_report" "$shrink_report" "$expand_report" <<'PY'
+ import json
+ import pathlib
+ import sys
+@@ -481,6 +684,16 @@ for report in reports:
+         raise SystemExit('journal protected attribute profile changed')
+     if journal['protected_flags_present'] is not True:
+         raise SystemExit('journal protected attribute proof is absent')
++    ownership = journal.get('ownership', {})
++    if ownership.get('complete') is not True or ownership.get('unique_owner') is not True or \
++            ownership.get('self_nonoverlap') is not True:
++        raise SystemExit('journal ownership census is incomplete')
++    if ownership.get('allocated_mft_records', 0) <= 0 or \
++            ownership.get('nonresident_attributes_examined', 0) <= 0 or \
++            ownership.get('physical_runs_examined', 0) <= 0:
++        raise SystemExit('journal ownership census has implausible zero denominators')
++    if ownership.get('journal_clusters') != 32768:
++        raise SystemExit('journal ownership census cluster total changed')
+     if not all(report['checks'].values()):
+         raise SystemExit('journal raw structural proof is incomplete')
+ if initial['journal']['run_count'] != 1:
+@@ -509,7 +722,7 @@ $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) (
+ try {
+     & wsl.exe -d Ubuntu -u root --exec bash (
+         ConvertTo-WslPath -WindowsPath $scriptPath
+-    ) $wslValidator $wslNtfscp
++    ) $wslValidator $wslNtfscp $wslNtfscpProvenance $wslFixtures
+     if ($LASTEXITCODE -ne 0) {
+         throw "roothealth journal fixture validation failed (exit code $LASTEXITCODE)."
+     }
+diff --git a/scripts/validate hardware usb image.ps1 b/scripts/validate hardware usb image.ps1
+index 08918b8..e73d9fc 100755
+--- a/scripts/validate hardware usb image.ps1	
++++ b/scripts/validate hardware usb image.ps1	
+@@ -1,6 +1,8 @@
+ [CmdletBinding()]
+ param(
+-    [string]$ImagePath
++    [string]$ImagePath,
++
++    [string]$PassphraseFile
+ )
+ 
+ $ErrorActionPreference = 'Stop'
+@@ -26,6 +28,7 @@ $compatibilityReportPath = Join-Path $hardwareRoot 'desktop-compatibility-report
+ $moduleLoaderPath = Join-Path $projectRoot 'source\drivers\tools\modprobe'
+ $ntfsCheckerBuilderPath = Join-Path $projectRoot 'scripts\build roothealth.ps1'
+ $ntfsCheckerPath = Join-Path $hardwareRoot 'tools\roothealth'
++$journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
+ 
+ if (-not (Test-Path -LiteralPath $ntfsCheckerBuilderPath -PathType Leaf)) {
+     throw "roothealth builder not found: $ntfsCheckerBuilderPath"
+@@ -48,7 +51,8 @@ foreach ($requiredFile in @(
+     $graphicsCataloguePath,
+     $compatibilityReportPath,
+     $moduleLoaderPath,
+-    $ntfsCheckerPath
++    $ntfsCheckerPath,
++    $journalValidatorPath
+ )) {
+     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+         throw "Required image validation input not found: $requiredFile"
+@@ -75,6 +79,46 @@ if ($rootLabel -notmatch '^T1OS \d+(?:\.\d+)?$' -or $rootLabel.Length -gt 32) {
+ if ([bool]$manifest.windows_native_root -ne (-not [bool]$manifest.encrypted)) {
+     throw 'The sidecar manifest Windows-native root state is inconsistent with encryption.'
+ }
++if ([bool]$manifest.encrypted) {
++    if ([string]::IsNullOrWhiteSpace($PassphraseFile)) {
++        throw 'Encrypted image journal validation requires -PassphraseFile.'
++    }
++    $PassphraseFile = [System.IO.Path]::GetFullPath($PassphraseFile)
++    if (-not (Test-Path -LiteralPath $PassphraseFile -PathType Leaf)) {
++        throw "Encrypted image passphrase file not found: $PassphraseFile"
++    }
++}
++$rootHealthJournal = $manifest.roothealth_journal
++$journalValidatorHash = (
++    Get-FileHash -Algorithm SHA256 -LiteralPath $journalValidatorPath
++).Hash.ToLowerInvariant()
++if (
++    $null -eq $rootHealthJournal -or
++    [int]$rootHealthJournal.format -ne 1 -or
++    [string]$rootHealthJournal.state -cne 'provisioned-and-validated' -or
++    [string]$rootHealthJournal.path -cne '$Extend/$RootHealth' -or
++    [int64]$rootHealthJournal.logical_bytes -ne 134217728 -or
++    [string]$rootHealthJournal.required_flags -cne '0x00002007' -or
++    [string]$rootHealthJournal.record_locator -cne "$($rootHealthJournal.mft_record):$($rootHealthJournal.mft_sequence)" -or
++    [string]$rootHealthJournal.headers.state -cne 'EMPTY' -or
++    [int64]$rootHealthJournal.headers.selected_generation -ne 2 -or
++    [int64]$rootHealthJournal.headers.max_entry_count -ne 4096 -or
++    [int64]$rootHealthJournal.provisioning_run_count -ne 1 -or
++    -not [bool]$rootHealthJournal.ownership.complete -or
++    -not [bool]$rootHealthJournal.ownership.unique_owner -or
++    -not [bool]$rootHealthJournal.ownership.self_nonoverlap -or
++    [string]$rootHealthJournal.provenance.validator_sha256 -cne $journalValidatorHash -or
++    [string]$rootHealthJournal.provenance.ntfscp_binary_sha256 -notmatch '^[0-9a-f]{64}$' -or
++    [string]$rootHealthJournal.provenance.ntfscp_manifest_sha256 -notmatch '^[0-9a-f]{64}$' -or
++    [string]$rootHealthJournal.identity_sha256 -notmatch '^[0-9a-f]{64}$' -or
++    [string]$rootHealthJournal.headers.entry_area_zero_sha256 -notmatch '^[0-9a-f]{64}$'
++) {
++    throw 'The sidecar lacks a complete source-bound RootHealth journal attestation.'
++}
++$journalManifestJson = $rootHealthJournal | ConvertTo-Json -Depth 12 -Compress
++$journalManifestBase64 = [System.Convert]::ToBase64String(
++    [System.Text.Encoding]::UTF8.GetBytes($journalManifestJson)
++)
+ $preferredAudioCodec = ([string]$manifest.preferred_audio_codec).ToLowerInvariant()
+ if ($preferredAudioCodec -and $preferredAudioCodec -notmatch '^[0-9a-f]{8}$') {
+     throw 'The sidecar manifest preferred audio codec is neither automatic nor a valid codec ID.'
+@@ -259,10 +303,28 @@ $wslNtfsChecker = ([string]($wslNtfsCheckerOutput | Select-Object -First 1)).Tri
+ if ($wslNtfsCheckerExitCode -ne 0 -or -not $wslNtfsChecker) {
+     throw 'Could not translate the roothealth path for WSL.'
+ }
++$wslJournalValidatorOutput = & wsl.exe -d Ubuntu --exec wslpath -a $journalValidatorPath
++$wslJournalValidatorExitCode = $LASTEXITCODE
++$wslJournalValidator = ([string](
++    $wslJournalValidatorOutput | Select-Object -First 1
++)).Trim()
++if ($wslJournalValidatorExitCode -ne 0 -or -not $wslJournalValidator) {
++    throw 'Could not translate the RootHealth journal validator path for WSL.'
++}
++$wslPassphrase = '-'
++if ([bool]$manifest.encrypted) {
++    $wslPassphraseOutput = & wsl.exe -d Ubuntu --exec wslpath -a $PassphraseFile
++    $wslPassphraseExitCode = $LASTEXITCODE
++    $wslPassphrase = ([string]($wslPassphraseOutput | Select-Object -First 1)).Trim()
++    if ($wslPassphraseExitCode -ne 0 -or -not $wslPassphrase) {
++        throw 'Could not translate the encrypted image passphrase path for WSL.'
++    }
++}
+ 
+ $validateCommand = @'
+ set -euo pipefail
+ export LC_ALL=C
++export PYTHONDONTWRITEBYTECODE=1
+ trap 'status=$?; echo "Hardware USB image validation command failed at line $LINENO: $BASH_COMMAND" >&2; exit "$status"' ERR
+ image=$1
+ expected_root_uuid=$2
+@@ -291,10 +353,18 @@ chromium_source=${24}
+ expected_chromium_source_hash=${25}
+ expected_source_root_hash=${26}
+ ntfs_checker=${27}
++roothealth_journal_validator=${28}
++roothealth_journal_validator_sha256=${29}
++roothealth_journal_base64=${30}
++passphrase=${31}
++expected_image_sha256=${32}
+ work=/var/tmp/t1os-usb-validate
+ loop=
+ mounted=0
+ root_mounted=0
++mapper_name=t1os-usb-validate-root
++mapper_open=0
++root_device=
+ 
+ stage_source_trees() {
+     local expected_build=$1
+@@ -493,6 +563,9 @@ cleanup() {
+     if [ "$root_mounted" != 0 ]; then
+         if umount "$work/root"; then root_mounted=0; else cleanup_failed=1; fi
+     fi
++    if [ "$mapper_open" != 0 ]; then
++        if cryptsetup close "$mapper_name"; then mapper_open=0; else cleanup_failed=1; fi
++    fi
+     if [ "$mounted" != 0 ]; then
+         if umount "$work/esp"; then mounted=0; else cleanup_failed=1; fi
+     fi
+@@ -517,6 +590,9 @@ trap 'exit 143' TERM
+ 
+ rm -rf -- "$work"
+ mkdir -p "$work/esp" "$work/root"
++printf '%s  %s\n' "$roothealth_journal_validator_sha256" "$roothealth_journal_validator" | sha256sum -c -
++image_hash_before=$(sha256sum "$image" | awk '{print $1}')
++[ "$image_hash_before" = "$expected_image_sha256" ]
+ expected_build="$work/expected-build"
+ expected_drivers="$work/expected-drivers"
+ stage_source_trees "$expected_build" "$expected_drivers"
+@@ -642,14 +718,24 @@ printf '%s\n' "$safe_entry" | grep -Fq 'nvidia,nvidia_modeset,nvidia_drm'
+ grub-script-check "$work/esp/boot/grub/grub.cfg"
+ 
+ if [ "$encrypted" = True ]; then
++    command -v cryptsetup >/dev/null 2>&1
+     sgdisk --info=2 "$loop" | grep -Fiq 'CA7D7CCB-63ED-4C53-861C-1742536059CC'
+     cryptsetup isLuks "${loop}p2"
++    cryptsetup open --readonly --type luks --key-file "$passphrase" \
++        "${loop}p2" "$mapper_name"
++    mapper_open=1
++    root_device="/dev/mapper/$mapper_name"
++    [ "$(blkid -s TYPE -o value "$root_device")" = ntfs ]
++    [ "$(blkid -s LABEL -o value "$root_device")" = "$expected_root_label" ]
++    actual_root_uuid=$(blkid -s UUID -o value "$root_device")
++    [ "$actual_root_uuid" = "$expected_root_uuid" ]
+ else
+     sgdisk --info=2 "$loop" | grep -Fiq 'EBD0A0A2-B9E5-4433-87C0-68B6B72699C7'
+     [ "$(blkid -s TYPE -o value "${loop}p2")" = ntfs ]
+     [ "$(blkid -s LABEL -o value "${loop}p2")" = "$expected_root_label" ]
+     actual_root_uuid=$(blkid -s UUID -o value "${loop}p2")
+     [ "$actual_root_uuid" = "$expected_root_uuid" ]
++    root_device="${loop}p2"
+     image_hash_before_ntfs_check=$(sha256sum "$image" | awk '{print $1}')
+     "$ntfs_checker" --check --quiet --require-t1os-root \
+         --report "$work/roothealth.json" "${loop}p2"
+@@ -1067,6 +1153,80 @@ if config.get('preferredcodec') != (sys.argv[2] or None):
+ PY
+ fi
+ 
++python3 -B "$roothealth_journal_validator" validate "$root_device" \
++    --require-one-run --require-zero-entry-area \
++    --report "$work/roothealth-journal.json"
++python3 -B - \
++    "$work/roothealth-journal.json" "$roothealth_journal_base64" \
++    "$work/esp/T1OS/image-manifest.json" <<'PY'
++import base64
++import hashlib
++import json
++from pathlib import Path
++import sys
++
++with Path(sys.argv[1]).open(encoding='utf-8') as handle:
++    report = json.load(handle)
++expected = json.loads(base64.b64decode(sys.argv[2], validate=True).decode('utf-8'))
++with Path(sys.argv[3]).open(encoding='utf-8') as handle:
++    embedded = json.load(handle)
++if embedded.get('roothealth_journal') != expected:
++    raise SystemExit('ESP and sidecar RootHealth journal attestations differ')
++if (
++    expected.get('format') != 1
++    or expected.get('state') != 'provisioned-and-validated'
++    or expected.get('path') != '$Extend/$RootHealth'
++    or expected.get('logical_bytes') != 134217728
++    or expected.get('required_flags') != '0x00002007'
++    or expected.get('record_locator') !=
++        f"{expected.get('mft_record')}:{expected.get('mft_sequence')}"
++    or expected.get('headers', {}).get('state') != 'EMPTY'
++    or expected.get('headers', {}).get('selected_generation') != 2
++    or expected.get('headers', {}).get('slot_generations') != [1, 2]
++    or expected.get('headers', {}).get('max_entry_count') != 4096
++):
++    raise SystemExit('sidecar RootHealth journal attestation is malformed')
++journal = report['journal']
++header = journal['header']
++identity = {
++    'volume_serial': report['device']['serial'],
++    'journal_uuid': header['journal_uuid'],
++    'mft_record': journal['mft_record'],
++    'mft_sequence': journal['mft_sequence'],
++    'logical_bytes': journal['logical_bytes'],
++    'required_flags': '0x00002007',
++}
++identity_hash = hashlib.sha256(
++    json.dumps(identity, sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++exclusion_hash = hashlib.sha256(
++    json.dumps(journal['write_exclusion'], sort_keys=True, separators=(',', ':')).encode()
++).hexdigest()
++if report.get('state') != 'structurally-valid' or not all(report['checks'].values()):
++    raise SystemExit('RootHealth journal read-only validation is incomplete')
++if identity_hash != expected['identity_sha256']:
++    raise SystemExit('RootHealth journal identity differs from its sidecar attestation')
++if journal['run_count'] != expected['final_validation']['run_count']:
++    raise SystemExit('RootHealth journal run count differs from its final build attestation')
++if exclusion_hash != expected['final_validation']['write_exclusion']['sha256']:
++    raise SystemExit('RootHealth journal write-exclusion set differs from its final build attestation')
++if any(journal[key] != '0x00002007' for key in (
++    'standard_information_flags', 'file_name_flags',
++    'extend_i30_file_name_flags', 'required_protected_flags',
++)):
++    raise SystemExit('RootHealth journal protected flags are not exact 0x2007')
++if not all(journal['ownership'].get(key) is True for key in (
++    'complete', 'unique_owner', 'self_nonoverlap',
++)):
++    raise SystemExit('RootHealth journal ownership census is incomplete')
++if header['selected_generation'] != 2 or \
++        [slot['generation'] for slot in header['slots']] != [1, 2] or \
++        any(slot['state'] != 'EMPTY' for slot in header['slots']):
++    raise SystemExit('RootHealth journal does not have canonical EMPTY dual headers')
++PY
++image_hash_after=$(sha256sum "$image" | awk '{print $1}')
++[ "$image_hash_after" = "$image_hash_before" ]
++
+ if [ "$secure_boot" = True ]; then
+     command -v sbverify >/dev/null 2>&1
+     sbverify --list "$work/esp/EFI/BOOT/BOOTX64.EFI"
+@@ -1096,7 +1256,7 @@ if ($wslValidateScriptExitCode -ne 0 -or -not $wslValidateScript) {
+ }
+ $validateExitCode = 1
+ try {
+-    & wsl.exe -d Ubuntu -u root --exec bash $wslValidateScript $wslImage ([string]$manifest.root_uuid) ([string][bool]$manifest.encrypted) ([string][bool]$manifest.secure_boot) $preferredAudioCodec $compatibilityHash $rootLabel $buildSourceHash $driversSourceHash $wslBuildSource $wslDriversSource $wslModules $wslFirmware ([string]$manifest.kernel_sha256) ([string]$manifest.initramfs_sha256) $kernelRelease $wslGraphicsCatalogue $wslFirmwareManifest $graphicsCatalogueHash $firmwareManifestHash $nvidiaOpenDriverVersion $nvidiaOpenDriverRunfileHash ([string][bool]$manifest.production) $wslChromiumSource $chromiumSourceHash $sourceRootHash $wslNtfsChecker
++    & wsl.exe -d Ubuntu -u root --exec bash $wslValidateScript $wslImage ([string]$manifest.root_uuid) ([string][bool]$manifest.encrypted) ([string][bool]$manifest.secure_boot) $preferredAudioCodec $compatibilityHash $rootLabel $buildSourceHash $driversSourceHash $wslBuildSource $wslDriversSource $wslModules $wslFirmware ([string]$manifest.kernel_sha256) ([string]$manifest.initramfs_sha256) $kernelRelease $wslGraphicsCatalogue $wslFirmwareManifest $graphicsCatalogueHash $firmwareManifestHash $nvidiaOpenDriverVersion $nvidiaOpenDriverRunfileHash ([string][bool]$manifest.production) $wslChromiumSource $chromiumSourceHash $sourceRootHash $wslNtfsChecker $wslJournalValidator $journalValidatorHash $journalManifestBase64 $wslPassphrase $hash
+     $validateExitCode = $LASTEXITCODE
+ }
+ finally {
+diff --git a/scripts/validate roothealth journal.py b/scripts/validate roothealth journal.py
+index 0932066..db1fa76 100755
+--- a/scripts/validate roothealth journal.py	
++++ b/scripts/validate roothealth journal.py	
+@@ -12,13 +12,17 @@ only be used on a fresh, unmounted, build-owned image.
+ from __future__ import annotations
+ 
+ import argparse
++import errno
++import fcntl
+ import hashlib
+ import json
+ import os
++import re
+ import stat
+ import struct
+ import sys
+ import uuid
++import zlib
+ from dataclasses import dataclass
+ from pathlib import Path
+ from typing import BinaryIO, Iterable
+@@ -67,6 +71,10 @@ JOURNAL_SIZE = 128 * 1024 * 1024
+ JOURNAL_MAX_TARGET_BYTES = 100 * 1024 * 1024
+ JOURNAL_MAX_ENTRY_COUNT = 4096
+ ROOTHEALTH_MAX_VOLUME_BYTES = 256 * 1024 * 1024 * 1024
++PINNED_NTFS_NEXT_COMMIT = "d4f481df6926557f7b18b471a43313652dec6f7e"
++PINNED_NTFS_NEXT_ARCHIVE_SHA256 = (
++    "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5"
++)
+ SUPERBLOCK_SIZE = 4096
+ ENTRY_AREA_START = 8192
+ SUPERBLOCK_DIGEST_OFFSET = 0xFE0
+@@ -763,13 +771,7 @@ def validate_empty_headers(
+     }
+ 
+ 
+-def find_journal(volume: NtfsVolume) -> tuple[FileRecord, dict[str, int | str]]:
+-    extend = volume.record(EXTEND_RECORD)
+-    if not extend.in_use or not extend.is_directory:
+-        raise ValidationError("MFT record 11 is not the live $Extend directory")
+-
+-    matches: list[tuple[FileRecord, dict[str, int | str]]] = []
+-    root_pollution: list[int] = []
++def mft_allocation_bitmap(volume: NtfsVolume) -> tuple[int, bytes]:
+     record_count = volume.mft_data_size // volume.record_size
+     mft = volume.record(0)
+     mft_bitmaps = [
+@@ -792,6 +794,11 @@ def find_journal(volume: NtfsVolume) -> tuple[FileRecord, dict[str, int | str]]:
+     required_bitmap_bytes = (record_count + 7) // 8
+     if len(bitmap_bytes) < required_bitmap_bytes:
+         raise ValidationError("$MFT bitmap does not cover the complete data stream")
++    return record_count, bitmap_bytes
++
++
++def iter_mft_records(volume: NtfsVolume) -> Iterable[tuple[FileRecord, bool]]:
++    record_count, bitmap_bytes = mft_allocation_bitmap(volume)
+ 
+     for number in range(record_count):
+         allocated = bool(bitmap_bytes[number >> 3] & (1 << (number & 7)))
+@@ -807,6 +814,17 @@ def find_journal(volume: NtfsVolume) -> tuple[FileRecord, dict[str, int | str]]:
+             raise ValidationError(
+                 f"MFT record {number} in-use state disagrees with $MFT/$BITMAP"
+             )
++        yield record, allocated
++
++
++def find_journal(volume: NtfsVolume) -> tuple[FileRecord, dict[str, int | str]]:
++    extend = volume.record(EXTEND_RECORD)
++    if not extend.in_use or not extend.is_directory:
++        raise ValidationError("MFT record 11 is not the live $Extend directory")
++
++    matches: list[tuple[FileRecord, dict[str, int | str]]] = []
++    root_pollution: list[int] = []
++    for record, allocated in iter_mft_records(volume):
+         if not record.in_use:
+             continue
+         for attribute in record.attributes:
+@@ -834,6 +852,69 @@ def find_journal(volume: NtfsVolume) -> tuple[FileRecord, dict[str, int | str]]:
+     return record, details
+ 
+ 
++def validate_journal_ownership(
++    volume: NtfsVolume,
++    journal_record: FileRecord,
++    journal_runs: list[Run],
++) -> dict[str, int | bool]:
++    journal_extents = sorted(
++        (run.lcn, run.lcn + run.length)
++        for run in journal_runs
++        if run.lcn is not None
++    )
++    if len(journal_extents) != len(journal_runs):
++        raise ValidationError("journal ownership census saw a sparse journal run")
++    for previous, current in zip(journal_extents, journal_extents[1:]):
++        if current[0] < previous[1]:
++            raise ValidationError("journal physical runs overlap each other")
++
++    allocated_records = 0
++    nonresident_attributes = 0
++    physical_runs = 0
++    for record, allocated in iter_mft_records(volume):
++        if not allocated:
++            continue
++        allocated_records += 1
++        for attribute in record.attributes:
++            if not attribute.nonresident:
++                continue
++            nonresident_attributes += 1
++            runs = attribute.runs()
++            for run in runs:
++                if run.lcn is None:
++                    continue
++                physical_runs += 1
++                if run.lcn + run.length > volume.total_clusters:
++                    raise ValidationError(
++                        f"MFT record {record.number} attribute run exceeds the volume"
++                    )
++                if (
++                    record.number == journal_record.number
++                    and attribute.type_code == AT_DATA
++                    and attribute.name == ""
++                ):
++                    continue
++                other_start = run.lcn
++                other_end = run.lcn + run.length
++                for journal_start, journal_end in journal_extents:
++                    if other_start < journal_end and journal_start < other_end:
++                        raise ValidationError(
++                            "journal allocation has another owner: "
++                            f"record={record.number} type=0x{attribute.type_code:x} "
++                            f"name={attribute.name!r} lcn={run.lcn} clusters={run.length}"
++                        )
++
++    return {
++        "complete": True,
++        "allocated_mft_records": allocated_records,
++        "nonresident_attributes_examined": nonresident_attributes,
++        "physical_runs_examined": physical_runs,
++        "journal_clusters": sum(run.length for run in journal_runs),
++        "unique_owner": True,
++        "self_nonoverlap": True,
++    }
++
++
+ def find_journal_index_key(
+     volume: NtfsVolume, journal_record: FileRecord
+ ) -> IndexKeyLocation:
+@@ -957,69 +1038,502 @@ def rewrite_journal_flag_copies(
+     }
+ 
+ 
+-def provision_protected_flags(target: Path) -> dict[str, object]:
++def parse_device_number(text: str, description: str) -> tuple[int, int]:
++    match = re.fullmatch(r"([0-9]+):([0-9]+)\n?", text)
++    if match is None:
++        raise ValidationError(f"{description} has an invalid major:minor value")
++    return int(match.group(1)), int(match.group(2))
++
++
++def canonical_builder_image(target: Path) -> tuple[Path, os.stat_result]:
+     if not target.name.endswith(".building"):
+         raise ValidationError(
+             "provision-flags requires a fresh builder/test path ending in .building"
+         )
+-    target_stat = target.lstat()
+-    if not stat.S_ISREG(target_stat.st_mode) or target.is_symlink():
++    absolute = Path(os.path.abspath(target))
++    try:
++        target_stat = absolute.lstat()
++    except OSError as error:
++        raise ValidationError("builder image cannot be inspected") from error
++    if not stat.S_ISREG(target_stat.st_mode) or stat.S_ISLNK(target_stat.st_mode):
+         raise ValidationError(
+             "provision-flags accepts only a non-symlink regular build-owned image"
+         )
+-    with target.open("r+b", buffering=0) as handle:
+-        volume = NtfsVolume(handle)
+-        validate_journal(
+-            volume,
+-            JOURNAL_SIZE,
+-            True,
+-            True,
+-            allow_provisional_flags=True,
+-        )
+-        record, _ = find_journal(volume)
+-        logical, standard_offset, name_offset = journal_record_flag_offsets(
+-            volume, record
+-        )
+-        index = find_journal_index_key(volume, record)
+-        current = (
+-            u32(logical, standard_offset),
+-            u32(logical, name_offset),
+-            index.flags,
+-        )
+-        if current[0] != REQUIRED_PROTECTED_FLAGS:
+-            raise ValidationError(
+-                "provision-flags requires the mounted xattr step to set "
+-                "$STANDARD_INFORMATION to exact 0x00002007 first"
+-            )
+-        if current[2] != REQUIRED_PROTECTED_FLAGS:
++    if target_stat.st_uid != os.geteuid():
++        raise ValidationError("builder image is not owned by the provisioning user")
++    try:
++        resolved = absolute.resolve(strict=True)
++    except OSError as error:
++        raise ValidationError("builder image cannot be resolved") from error
++    if resolved != absolute:
++        raise ValidationError("builder image path contains a symbolic-link component")
++    return resolved, target_stat
++
++
++def open_locked_builder_image(
++    target: Path,
++) -> tuple[Path, int, os.stat_result]:
++    builder, expected = canonical_builder_image(target)
++    flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
++    descriptor = os.open(builder, flags)
++    try:
++        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
++        opened = os.fstat(descriptor)
++        if (
++            not stat.S_ISREG(opened.st_mode)
++            or opened.st_dev != expected.st_dev
++            or opened.st_ino != expected.st_ino
++            or opened.st_size != expected.st_size
++        ):
++            raise ValidationError("regular builder image identity changed during open")
++        return builder, descriptor, opened
++    except BaseException:
++        os.close(descriptor)
++        raise
++
++
++def require_builder_path_identity(
++    builder: Path, expected: os.stat_result, description: str
++) -> None:
++    try:
++        observed = builder.stat()
++    except OSError as error:
++        raise ValidationError(f"builder image {description} cannot be inspected") from error
++    if (
++        observed.st_dev != expected.st_dev
++        or observed.st_ino != expected.st_ino
++        or observed.st_size != expected.st_size
++    ):
++        raise ValidationError(f"builder image identity changed {description}")
++
++
++def decoded_loop_backing(path: Path) -> Path:
++    try:
++        encoded = path.read_text(encoding="utf-8").strip()
++    except OSError as error:
++        raise ValidationError("loop backing-file identity cannot be read") from error
++    decoded = re.sub(
++        r"\\([0-7]{3})",
++        lambda match: chr(int(match.group(1), 8)),
++        encoded,
++    )
++    if not decoded.startswith("/") or decoded.endswith(" (deleted)"):
++        raise ValidationError("loop backing-file identity is not a live absolute path")
++    return Path(decoded)
++
++
++def reject_attached_regular_builder(
++    builder: Path, builder_stat: os.stat_result
++) -> None:
++    for loop in sorted(Path("/sys/class/block").glob("loop*")):
++        backing_file = loop / "loop" / "backing_file"
++        if not backing_file.is_file():
++            continue
++        backing = decoded_loop_backing(backing_file)
++        try:
++            backing_stat = backing.stat()
++        except FileNotFoundError:
++            continue
++        except OSError as error:
++            raise ValidationError("attached loop backing file cannot be inspected") from error
++        if (
++            backing_stat.st_dev == builder_stat.st_dev
++            and backing_stat.st_ino == builder_stat.st_ino
++        ):
+             raise ValidationError(
+-                "provision-flags requires the mounted xattr step to set the "
+-                "$Extend::$I30 cached key to exact 0x00002007 first"
++                f"regular builder image remains attached through {loop.name}"
+             )
+-        forbidden = (
+-            FILE_ATTRIBUTE_COMPRESSED
+-            | FILE_ATTRIBUTE_ENCRYPTED
+-            | FILE_ATTRIBUTE_SPARSE
++
++
++def sysfs_device_node(device: tuple[int, int]) -> Path:
++    link = Path("/sys/dev/block") / f"{device[0]}:{device[1]}"
++    try:
++        node = link.resolve(strict=True)
++        observed = parse_device_number(
++            (node / "dev").read_text(encoding="ascii"), "sysfs block node"
+         )
+-        if current[1] & forbidden:
+-            raise ValidationError("journal namespace flags contain a forbidden data mode")
+-        details = rewrite_journal_flag_copies(
+-            handle,
+-            volume,
+-            record,
+-            expected_flags=current,
+-            desired_flags=REQUIRED_PROTECTED_FLAGS,
+-            copies=frozenset(("file_name", "index")),
++    except OSError as error:
++        raise ValidationError("block-device sysfs identity cannot be resolved") from error
++    if observed != device:
++        raise ValidationError("block-device sysfs identity changed")
++    return node
++
++
++def block_backing_chain(
++    target_device: tuple[int, int],
++    builder: Path,
++    builder_stat: os.stat_result,
++) -> tuple[list[dict[str, int | str]], Path, Path, list[Path]]:
++    chain: list[dict[str, int | str]] = []
++    nodes: list[Path] = []
++    seen: set[tuple[int, int]] = set()
++    partition_node: Path | None = None
++    current = target_device
++    while True:
++        if current in seen:
++            raise ValidationError("block-device ancestry contains a cycle")
++        seen.add(current)
++        node = sysfs_device_node(current)
++        nodes.append(node)
++        chain.append(
++            {"major": current[0], "minor": current[1], "name": node.name}
+         )
+-        handle.flush()
+-        os.fsync(handle.fileno())
+-    with target.open("rb", buffering=0) as handle:
+-        volume = NtfsVolume(handle)
+-        report = validate_journal(volume, JOURNAL_SIZE, True, True)
++        backing_file = node / "loop" / "backing_file"
++        if backing_file.is_file():
++            backing = decoded_loop_backing(backing_file)
++            try:
++                backing_stat = backing.stat()
++                loop_sectors = int((node / "size").read_text(encoding="ascii").strip())
++            except (OSError, ValueError) as error:
++                raise ValidationError("loop backing identity or size cannot be proved") from error
++            if (
++                backing_stat.st_dev != builder_stat.st_dev
++                or backing_stat.st_ino != builder_stat.st_ino
++                or loop_sectors * 512 != builder_stat.st_size
++            ):
++                raise ValidationError(
++                    "block target is not backed by the exact declared .building image"
++                )
++            if partition_node is None:
++                raise ValidationError("builder target is not rooted in GPT partition 2")
++            return chain, backing, partition_node, nodes
++
++        slaves_dir = node / "slaves"
++        slaves = sorted(slaves_dir.iterdir()) if slaves_dir.is_dir() else []
++        if slaves:
++            if len(slaves) != 1:
++                raise ValidationError("builder block target has ambiguous slave ancestry")
++            if len(nodes) != 1 or not (node / "dm").is_dir():
++                raise ValidationError("builder target has an unsupported stacked block layer")
++            try:
++                current = parse_device_number(
++                    (slaves[0].resolve(strict=True) / "dev").read_text(encoding="ascii"),
++                    "block-device slave",
++                )
++            except OSError as error:
++                raise ValidationError("block-device slave identity cannot be read") from error
++            continue
++
++        if (node / "partition").is_file():
++            if partition_node is not None:
++                raise ValidationError("builder target has more than one partition layer")
++            try:
++                partition_number = int(
++                    (node / "partition").read_text(encoding="ascii").strip()
++                )
++            except (OSError, ValueError) as error:
++                raise ValidationError("partition number cannot be read") from error
++            if partition_number != 2:
++                raise ValidationError("builder target is not exact GPT partition 2")
++            partition_node = node
++            try:
++                current = parse_device_number(
++                    (node.parent / "dev").read_text(encoding="ascii"),
++                    "block-device partition parent",
++                )
++            except OSError as error:
++                raise ValidationError("partition parent identity cannot be read") from error
++            continue
++        raise ValidationError("builder block target does not terminate at a loop image")
++
++
++def node_holder_names(node: Path) -> set[str]:
++    holders = node / "holders"
++    try:
++        return {item.name for item in holders.iterdir()} if holders.is_dir() else set()
++    except OSError as error:
++        raise ValidationError("block-device holder graph cannot be inspected") from error
++
++
++def validate_block_stack(
++    nodes: list[Path], root_kind: str, expected_mapper_name: str | None
++) -> dict[str, str | None]:
++    if root_kind == "plain":
++        if expected_mapper_name is not None:
++            raise ValidationError("plain builder root cannot name a dm-crypt mapper")
++        if len(nodes) != 2 or not (nodes[0] / "partition").is_file():
++            raise ValidationError("plain builder root is not partition-2 -> loop")
++        if node_holder_names(nodes[0]) or node_holder_names(nodes[1]):
++            raise ValidationError("plain builder root has an unexpected holder")
++        return {"dm_name": None, "dm_uuid": None}
++    if root_kind != "luks":
++        raise ValidationError("unknown builder root kind")
++    if not expected_mapper_name:
++        raise ValidationError("encrypted builder root requires an exact mapper name")
++    if (
++        len(nodes) != 3
++        or not (nodes[0] / "dm").is_dir()
++        or not (nodes[1] / "partition").is_file()
++    ):
++        raise ValidationError("encrypted builder root is not dm-crypt -> partition-2 -> loop")
++    if node_holder_names(nodes[0]) or node_holder_names(nodes[2]):
++        raise ValidationError("encrypted builder root has an unexpected outer holder")
++    if node_holder_names(nodes[1]) != {nodes[0].name}:
++        raise ValidationError("encrypted partition holder is not the exact selected dm target")
++    try:
++        dm_name = (nodes[0] / "dm" / "name").read_text(encoding="utf-8").strip()
++        dm_uuid = (nodes[0] / "dm" / "uuid").read_text(encoding="ascii").strip()
++    except OSError as error:
++        raise ValidationError("dm-crypt identity cannot be read") from error
++    if dm_name != expected_mapper_name:
++        raise ValidationError("dm-crypt mapper name is not the exact builder mapping")
++    if re.fullmatch(r"CRYPT-LUKS2-[0-9a-fA-F]{32}-.+", dm_uuid) is None:
++        raise ValidationError("single-slave dm target is not a LUKS2 crypt mapping")
++    return {"dm_name": dm_name, "dm_uuid": dm_uuid}
++
++
++def pread_exact(descriptor: int, offset: int, length: int) -> bytes:
++    payload = os.pread(descriptor, length, offset)
++    if len(payload) != length:
++        raise ValidationError("short read from retained builder image")
++    return payload
++
++
++def validate_gpt_root_partition(
++    builder_descriptor: int,
++    builder_stat: os.stat_result,
++    partition_node: Path,
++    root_kind: str,
++    expected_name: str,
++) -> dict[str, int | str]:
++    if builder_stat.st_size < 34 * 512 or builder_stat.st_size % 512:
++        raise ValidationError("builder image size is incompatible with GPT")
++    disk_sectors = builder_stat.st_size // 512
++    header = bytearray(pread_exact(builder_descriptor, 512, 512))
++    if header[:8] != b"EFI PART":
++        raise ValidationError("builder image lacks a primary GPT header")
++    header_size = u32(header, 12)
++    if header_size < 92 or header_size > 512:
++        raise ValidationError("builder GPT header size is invalid")
++    expected_header_crc = u32(header, 16)
++    struct.pack_into("<I", header, 16, 0)
++    if zlib.crc32(header[:header_size]) & 0xFFFFFFFF != expected_header_crc:
++        raise ValidationError("builder GPT header CRC is invalid")
++    backup_lba = u64(header, 32)
++    if u64(header, 24) != 1 or backup_lba != disk_sectors - 1:
++        raise ValidationError("builder GPT header geometry is invalid")
++    primary_first_usable = u64(header, 40)
++    primary_last_usable = u64(header, 48)
++    disk_guid_bytes = bytes(header[56:72])
++    if uuid.UUID(bytes_le=disk_guid_bytes).int == 0:
++        raise ValidationError("builder GPT disk GUID is zero")
++    entry_lba = u64(header, 72)
++    entry_count = u32(header, 80)
++    entry_size = u32(header, 84)
++    entry_crc = u32(header, 88)
++    if (
++        entry_lba < 2
++        or entry_count < 2
++        or entry_count > 4096
++        or entry_size < 128
++        or entry_size > 4096
++        or entry_size % 8
++        or entry_count * entry_size > 16 * 1024 * 1024
++    ):
++        raise ValidationError("builder GPT partition-array geometry is invalid")
++    entries = pread_exact(
++        builder_descriptor, entry_lba * 512, entry_count * entry_size
++    )
++    if zlib.crc32(entries) & 0xFFFFFFFF != entry_crc:
++        raise ValidationError("builder GPT partition-array CRC is invalid")
++
++    backup = bytearray(
++        pread_exact(builder_descriptor, backup_lba * 512, 512)
++    )
++    if backup[:8] != b"EFI PART":
++        raise ValidationError("builder image lacks a backup GPT header")
++    backup_header_size = u32(backup, 12)
++    if backup_header_size != header_size:
++        raise ValidationError("primary and backup GPT header sizes disagree")
++    expected_backup_crc = u32(backup, 16)
++    struct.pack_into("<I", backup, 16, 0)
++    if zlib.crc32(backup[:backup_header_size]) & 0xFFFFFFFF != expected_backup_crc:
++        raise ValidationError("builder backup GPT header CRC is invalid")
++    if (
++        u64(backup, 24) != backup_lba
++        or u64(backup, 32) != 1
++        or u64(backup, 40) != primary_first_usable
++        or u64(backup, 48) != primary_last_usable
++        or bytes(backup[56:72]) != disk_guid_bytes
++        or u32(backup, 80) != entry_count
++        or u32(backup, 84) != entry_size
++        or u32(backup, 88) != entry_crc
++    ):
++        raise ValidationError("primary and backup GPT bindings disagree")
++    backup_entry_lba = u64(backup, 72)
++    if (
++        backup_entry_lba < primary_last_usable + 1
++        or backup_entry_lba * 512 + len(entries) > backup_lba * 512
++    ):
++        raise ValidationError("backup GPT partition array is out of bounds")
++    backup_entries = pread_exact(
++        builder_descriptor, backup_entry_lba * 512, len(entries)
++    )
++    if (
++        zlib.crc32(backup_entries) & 0xFFFFFFFF != entry_crc
++        or backup_entries != entries
++    ):
++        raise ValidationError("primary and backup GPT partition arrays disagree")
++    entry = entries[entry_size : 2 * entry_size]
++    if len(entry) < 128:
++        raise ValidationError("builder GPT partition 2 is truncated")
++    type_guid = str(uuid.UUID(bytes_le=entry[:16]))
++    unique_guid = str(uuid.UUID(bytes_le=entry[16:32]))
++    first_lba = u64(entry, 32)
++    last_lba = u64(entry, 40)
++    if (
++        first_lba < primary_first_usable
++        or last_lba > primary_last_usable
++        or last_lba < first_lba
++    ):
++        raise ValidationError("builder GPT partition 2 bounds are invalid")
++    if uuid.UUID(unique_guid).int == 0:
++        raise ValidationError("builder GPT partition 2 has a zero unique GUID")
++    name_bytes = entry[56:128]
++    try:
++        partition_name = name_bytes.decode("utf-16le").split("\0", 1)[0]
++    except UnicodeDecodeError as error:
++        raise ValidationError("builder GPT partition 2 name is invalid UTF-16") from error
++    expected_type = {
++        "plain": "ebd0a0a2-b9e5-4433-87c0-68b6b72699c7",
++        "luks": "ca7d7ccb-63ed-4c53-861c-1742536059cc",
++    }.get(root_kind)
++    if expected_type is None or type_guid != expected_type:
++        raise ValidationError("builder GPT partition 2 type does not match root kind")
++    if partition_name != expected_name:
++        raise ValidationError("builder GPT partition 2 name is not the expected root name")
++    try:
++        sysfs_start = int((partition_node / "start").read_text(encoding="ascii").strip())
++        sysfs_size = int((partition_node / "size").read_text(encoding="ascii").strip())
++    except (OSError, ValueError) as error:
++        raise ValidationError("partition-2 sysfs geometry cannot be read") from error
++    if sysfs_start != first_lba or sysfs_size != last_lba - first_lba + 1:
++        raise ValidationError("partition-2 sysfs geometry disagrees with retained GPT")
++    return {
++        "number": 2,
++        "disk_guid": str(uuid.UUID(bytes_le=disk_guid_bytes)),
++        "type_guid": type_guid,
++        "unique_guid": unique_guid,
++        "name": partition_name,
++        "start_lba": first_lba,
++        "sector_count": last_lba - first_lba + 1,
++    }
++
++
++def mounted_device_numbers() -> set[tuple[int, int]]:
++    mounted: set[tuple[int, int]] = set()
++    for process in sorted(Path("/proc").iterdir(), key=lambda item: item.name):
++        if not process.name.isdecimal():
++            continue
++        mountinfo = process / "mountinfo"
++        try:
++            lines = mountinfo.read_text(encoding="utf-8").splitlines()
++        except FileNotFoundError:
++            continue
++        except PermissionError as error:
++            raise ValidationError("cannot prove all-process mount state") from error
++        except OSError as error:
++            if error.errno == errno.ENOENT:
++                continue
++            raise ValidationError("cannot read all-process mount state") from error
++        for line in lines:
++            fields = line.split()
++            if len(fields) < 3:
++                raise ValidationError("kernel mountinfo record is truncated")
++            mounted.add(parse_device_number(fields[2], "kernel mountinfo record"))
++    return mounted
++
++
++def attest_builder_block_binding(
++    target_device: tuple[int, int],
++    builder: Path,
++    builder_descriptor: int,
++    builder_stat: os.stat_result,
++    root_kind: str,
++    expected_partition_name: str,
++    expected_mapper_name: str | None,
++) -> dict[str, object]:
++    ancestry, backing, partition_node, nodes = block_backing_chain(
++        target_device, builder, builder_stat
++    )
++    dm = validate_block_stack(nodes, root_kind, expected_mapper_name)
++    gpt = validate_gpt_root_partition(
++        builder_descriptor,
++        builder_stat,
++        partition_node,
++        root_kind,
++        expected_partition_name,
++    )
++    ancestry_devices = {
++        (int(item["major"]), int(item["minor"])) for item in ancestry
++    }
++    if mounted_device_numbers() & ancestry_devices:
++        raise ValidationError("builder block target or its ancestry remains mounted")
++    return {
++        "root_kind": root_kind,
++        "gpt_partition": gpt,
++        "dm": dm,
++        "ancestry": ancestry,
++        "loop_backing_path": str(backing),
++        "unmounted_all_process_namespaces": True,
++    }
++
++
++def provision_flags_on_handle(
++    handle: BinaryIO,
++    target_text: str,
++    builder_binding: dict[str, object],
++) -> dict[str, object]:
++    handle.seek(0)
++    volume = NtfsVolume(handle)
++    validate_journal(
++        volume,
++        JOURNAL_SIZE,
++        True,
++        True,
++        allow_provisional_flags=True,
++    )
++    record, _ = find_journal(volume)
++    logical, standard_offset, name_offset = journal_record_flag_offsets(volume, record)
++    index = find_journal_index_key(volume, record)
++    current = (
++        u32(logical, standard_offset),
++        u32(logical, name_offset),
++        index.flags,
++    )
++    if current[0] != REQUIRED_PROTECTED_FLAGS:
++        raise ValidationError(
++            "provision-flags requires the mounted xattr step to set "
++            "$STANDARD_INFORMATION to exact 0x00002007 first"
++        )
++    if current[2] != REQUIRED_PROTECTED_FLAGS:
++        raise ValidationError(
++            "provision-flags requires the mounted xattr step to set the "
++            "$Extend::$I30 cached key to exact 0x00002007 first"
++        )
++    forbidden = (
++        FILE_ATTRIBUTE_COMPRESSED | FILE_ATTRIBUTE_ENCRYPTED | FILE_ATTRIBUTE_SPARSE
++    )
++    if current[1] & forbidden:
++        raise ValidationError("journal namespace flags contain a forbidden data mode")
++    details = rewrite_journal_flag_copies(
++        handle,
++        volume,
++        record,
++        expected_flags=current,
++        desired_flags=REQUIRED_PROTECTED_FLAGS,
++        copies=frozenset(("file_name", "index")),
++    )
++    handle.flush()
++    os.fsync(handle.fileno())
++    handle.seek(0)
++    volume = NtfsVolume(handle)
++    report = validate_journal(volume, JOURNAL_SIZE, True, True)
+     return {
+         "format": 1,
+         "state": "protected-flags-provisioned",
+-        "target": str(target),
++        "target": target_text,
++        "builder_binding": builder_binding,
+         "required_flags": f"0x{REQUIRED_PROTECTED_FLAGS:08X}",
+         "mft_record": report["journal"]["mft_record"],  # type: ignore[index]
+         "mft_sequence": report["journal"]["mft_sequence"],  # type: ignore[index]
+@@ -1031,6 +1545,135 @@ def provision_protected_flags(target: Path) -> dict[str, object]:
+     }
+ 
+ 
++def provision_protected_flags(target: Path) -> dict[str, object]:
++    builder, descriptor, builder_stat = open_locked_builder_image(target)
++    try:
++        reject_attached_regular_builder(builder, builder_stat)
++        with os.fdopen(descriptor, "r+b", buffering=0, closefd=False) as handle:
++            report = provision_flags_on_handle(
++                handle,
++                str(builder),
++                {
++                    "mode": "REGULAR_BUILDING_IMAGE",
++                    "path": str(builder),
++                    "device": str(builder_stat.st_dev),
++                    "inode": str(builder_stat.st_ino),
++                    "bytes": builder_stat.st_size,
++                },
++            )
++        require_builder_path_identity(builder, builder_stat, "after provisioning")
++        return report
++    finally:
++        os.close(descriptor)
++
++
++def provision_protected_flags_device(
++    target: Path,
++    builder_image: Path,
++    root_kind: str,
++    expected_partition_name: str,
++    expected_mapper_name: str | None,
++) -> dict[str, object]:
++    builder, builder_descriptor, builder_stat = open_locked_builder_image(
++        builder_image
++    )
++    try:
++        requested = Path(os.path.abspath(target))
++        try:
++            requested_lstat = requested.lstat()
++            resolved = requested.resolve(strict=True)
++            target_stat = resolved.stat()
++        except OSError as error:
++            raise ValidationError("builder block target cannot be resolved") from error
++        if stat.S_ISLNK(requested_lstat.st_mode):
++            if requested.parent != Path("/dev/mapper"):
++                raise ValidationError(
++                    "only an exact /dev/mapper final-component symlink is supported"
++                )
++        elif requested != resolved:
++            raise ValidationError("builder block target path contains a symbolic link")
++        if not stat.S_ISBLK(target_stat.st_mode):
++            raise ValidationError("provision-flags-device requires a block target")
++        target_device = (os.major(target_stat.st_rdev), os.minor(target_stat.st_rdev))
++        binding = attest_builder_block_binding(
++            target_device,
++            builder,
++            builder_descriptor,
++            builder_stat,
++            root_kind,
++            expected_partition_name,
++            expected_mapper_name,
++        )
++        require_builder_path_identity(builder, builder_stat, "before block open")
++
++        flags = (
++            os.O_RDWR
++            | os.O_EXCL
++            | getattr(os, "O_CLOEXEC", 0)
++            | getattr(os, "O_NOFOLLOW", 0)
++        )
++        descriptor = os.open(resolved, flags)
++        try:
++            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
++            opened = os.fstat(descriptor)
++            if (
++                not stat.S_ISBLK(opened.st_mode)
++                or opened.st_rdev != target_stat.st_rdev
++            ):
++                raise ValidationError("builder block identity changed during exclusive open")
++            if requested.resolve(strict=True) != resolved:
++                raise ValidationError("builder block request retargeted before provisioning")
++            opened_binding = attest_builder_block_binding(
++                target_device,
++                builder,
++                builder_descriptor,
++                builder_stat,
++                root_kind,
++                expected_partition_name,
++                expected_mapper_name,
++            )
++            if opened_binding != binding:
++                raise ValidationError("builder block binding changed during exclusive open")
++            with os.fdopen(descriptor, "r+b", buffering=0, closefd=False) as handle:
++                report = provision_flags_on_handle(
++                    handle,
++                    str(requested),
++                    {
++                        "mode": "LOOP_BACKED_BUILDING_BLOCK",
++                        "image_path": str(builder),
++                        "image_device": str(builder_stat.st_dev),
++                        "image_inode": str(builder_stat.st_ino),
++                        "image_bytes": builder_stat.st_size,
++                        "requested_target": str(requested),
++                        "resolved_target": str(resolved),
++                        "target_major": target_device[0],
++                        "target_minor": target_device[1],
++                        "binding": binding,
++                        "exclusive_builder_lock": True,
++                        "exclusive_target_open": True,
++                    },
++                )
++            if requested.resolve(strict=True) != resolved:
++                raise ValidationError("builder block request retargeted during provisioning")
++            final_binding = attest_builder_block_binding(
++                target_device,
++                builder,
++                builder_descriptor,
++                builder_stat,
++                root_kind,
++                expected_partition_name,
++                expected_mapper_name,
++            )
++            if final_binding != binding:
++                raise ValidationError("builder block binding changed during provisioning")
++            require_builder_path_identity(builder, builder_stat, "after provisioning")
++            return report
++        finally:
++            os.close(descriptor)
++    finally:
++        os.close(builder_descriptor)
++
++
+ def validate_journal(
+     volume: NtfsVolume,
+     expected_size: int,
+@@ -1067,6 +1710,7 @@ def validate_journal(
+         raise ValidationError("journal runlist does not cover its allocation")
+     if require_one_run and len(runs) != 1:
+         raise ValidationError("new release journal is not one contiguous run")
++    ownership = validate_journal_ownership(volume, record, runs)
+ 
+     system_runs: dict[str, list[Run]] = {}
+     for number, name_text in METADATA_STREAM_RECORDS.items():
+@@ -1188,6 +1832,7 @@ def validate_journal(
+             "required_protected_flags": f"0x{REQUIRED_PROTECTED_FLAGS:08X}",
+             "protected_flags_present": flags_protected,
+             "header": headers,
++            "ownership": ownership,
+             "write_exclusion": {
+                 "data_stream": journal_data_ranges,
+                 "base_file_record": journal_record_ranges,
+@@ -1201,6 +1846,8 @@ def validate_journal(
+             "runlist_in_bounds": True,
+             "runlist_nonoverlap": True,
+             "bitmap_allocated": True,
++            "complete_owner_census": ownership["complete"],
++            "unique_cluster_owner": ownership["unique_owner"],
+             "file_flags_consistent": True,
+             "protected_file_flags": flags_protected,
+             "extend_i30_flags_consistent": standard == index_flags,
+@@ -1218,6 +1865,174 @@ def parse_size(text: str) -> int:
+     return value
+ 
+ 
++def sha256_opened_regular(path: Path) -> tuple[str, int, bytes, int]:
++    absolute = Path(os.path.abspath(path))
++    try:
++        lstat_result = absolute.lstat()
++        resolved = absolute.resolve(strict=True)
++    except OSError as error:
++        raise ValidationError(f"cannot inspect provenance input {path}") from error
++    if (
++        not stat.S_ISREG(lstat_result.st_mode)
++        or stat.S_ISLNK(lstat_result.st_mode)
++        or resolved != absolute
++    ):
++        raise ValidationError("provenance input must be a non-symlink regular file")
++    descriptor = os.open(
++        resolved,
++        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
++    )
++    try:
++        opened = os.fstat(descriptor)
++        if (
++            opened.st_dev != lstat_result.st_dev
++            or opened.st_ino != lstat_result.st_ino
++            or opened.st_size != lstat_result.st_size
++        ):
++            raise ValidationError("provenance input identity changed during open")
++        digest = hashlib.sha256()
++        prefix = b""
++        while True:
++            block = os.read(descriptor, 1024 * 1024)
++            if not block:
++                break
++            if len(prefix) < 16:
++                prefix += block[: 16 - len(prefix)]
++            digest.update(block)
++        return digest.hexdigest(), opened.st_size, prefix, opened.st_mode
++    finally:
++        os.close(descriptor)
++
++
++def read_small_opened_regular(path: Path, maximum_bytes: int) -> tuple[str, bytes]:
++    absolute = Path(os.path.abspath(path))
++    try:
++        lstat_result = absolute.lstat()
++        resolved = absolute.resolve(strict=True)
++    except OSError as error:
++        raise ValidationError(f"cannot inspect provenance input {path}") from error
++    if (
++        not stat.S_ISREG(lstat_result.st_mode)
++        or stat.S_ISLNK(lstat_result.st_mode)
++        or resolved != absolute
++    ):
++        raise ValidationError("provenance input must be a non-symlink regular file")
++    descriptor = os.open(
++        resolved,
++        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
++    )
++    try:
++        opened = os.fstat(descriptor)
++        if (
++            opened.st_dev != lstat_result.st_dev
++            or opened.st_ino != lstat_result.st_ino
++            or opened.st_size != lstat_result.st_size
++            or opened.st_size > maximum_bytes
++        ):
++            raise ValidationError("small provenance input changed or exceeds its bound")
++        payload = b""
++        while len(payload) <= maximum_bytes:
++            block = os.read(descriptor, min(65536, maximum_bytes + 1 - len(payload)))
++            if not block:
++                break
++            payload += block
++        if len(payload) != opened.st_size:
++            raise ValidationError("small provenance input read is incomplete")
++        return hashlib.sha256(payload).hexdigest(), payload
++    finally:
++        os.close(descriptor)
++
++
++def exact_object(value: object, fields: set[str], description: str) -> dict[str, object]:
++    if not isinstance(value, dict) or set(value) != fields:
++        raise ValidationError(f"{description} does not have the exact v1 field set")
++    return value
++
++
++def lowercase_sha256(value: object, description: str, *, nullable: bool = False) -> str | None:
++    if nullable and value is None:
++        return None
++    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
++        raise ValidationError(f"{description} is not a lowercase SHA-256")
++    return value
++
++
++def validate_ntfscp_provenance(
++    binary_path: Path,
++    manifest_path: Path,
++    *,
++    allow_proposed_test_tool: bool,
++) -> dict[str, object]:
++    manifest_sha256, encoded = read_small_opened_regular(manifest_path, 64 * 1024)
++    try:
++        manifest = json.loads(encoded.decode("utf-8"))
++    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
++        raise ValidationError("ntfscp provenance manifest is not canonical UTF-8 JSON") from error
++    top = exact_object(
++        manifest,
++        {"format", "format_version", "state", "tool", "upstream", "binary", "build"},
++        "ntfscp provenance manifest",
++    )
++    if (
++        top["format"] != "roothealth-ntfscp-provenance"
++        or top["format_version"] != 1
++        or top["tool"] != "ntfscp"
++    ):
++        raise ValidationError("ntfscp provenance manifest identity is invalid")
++    state = top["state"]
++    permitted_states = {"release-qualified"}
++    if allow_proposed_test_tool:
++        permitted_states.add("proposed-test-only")
++    if state not in permitted_states:
++        raise ValidationError("ntfscp provenance state is not permitted in this mode")
++    upstream = exact_object(
++        top["upstream"], {"project", "commit", "archive_sha256"}, "upstream binding"
++    )
++    if (
++        upstream["project"] != "ntfs-next"
++        or upstream["commit"] != PINNED_NTFS_NEXT_COMMIT
++        or upstream["archive_sha256"] != PINNED_NTFS_NEXT_ARCHIVE_SHA256
++    ):
++        raise ValidationError("ntfscp provenance is not bound to pinned ntfs-next d4")
++    binary = exact_object(top["binary"], {"sha256", "bytes"}, "binary binding")
++    expected_binary_sha256 = lowercase_sha256(binary["sha256"], "binary binding")
++    if not isinstance(binary["bytes"], int) or isinstance(binary["bytes"], bool) or binary["bytes"] <= 0:
++        raise ValidationError("ntfscp binary byte count is invalid")
++    build = exact_object(
++        top["build"],
++        {"source_manifest_sha256", "link_manifest_sha256", "qualification_sha256"},
++        "build binding",
++    )
++    build_hashes = {
++        key: lowercase_sha256(
++            build[key], f"build binding {key}", nullable=state == "proposed-test-only"
++        )
++        for key in sorted(build)
++    }
++    if state == "release-qualified" and any(value is None for value in build_hashes.values()):
++        raise ValidationError("release-qualified ntfscp lacks complete build provenance")
++    actual_sha256, actual_bytes, prefix, binary_mode = sha256_opened_regular(binary_path)
++    if prefix[:4] != b"\x7fELF":
++        raise ValidationError("selected ntfscp is not an ELF executable")
++    if binary_mode & 0o111 == 0:
++        raise ValidationError("selected ntfscp is not executable")
++    if actual_sha256 != expected_binary_sha256 or actual_bytes != binary["bytes"]:
++        raise ValidationError("selected ntfscp does not match its provenance manifest")
++    return {
++        "format": 1,
++        "state": state,
++        "tool": "ntfscp",
++        "binary_path": str(Path(os.path.abspath(binary_path))),
++        "binary_sha256": actual_sha256,
++        "binary_bytes": actual_bytes,
++        "manifest_path": str(Path(os.path.abspath(manifest_path))),
++        "manifest_sha256": manifest_sha256,
++        "upstream_commit": PINNED_NTFS_NEXT_COMMIT,
++        "upstream_archive_sha256": PINNED_NTFS_NEXT_ARCHIVE_SHA256,
++        "build": build_hashes,
++    }
++
++
+ def create_seed(target: Path, output: Path, report_path: Path | None) -> dict[str, object]:
+     with target.open("rb", buffering=0) as handle:
+         volume = NtfsVolume(handle)
+@@ -1283,6 +2098,19 @@ def main() -> int:
+     seed.add_argument("output", type=Path, help="new 128 MiB seed file")
+     seed.add_argument("--report", type=Path, help="create a new JSON seed report")
+ 
++    tool = subparsers.add_parser(
++        "verify-ntfscp",
++        help="verify the exact selected d4 ntfscp binary and provenance manifest",
++    )
++    tool.add_argument("binary", type=Path, help="selected non-symlink ntfscp ELF")
++    tool.add_argument("manifest", type=Path, help="exact v1 provenance JSON")
++    tool.add_argument(
++        "--allow-proposed-test-tool",
++        action="store_true",
++        help="test-only acceptance of a manifest explicitly marked proposed-test-only",
++    )
++    tool.add_argument("--report", type=Path, help="create a new JSON report")
++
+     provision = subparsers.add_parser(
+         "provision-flags",
+         help="builder/test-only synchronization of protected journal namespace flags",
+@@ -1294,6 +2122,40 @@ def main() -> int:
+     )
+     provision.add_argument("--report", type=Path, help="create a new JSON report")
+ 
++    provision_device = subparsers.add_parser(
++        "provision-flags-device",
++        help="builder-only synchronization on a block node bound to a .building image",
++    )
++    provision_device.add_argument(
++        "target",
++        type=Path,
++        help="unmounted loop partition or mapper holding the fresh NTFS root",
++    )
++    provision_device.add_argument(
++        "--builder-image",
++        type=Path,
++        required=True,
++        help="exact non-symlink regular full-disk backing image ending in .building",
++    )
++    provision_device.add_argument(
++        "--root-kind",
++        choices=("plain", "luks"),
++        required=True,
++        help="exact GPT partition-2 profile and permitted block-stack shape",
++    )
++    provision_device.add_argument(
++        "--expected-partition-name",
++        required=True,
++        help="exact UTF-16 GPT name required for partition 2",
++    )
++    provision_device.add_argument(
++        "--expected-mapper-name",
++        help="exact dm-crypt mapper name (required for luks, forbidden for plain)",
++    )
++    provision_device.add_argument(
++        "--report", type=Path, help="create a new JSON report"
++    )
++
+     validate = subparsers.add_parser("validate", help="validate a provisioned journal")
+     validate.add_argument("target", type=Path, help="unmounted NTFS image or block device")
+     validate.add_argument(
+@@ -1321,6 +2183,17 @@ def main() -> int:
+             if not arguments.report:
+                 sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+             return 0
++        if arguments.command == "verify-ntfscp":
++            report = validate_ntfscp_provenance(
++                arguments.binary,
++                arguments.manifest,
++                allow_proposed_test_tool=arguments.allow_proposed_test_tool,
++            )
++            if arguments.report:
++                write_new_report(arguments.report, report)
++            else:
++                sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
++            return 0
+         if arguments.command == "provision-flags":
+             report = provision_protected_flags(arguments.target)
+             if arguments.report:
+@@ -1328,6 +2201,19 @@ def main() -> int:
+             else:
+                 sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+             return 0
++        if arguments.command == "provision-flags-device":
++            report = provision_protected_flags_device(
++                arguments.target,
++                arguments.builder_image,
++                arguments.root_kind,
++                arguments.expected_partition_name,
++                arguments.expected_mapper_name,
++            )
++            if arguments.report:
++                write_new_report(arguments.report, report)
++            else:
++                sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
++            return 0
+         with arguments.target.open("rb", buffering=0) as handle:
+             volume = NtfsVolume(handle)
+             report = validate_journal(

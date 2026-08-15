@@ -1,0 +1,2631 @@
+Archive member included to satisfy reference by file (symbol)
+
+../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+                              roothealth_recover.o (AT_UNNAMED)
+../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_attrlist_need)
+../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+                              roothealth_playlog.o (ntfs_bit_set)
+../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+                              roothealth_repair.o (ntfs_boot_sector_is_ntfs)
+../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_compressed_attr_pread)
+../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+                              roothealth_overlay.o (ntfs_device_alloc)
+../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+                              utils.o (NTFS_INDEX_I30)
+../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_ea_set_wsl_not_symlink)
+../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o) (ntfs_fsck_set_mftbmp_value)
+../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_index_entry_mark_dirty)
+../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_inode_mark_dirty)
+../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_cluster_free_from_rl)
+../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+                              utils.o (find_attribute)
+../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+                              roothealth_recover.o (ntfs_check_logfile)
+../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+                              roothealth_recover.o (ntfs_log_set_handler)
+../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+                              roothealth_wal.o (ntfs_mft_records_read)
+../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_calloc)
+../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+                              roothealth_playlog.o (ntfs_mst_post_read_fixup_warn)
+../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_delete_object_id_index)
+../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-inode.o) (ntfs_ask_repair)
+../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_possible_symlink)
+../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (ntfs_rl_extend)
+../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_sd_add_everyone)
+../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+                              roothealth_raw_mft.o (ntfs_names_full_collate)
+../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o) (fsck_errors)
+../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-volume.o) (ntfs_device_unix_io_ops)
+../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-security.o) (ntfs_valid_sid)
+../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-dir.o) (ntfs_fetch_cache)
+../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-index.o) (ntfs_get_collate_function)
+../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+                              ../libntfs/.libs/libntfs.a(libntfs_la-volume.o) (ntfs_realpath_canonicalize)
+
+Merging program properties
+
+
+As-needed library included to satisfy reference by file (symbol)
+
+libc.so.6                     roothealth_orchestrator.o (optind@@GLIBC_2.2.5)
+
+Discarded input sections
+
+ .note.GNU-stack
+                0x0000000000000000        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .note.gnu.property
+                0x0000000000000000       0x20 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ .note.gnu.property
+                0x0000000000000000       0x20 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_repair_main.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_repair_main.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_orchestrator.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_orchestrator.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_format3.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_format3.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_report.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_report.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_repair.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_repair.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_write.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_write.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_recover.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_recover.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_playlog.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_playlog.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_replay_guard.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_replay_guard.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_replay_analysis.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_replay_analysis.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_wal.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_wal.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_bitmap.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_bitmap.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_coverage.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_coverage.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_dirty.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_dirty.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_hash_stream.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_hash_stream.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_overlay.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_overlay.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_policy.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_policy.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 roothealth_raw_mft.o
+ .note.gnu.property
+                0x0000000000000000       0x20 roothealth_raw_mft.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 utils.o
+ .note.gnu.property
+                0x0000000000000000       0x20 utils.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+ .note.gnu.property
+                0x0000000000000000       0x20 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+ .note.GNU-stack
+                0x0000000000000000        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ .note.gnu.property
+                0x0000000000000000       0x20 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ .note.gnu.property
+                0x0000000000000000       0x20 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+ .note.GNU-stack
+                0x0000000000000000        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+
+Memory Configuration
+
+Name             Origin             Length             Attributes
+*default*        0x0000000000000000 0xffffffffffffffff
+
+Linker script and memory map
+
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+LOAD roothealth_repair_main.o
+LOAD roothealth_orchestrator.o
+LOAD roothealth_format3.o
+LOAD roothealth_report.o
+LOAD roothealth_repair.o
+LOAD roothealth_write.o
+LOAD roothealth_recover.o
+LOAD roothealth_playlog.o
+LOAD roothealth_replay_guard.o
+LOAD roothealth_replay_analysis.o
+LOAD roothealth_wal.o
+LOAD roothealth_bitmap.o
+LOAD roothealth_coverage.o
+LOAD roothealth_dirty.o
+LOAD roothealth_hash_stream.o
+LOAD roothealth_overlay.o
+LOAD roothealth_policy.o
+LOAD roothealth_raw_mft.o
+LOAD utils.o
+LOAD ../libntfs/.libs/libntfs.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc_s.so
+START GROUP
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libgcc_s.so.1
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a
+END GROUP
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libc.so
+START GROUP
+LOAD /lib/x86_64-linux-gnu/libc.so.6
+LOAD /usr/lib/x86_64-linux-gnu/libc_nonshared.a
+LOAD /lib64/ld-linux-x86-64.so.2
+END GROUP
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc_s.so
+START GROUP
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/libgcc_s.so.1
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/libgcc.a
+END GROUP
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+LOAD /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+                [!provide]                        PROVIDE (__executable_start = SEGMENT_START ("text-segment", 0x0))
+                0x0000000000000318                . = (SEGMENT_START ("text-segment", 0x0) + SIZEOF_HEADERS)
+
+.interp         0x0000000000000318       0x1c
+ *(.interp)
+ .interp        0x0000000000000318       0x1c /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.note.gnu.property
+                0x0000000000000338       0x30
+ .note.gnu.property
+                0x0000000000000338       0x30 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.note.gnu.build-id
+                0x0000000000000368       0x24
+ *(.note.gnu.build-id)
+ .note.gnu.build-id
+                0x0000000000000368       0x24 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.note.ABI-tag   0x000000000000038c       0x20
+ .note.ABI-tag  0x000000000000038c       0x20 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.hash
+ *(.hash)
+
+.gnu.hash       0x00000000000003b0       0x3c
+ *(.gnu.hash)
+ .gnu.hash      0x00000000000003b0       0x3c /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.dynsym         0x00000000000003f0      0xba0
+ *(.dynsym)
+ .dynsym        0x00000000000003f0      0xba0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.dynstr         0x0000000000000f90      0x497
+ *(.dynstr)
+ .dynstr        0x0000000000000f90      0x497 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.gnu.version    0x0000000000001428       0xf8
+ *(.gnu.version)
+ .gnu.version   0x0000000000001428       0xf8 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.gnu.version_d  0x0000000000001520        0x0
+ *(.gnu.version_d)
+ .gnu.version_d
+                0x0000000000001520        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.gnu.version_r  0x0000000000001520       0xb0
+ *(.gnu.version_r)
+ .gnu.version_r
+                0x0000000000001520       0xb0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.rela.dyn       0x00000000000015d0     0x2748
+ *(.rela.init)
+ *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*)
+ .rela.text.startup
+                0x00000000000015d0        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.text     0x00000000000015d0        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.rela.fini)
+ *(.rela.rodata .rela.rodata.* .rela.gnu.linkonce.r.*)
+ *(.rela.data .rela.data.* .rela.gnu.linkonce.d.*)
+ .rela.data.rel.ro
+                0x00000000000015d0        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.data.rel.local
+                0x00000000000015d0      0xba0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.data.rel.ro.local
+                0x0000000000002170     0x19c8 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.data.rel
+                0x0000000000003b38       0x18 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.rela.tdata .rela.tdata.* .rela.gnu.linkonce.td.*)
+ *(.rela.tbss .rela.tbss.* .rela.gnu.linkonce.tb.*)
+ *(.rela.ctors)
+ *(.rela.dtors)
+ *(.rela.got)
+ .rela.got      0x0000000000003b50      0x120 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
+ .rela.bss      0x0000000000003c70       0x78 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.rela.ldata .rela.ldata.* .rela.gnu.linkonce.l.*)
+ *(.rela.lbss .rela.lbss.* .rela.gnu.linkonce.lb.*)
+ *(.rela.lrodata .rela.lrodata.* .rela.gnu.linkonce.lr.*)
+ *(.rela.ifunc)
+ .rela.ifunc    0x0000000000003ce8        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.fini_array
+                0x0000000000003ce8       0x18 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .rela.init_array
+                0x0000000000003d00       0x18 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.rela.plt       0x0000000000003d18      0xa80
+ *(.rela.plt)
+ .rela.plt      0x0000000000003d18      0xa80 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.rela.iplt)
+
+.relr.dyn
+ *(.relr.dyn)
+                0x0000000000005000                . = ALIGN (CONSTANT (MAXPAGESIZE))
+
+.init           0x0000000000005000       0x1b
+ *(SORT_NONE(.init))
+ .init          0x0000000000005000       0x16 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+                0x0000000000005000                _init
+ .init          0x0000000000005016        0x5 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+
+.plt            0x0000000000005020      0x710
+ *(.plt)
+ .plt           0x0000000000005020      0x710 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.iplt)
+
+.plt.got        0x0000000000005730       0x10
+ *(.plt.got)
+ .plt.got       0x0000000000005730       0x10 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000005730                __cxa_finalize@@GLIBC_2.2.5
+
+.plt.sec        0x0000000000005740      0x700
+ *(.plt.sec)
+ .plt.sec       0x0000000000005740      0x700 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000005740                __strcat_chk@@GLIBC_2.3.4
+                0x0000000000005750                getenv@@GLIBC_2.2.5
+                0x0000000000005760                __snprintf_chk@@GLIBC_2.3.4
+                0x0000000000005770                free@@GLIBC_2.2.5
+                0x0000000000005780                putchar@@GLIBC_2.2.5
+                0x0000000000005790                endmntent@@GLIBC_2.2.5
+                0x00000000000057a0                strcasecmp@@GLIBC_2.2.5
+                0x00000000000057b0                __vfprintf_chk@@GLIBC_2.3.4
+                0x00000000000057c0                __errno_location@@GLIBC_2.2.5
+                0x00000000000057d0                fdatasync@@GLIBC_2.2.5
+                0x00000000000057e0                srandom@@GLIBC_2.2.5
+                0x00000000000057f0                unlink@@GLIBC_2.2.5
+                0x0000000000005800                strncpy@@GLIBC_2.2.5
+                0x0000000000005810                strncmp@@GLIBC_2.2.5
+                0x0000000000005820                _exit@@GLIBC_2.2.5
+                0x0000000000005830                strcpy@@GLIBC_2.2.5
+                0x0000000000005840                __read_chk@@GLIBC_2.4
+                0x0000000000005850                unlinkat@@GLIBC_2.4
+                0x0000000000005860                puts@@GLIBC_2.2.5
+                0x0000000000005870                ferror@@GLIBC_2.2.5
+                0x0000000000005880                fread@@GLIBC_2.2.5
+                0x0000000000005890                readlink@@GLIBC_2.2.5
+                0x00000000000058a0                fcntl@@GLIBC_2.2.5
+                0x00000000000058b0                clock_gettime@@GLIBC_2.17
+                0x00000000000058c0                write@@GLIBC_2.2.5
+                0x00000000000058d0                getpid@@GLIBC_2.2.5
+                0x00000000000058e0                __open_2@@GLIBC_2.7
+                0x00000000000058f0                fclose@@GLIBC_2.2.5
+                0x0000000000005900                opendir@@GLIBC_2.2.5
+                0x0000000000005910                strlen@@GLIBC_2.2.5
+                0x0000000000005920                openat@@GLIBC_2.4
+                0x0000000000005930                __stack_chk_fail@@GLIBC_2.4
+                0x0000000000005940                mmap@@GLIBC_2.2.5
+                0x0000000000005950                getopt_long@@GLIBC_2.2.5
+                0x0000000000005960                strchr@@GLIBC_2.2.5
+                0x0000000000005970                snprintf@@GLIBC_2.2.5
+                0x0000000000005980                strrchr@@GLIBC_2.2.5
+                0x0000000000005990                ftruncate@@GLIBC_2.2.5
+                0x00000000000059a0                lseek@@GLIBC_2.2.5
+                0x00000000000059b0                fputs@@GLIBC_2.2.5
+                0x00000000000059c0                memset@@GLIBC_2.2.5
+                0x00000000000059d0                ioctl@@GLIBC_2.2.5
+                0x00000000000059e0                close@@GLIBC_2.2.5
+                0x00000000000059f0                __realpath_chk@@GLIBC_2.4
+                0x0000000000005a00                pipe@@GLIBC_2.2.5
+                0x0000000000005a10                __vsyslog_chk@@GLIBC_2.4
+                0x0000000000005a20                closedir@@GLIBC_2.2.5
+                0x0000000000005a30                fputc@@GLIBC_2.2.5
+                0x0000000000005a40                read@@GLIBC_2.2.5
+                0x0000000000005a50                lstat@@GLIBC_2.33
+                0x0000000000005a60                strndup@@GLIBC_2.2.5
+                0x0000000000005a70                memcmp@@GLIBC_2.2.5
+                0x0000000000005a80                fgets@@GLIBC_2.2.5
+                0x0000000000005a90                strtoull@@GLIBC_2.2.5
+                0x0000000000005aa0                calloc@@GLIBC_2.2.5
+                0x0000000000005ab0                strcmp@@GLIBC_2.2.5
+                0x0000000000005ac0                dirfd@@GLIBC_2.2.5
+                0x0000000000005ad0                strtoll@@GLIBC_2.2.5
+                0x0000000000005ae0                __memcpy_chk@@GLIBC_2.3.4
+                0x0000000000005af0                stat@@GLIBC_2.33
+                0x0000000000005b00                strtol@@GLIBC_2.2.5
+                0x0000000000005b10                realpath@@GLIBC_2.3
+                0x0000000000005b20                memcpy@@GLIBC_2.14
+                0x0000000000005b30                posix_fallocate@@GLIBC_2.2.5
+                0x0000000000005b40                kill@@GLIBC_2.2.5
+                0x0000000000005b50                time@@GLIBC_2.2.5
+                0x0000000000005b60                readdir@@GLIBC_2.2.5
+                0x0000000000005b70                random@@GLIBC_2.2.5
+                0x0000000000005b80                malloc@@GLIBC_2.2.5
+                0x0000000000005b90                fflush@@GLIBC_2.2.5
+                0x0000000000005ba0                getmntent@@GLIBC_2.2.5
+                0x0000000000005bb0                setmntent@@GLIBC_2.2.5
+                0x0000000000005bc0                __isoc99_sscanf@@GLIBC_2.7
+                0x0000000000005bd0                mkstemp@@GLIBC_2.2.5
+                0x0000000000005be0                fseek@@GLIBC_2.2.5
+                0x0000000000005bf0                __vsnprintf_chk@@GLIBC_2.3.4
+                0x0000000000005c00                realloc@@GLIBC_2.2.5
+                0x0000000000005c10                __strcpy_chk@@GLIBC_2.3.4
+                0x0000000000005c20                munmap@@GLIBC_2.2.5
+                0x0000000000005c30                setlocale@@GLIBC_2.2.5
+                0x0000000000005c40                pwrite@@GLIBC_2.2.5
+                0x0000000000005c50                __printf_chk@@GLIBC_2.3.4
+                0x0000000000005c60                fchmod@@GLIBC_2.2.5
+                0x0000000000005c70                poll@@GLIBC_2.2.5
+                0x0000000000005c80                madvise@@GLIBC_2.2.5
+                0x0000000000005c90                memmove@@GLIBC_2.2.5
+                0x0000000000005ca0                __syslog_chk@@GLIBC_2.4
+                0x0000000000005cb0                fsync@@GLIBC_2.2.5
+                0x0000000000005cc0                waitpid@@GLIBC_2.2.5
+                0x0000000000005cd0                open@@GLIBC_2.2.5
+                0x0000000000005ce0                fopen@@GLIBC_2.2.5
+                0x0000000000005cf0                sysconf@@GLIBC_2.2.5
+                0x0000000000005d00                gmtime@@GLIBC_2.2.5
+                0x0000000000005d10                flock@@GLIBC_2.2.5
+                0x0000000000005d20                pread@@GLIBC_2.2.5
+                0x0000000000005d30                openlog@@GLIBC_2.2.5
+                0x0000000000005d40                __memset_chk@@GLIBC_2.3.4
+                0x0000000000005d50                getppid@@GLIBC_2.2.5
+                0x0000000000005d60                exit@@GLIBC_2.2.5
+                0x0000000000005d70                fwrite@@GLIBC_2.2.5
+                0x0000000000005d80                __fprintf_chk@@GLIBC_2.3.4
+                0x0000000000005d90                __strncat_chk@@GLIBC_2.3.4
+                0x0000000000005da0                getrandom@@GLIBC_2.25
+                0x0000000000005db0                strdup@@GLIBC_2.2.5
+                0x0000000000005dc0                strerror@@GLIBC_2.2.5
+                0x0000000000005dd0                execl@@GLIBC_2.2.5
+                0x0000000000005de0                hasmntopt@@GLIBC_2.2.5
+                0x0000000000005df0                fstat@@GLIBC_2.33
+                0x0000000000005e00                fork@@GLIBC_2.2.5
+                0x0000000000005e10                fstatat@@GLIBC_2.33
+                0x0000000000005e20                __ctype_b_loc@@GLIBC_2.3
+                0x0000000000005e30                __sprintf_chk@@GLIBC_2.3.4
+
+.text           0x0000000000005e40    0x65843
+ *(.text.unlikely .text.*_unlikely .text.unlikely.*)
+ *(.text.exit .text.exit.*)
+ *(.text.startup .text.startup.*)
+ .text.startup  0x0000000000005e40      0x2fa roothealth_repair_main.o
+                0x0000000000005e40                main
+ *(.text.hot .text.hot.*)
+ *(SORT_BY_NAME(.text.sorted.*))
+ *(.text .stub .text.* .gnu.linkonce.t.*)
+ *fill*         0x000000000000613a        0x6 
+ .text          0x0000000000006140       0x26 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000006140                _start
+ .text          0x0000000000006166        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+ *fill*         0x0000000000006166        0xa 
+ .text          0x0000000000006170       0xb9 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ .text          0x0000000000006229        0x0 roothealth_repair_main.o
+ *fill*         0x0000000000006229        0x7 
+ .text          0x0000000000006230     0x27c9 roothealth_orchestrator.o
+                0x00000000000069a0                rh_public_result
+                0x00000000000069f0                rh_result_precedence
+                0x0000000000006a30                rh_cli_usage
+                0x0000000000006a50                rh_cli_parse
+                0x0000000000007000                rh_uuid_text
+                0x00000000000070a0                rh_binary_hash
+                0x00000000000071c0                rh_device_resolve
+                0x00000000000072c0                rh_native_state
+                0x0000000000007330                rh_orchestrator_scan
+                0x0000000000007760                rh_orchestrator_capture_foundation
+                0x0000000000007990                rh_orchestrator_internal_rescan
+                0x0000000000007eb0                rh_orchestrator_self_rescan
+ *fill*         0x00000000000089f9        0x7 
+ .text          0x0000000000008a00     0x2776 roothealth_format3.o
+                0x000000000000b090                rh_format3_publish
+ *fill*         0x000000000000b176        0xa 
+ .text          0x000000000000b180      0xb89 roothealth_report.o
+                0x000000000000b3d0                rh_report_prepare
+                0x000000000000b7f0                rh_report_append
+                0x000000000000b860                rh_report_appendf
+                0x000000000000b9a0                rh_report_json_string
+                0x000000000000baf0                rh_report_publish
+                0x000000000000bc60                rh_report_abort
+ *fill*         0x000000000000bd09        0x7 
+ .text          0x000000000000bd10     0x1da3 roothealth_repair.o
+                0x000000000000ca40                roothealth_refuse_mounted
+                0x000000000000cc90                roothealth_bootstrap_boot_plan
+                0x000000000000d230                roothealth_verify_namespace_identity
+                0x000000000000d680                roothealth_mftmirr_plan
+ *fill*         0x000000000000dab3        0xd 
+ .text          0x000000000000dac0     0x3b60 roothealth_write.o
+                0x000000000000e310                rh_sha256
+                0x000000000000eeb0                rh_sha256_hex
+                0x000000000000ef30                rh_write_kind_name
+                0x000000000000ef50                rh_writer_reset_plan
+                0x000000000000ef70                rh_writer_close
+                0x000000000000efe0                rh_writer_open
+                0x000000000000f110                rh_writer_set_backend
+                0x000000000000f150                rh_writer_exclude
+                0x000000000000f1d0                rh_writer_allow_raw_wal
+                0x000000000000f250                rh_writer_restore_restrictions
+                0x000000000000f310                rh_writer_staged_read
+                0x000000000000f430                rh_writer_read
+                0x000000000000f450                rh_writer_range_excluded
+                0x000000000000f4d0                rh_writer_current_read
+                0x000000000000f530                rh_write_semantic_target_valid
+                0x0000000000010190                rh_write_operation_semantics_valid
+                0x00000000000102f0                rh_writer_plan_typed
+                0x00000000000106b0                rh_writer_plan
+                0x00000000000106f0                rh_writer_finalize_target
+                0x0000000000010890                rh_writer_plan_checkpoint
+                0x00000000000108b0                rh_writer_discard_after
+                0x00000000000109c0                rh_writer_plan_hash
+                0x0000000000010e10                rh_writer_sync
+                0x0000000000010e70                rh_writer_commit
+                0x00000000000112b0                rh_writer_raw_pread
+                0x0000000000011350                rh_writer_raw_pwrite
+                0x0000000000011400                rh_writer_raw_begin
+                0x0000000000011440                rh_writer_raw_sync
+                0x0000000000011480                rh_writer_raw_end
+                0x00000000000114c0                rh_writer_recovery_write
+ .text          0x0000000000011620     0x975e roothealth_recover.o
+                0x0000000000012dd0                roothealth_attr_vcn_to_lcn
+                0x0000000000013fc0                getattrentry
+                0x00000000000141c0                findattrentry
+                0x0000000000014ac0                hexdump
+                0x0000000000014c40                showname
+                0x00000000000155e0                actionname
+                0x0000000000015890                fixnamelen
+                0x00000000000158d0                mftattrname
+                0x0000000000015b00                get_undo_offset
+                0x0000000000015b20                get_redo_offset
+                0x0000000000015b40                get_extra_offset
+                0x0000000000015b90                copy_attribute
+                0x0000000000018940                within_lcn_range
+                0x00000000000189b0                exception
+                0x00000000000189f0                roothealth_log_replay_plan_authorized
+                0x000000000001ad70                roothealth_log_replay_plan
+ *fill*         0x000000000001ad7e        0x2 
+ .text          0x000000000001ad80     0xb49c roothealth_playlog.o
+                0x000000000001dd20                freeclusterentry
+                0x000000000001ddb0                roothealth_build_native_attr_target
+                0x0000000000024c80                show_redos
+                0x0000000000024cf0                play_redos
+                0x0000000000025d00                play_undos
+ *fill*         0x000000000002621c        0x4 
+ .text          0x0000000000026220     0x1872 roothealth_replay_guard.o
+                0x0000000000026230                rh_replay_action_policy
+                0x0000000000026260                rh_replay_guard_profile
+                0x0000000000026300                rh_replay_guard_unprotect_rcrd
+                0x0000000000026480                rh_replay_guard_action
+ *fill*         0x0000000000027a92        0xe 
+ .text          0x0000000000027aa0     0x1975 roothealth_replay_analysis.o
+                0x0000000000027d90                rh_replay_analysis_plan
+ *fill*         0x0000000000029415        0xb 
+ .text          0x0000000000029420     0x7df0 roothealth_wal.o
+                0x000000000002dad0                rh_uuid_parse
+                0x000000000002dc30                rh_uuid_format
+                0x000000000002e480                rh_wal_locate_and_validate
+                0x000000000002fdb0                rh_wal_reconstruct_degraded
+                0x000000000002ffb0                rh_wal_validate_action_order
+                0x00000000000300d0                rh_wal_validate_mft_operation_pairs
+                0x00000000000309d0                rh_wal_install_backend
+                0x0000000000030a40                rh_wal_uninstall_backend
+                0x0000000000030a70                rh_wal_register_action_verifier
+                0x0000000000030b10                rh_wal_preimage_size
+                0x0000000000030b30                rh_wal_preimage_read
+                0x0000000000030b90                rh_wal_entry_old_read
+                0x0000000000030c50                rh_wal_finalize_empty
+                0x0000000000030d90                rh_wal_rollback
+                0x0000000000031110                rh_wal_committed_accept
+ .text          0x0000000000031210     0x169a roothealth_bitmap.o
+                0x0000000000031210                rh_cluster_bitmap_census_run_from_raw
+                0x0000000000032130                rh_cluster_bitmap_census_run
+                0x00000000000321e0                rh_cluster_bitmap_census_destroy
+                0x0000000000032250                rh_cluster_bitmap_seal_policy
+ *fill*         0x00000000000328aa        0x6 
+ .text          0x00000000000328b0     0x109f roothealth_coverage.o
+                0x00000000000328b0                rh_coverage_hash
+                0x0000000000032ee0                rh_coverage_is_clean
+ *fill*         0x000000000003394f        0x1 
+ .text          0x0000000000033950      0x882 roothealth_dirty.o
+                0x0000000000033bc0                rh_volume_dirty_inspect
+                0x0000000000033f90                rh_volume_dirty_stage_pair
+ *fill*         0x00000000000341d2        0xe 
+ .text          0x00000000000341e0      0x726 roothealth_hash_stream.o
+                0x0000000000034610                rh_hash_stream_init
+                0x0000000000034660                rh_hash_stream_update
+                0x0000000000034760                rh_hash_stream_final
+ *fill*         0x0000000000034906        0xa 
+ .text          0x0000000000034910      0xa21 roothealth_overlay.o
+                0x0000000000034e80                rh_ntfs_overlay_mount
+                0x0000000000034f10                rh_ntfs_overlay_run_action
+                0x0000000000035260                rh_ntfs_overlay_failed
+                0x0000000000035280                rh_ntfs_overlay_unmount
+ *fill*         0x0000000000035331        0xf 
+ .text          0x0000000000035340     0x1589 roothealth_policy.o
+                0x0000000000035a20                rh_policy_seal_bitmap_census
+                0x0000000000035fc0                rh_policy_definition_count
+                0x0000000000035fd0                rh_policy_definition_at
+                0x0000000000036010                rh_policy_problem
+                0x0000000000036040                rh_policy_aggregate
+                0x00000000000360b0                rh_policy_implementation
+                0x0000000000036120                rh_policy_fact_name
+                0x0000000000036140                rh_policy_evidence_target_count
+                0x0000000000036160                rh_policy_evidence_target
+                0x00000000000361b0                rh_policy_authorize_operation
+                0x00000000000368a0                rh_policy_evidence_destroy
+ *fill*         0x00000000000368c9        0x7 
+ .text          0x00000000000368d0     0x578b roothealth_raw_mft.o
+                0x0000000000039f80                rh_raw_mft_map_stream_range
+                0x000000000003a410                rh_raw_mft_stream_pread
+                0x000000000003a8c0                rh_raw_mft_census_release
+                0x000000000003a8e0                rh_raw_mft_slot_count_from_size
+                0x000000000003a960                rh_raw_mft_census_run
+ *fill*         0x000000000003c05b        0x5 
+ .text          0x000000000003c060     0x1777 utils.o
+                0x000000000003c060                utils_set_locale
+                0x000000000003c0e0                ntfs_mbstoucs_libntfscompat
+                0x000000000003c1c0                utils_valid_device
+                0x000000000003c3f0                utils_mount_volume
+                0x000000000003c630                utils_parse_size
+                0x000000000003c7f0                utils_parse_range
+                0x000000000003c900                utils_inode_get_name
+                0x000000000003ccc0                utils_attr_get_name
+                0x000000000003cf30                check_mftrec_in_use
+                0x000000000003d030                utils_mftrec_in_use
+                0x000000000003d040                progress_init
+                0x000000000003d0d0                progress_update
+                0x000000000003d180                mft_get_search_ctx
+                0x000000000003d1c0                mft_put_search_ctx
+                0x000000000003d1f0                mft_next_record
+                0x000000000003d6a0                utils_cluster_in_use
+ *fill*         0x000000000003d7d7        0x9 
+ .text          0x000000000003d7e0     0xb1fd ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+                0x000000000003dc90                NAttrCompressed
+                0x000000000003dcc0                NAttrSetCompressed
+                0x000000000003dcf0                NAttrClearCompressed
+                0x000000000003dd20                NAttrEncrypted
+                0x000000000003dd50                NAttrSetEncrypted
+                0x000000000003dd80                NAttrClearEncrypted
+                0x000000000003ddb0                NAttrSparse
+                0x000000000003dde0                NAttrSetSparse
+                0x000000000003de10                NAttrClearSparse
+                0x000000000003de40                ntfs_get_attribute_value_length
+                0x000000000003de80                ntfs_set_attribute_value_length
+                0x000000000003dee0                ntfs_is_valid_attr_type
+                0x000000000003dfb0                ntfs_get_attribute_value
+                0x000000000003e270                ntfs_attr_init
+                0x000000000003e390                ntfs_attr_close
+                0x000000000003e400                ntfs_attr_name_free
+                0x000000000003e420                ntfs_attr_name_get
+                0x000000000003e4c0                ntfs_attr_inconsistent
+                0x000000000003ef20                ntfs_attr_reinit_search_ctx
+                0x000000000003efa0                ntfs_attr_lookup
+                0x000000000003f980                ntfs_attr_position
+                0x000000000003f9d0                ntfs_attr_get_search_ctx
+                0x000000000003fa90                ntfs_attr_put_search_ctx
+                0x000000000003faa0                ntfs_attr_open
+                0x0000000000040270                ntfs_attr_map_runlist
+                0x0000000000040310                ntfs_attr_find_vcn
+                0x0000000000040440                ntfs_attr_map_whole_runlist
+                0x00000000000406b0                ntfs_attr_pread
+                0x0000000000040e50                ntfs_attr_mst_pread
+                0x0000000000041730                ntfs_attr_find_in_attrdef
+                0x00000000000418b0                ntfs_attr_size_bounds_check
+                0x0000000000041a00                ntfs_attr_can_be_resident
+                0x0000000000041a60                ntfs_make_room_for_attr
+                0x0000000000041b50                ntfs_attr_set_flags
+                0x0000000000041c00                ntfs_attr_record_resize
+                0x0000000000041d20                ntfs_resident_attr_record_add
+                0x0000000000042090                ntfs_non_resident_attr_record_add
+                0x0000000000042560                ntfs_attr_record_rm
+                0x0000000000042760                ntfs_attr_rm
+                0x0000000000042840                ntfs_resident_attr_value_resize
+                0x00000000000428b0                ntfs_attr_record_move_to
+                0x0000000000042a70                ntfs_attr_record_move_away
+                0x0000000000043ab0                ntfs_attr_make_resident
+                0x0000000000043e10                ntfs_attr_update_mapping_pairs
+                0x00000000000443c0                ntfs_attr_pclose
+                0x0000000000044950                ntfs_non_resident_attr_shrink
+                0x00000000000454b0                ntfs_attr_force_non_resident
+                0x0000000000045510                ntfs_attr_pwrite
+                0x00000000000472c0                ntfs_attr_mst_pwrite
+                0x0000000000047440                ntfs_attr_make_non_resident
+                0x0000000000047760                ntfs_attr_add
+                0x0000000000047e60                ntfs_attr_truncate
+                0x0000000000047e80                ntfs_attr_truncate_solid
+                0x0000000000047e90                ntfs_attr_readall
+                0x0000000000047ff0                ntfs_attr_data_read
+                0x0000000000048120                ntfs_attr_data_write
+                0x0000000000048230                ntfs_attr_shrink_size
+                0x00000000000482d0                ntfs_attr_exist
+                0x0000000000048330                ntfs_attr_remove
+                0x0000000000048440                ntfs_attr_get_free_bits
+ *fill*         0x00000000000489dd        0x3 
+ .text          0x00000000000489e0      0x556 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+                0x00000000000489e0                ntfs_attrlist_need
+                0x0000000000048a70                ntfs_attrlist_entry_add
+                0x0000000000048dd0                ntfs_attrlist_entry_rm
+ *fill*         0x0000000000048f36        0xa 
+ .text          0x0000000000048f40      0x6e1 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+                0x0000000000049460                ntfs_bit_set
+                0x00000000000494a0                ntfs_bit_get
+                0x00000000000494d0                ntfs_bit_get_and_set
+                0x0000000000049520                ntfs_bitmap_set_run
+                0x0000000000049580                ntfs_bitmap_clear_run
+                0x00000000000495e0                _find_first_zero_bit
+ *fill*         0x0000000000049621        0xf 
+ .text          0x0000000000049630      0x5eb ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+                0x0000000000049630                ntfs_boot_sector_is_ntfs
+                0x0000000000049930                ntfs_boot_sector_parse
+ *fill*         0x0000000000049c1b        0x5 
+ .text          0x0000000000049c20     0x2c82 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+                0x000000000004b570                ntfs_compressed_attr_pread
+                0x000000000004bd70                ntfs_compressed_pwrite
+                0x000000000004c5a0                ntfs_compressed_close
+ *fill*         0x000000000004c8a2        0xe 
+ .text          0x000000000004c8b0      0xaa4 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+                0x000000000004c990                ntfs_device_alloc
+                0x000000000004ca30                ntfs_device_roothealth_install_plan_write
+                0x000000000004ca70                ntfs_device_roothealth_remove_plan_write
+                0x000000000004ca90                ntfs_device_free
+                0x000000000004cae0                ntfs_pread
+                0x000000000004cb80                ntfs_pwrite
+                0x000000000004cc40                ntfs_mst_pread
+                0x000000000004ccd0                ntfs_mst_pwrite
+                0x000000000004cde0                ntfs_cluster_read
+                0x000000000004ced0                ntfs_cluster_write
+                0x000000000004cfe0                ntfs_device_size_get
+                0x000000000004d160                ntfs_device_partition_start_sector_get
+                0x000000000004d1d0                ntfs_device_heads_get
+                0x000000000004d220                ntfs_device_sectors_per_track_get
+                0x000000000004d270                ntfs_device_sector_size_get
+                0x000000000004d2e0                ntfs_device_block_size_set
+ *fill*         0x000000000004d354        0xc 
+ .text          0x000000000004d360     0x4516 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+                0x000000000004dda0                ntfs_dir_inode_hash
+                0x000000000004de20                ntfs_dir_lookup_hash
+                0x000000000004de90                __ntfs_inode_lookup_by_name
+                0x000000000004e5a0                ntfs_inode_lookup_by_name
+                0x000000000004e5f0                ntfs_inode_lookup_by_mbsname
+                0x000000000004e7b0                ntfs_pathname_to_inode
+                0x000000000004eca0                ntfs_interix_types
+                0x000000000004f180                ntfs_readdir
+                0x000000000004fcf0                ntfs_create
+                0x0000000000050720                ntfs_check_empty_dir
+                0x00000000000507d0                ntfs_delete
+                0x0000000000051250                ntfs_link
+                0x0000000000051260                ntfs_dir_parent_inode
+                0x0000000000051300                ntfs_get_ntfs_dos_name
+                0x0000000000051440                ntfs_set_ntfs_dos_name
+                0x00000000000516d0                ntfs_remove_ntfs_dos_name
+ *fill*         0x0000000000051876        0xa 
+ .text          0x0000000000051880      0x7c0 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+                0x0000000000051a20                ntfs_get_ntfs_ea
+                0x0000000000051b20                ntfs_set_ntfs_ea
+                0x0000000000051da0                ntfs_remove_ntfs_ea
+                0x0000000000051f40                ntfs_ea_set_wsl_not_symlink
+ .text          0x0000000000052040     0x171c ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+                0x00000000000524b0                ntfs_fsck_set_mftbmp_value
+                0x0000000000052580                ntfs_fsck_mftbmp_get
+                0x00000000000525d0                ntfs_fsck_mftbmp_clear
+                0x00000000000525e0                ntfs_fsck_mftbmp_set
+                0x00000000000525f0                ntfs_fsck_find_mftbmp_block
+                0x0000000000052630                ntfs_fsck_set_alloc_lcnbmp_range
+                0x00000000000528a0                ntfs_fsck_or_alloc_lcnbmp
+                0x0000000000052960                ntfs_fsck_repair_cluster_dup
+                0x0000000000052b60                ntfs_fsck_make_dup_runlist
+                0x0000000000052ca0                ntfs_fsck_fill_unused_lcnbmp
+                0x0000000000052d00                ntfs_fsck_find_lcnbmp_block
+                0x0000000000052db0                ntfs_fsck_set_lcnbmp_range
+                0x0000000000053000                ntfs_fsck_check_and_set_lcnbmp
+                0x00000000000533f0                ntfs_fsck_mount
+                0x00000000000535e0                ntfs_fsck_umount
+ *fill*         0x000000000005375c        0x4 
+ .text          0x0000000000053760     0x3847 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+                0x0000000000053820                ntfs_index_entry_mark_dirty
+                0x0000000000053850                ntfs_ib_vcn_to_pos
+                0x0000000000053870                ntfs_ib_write
+                0x0000000000053990                ntfs_index_ctx_get
+                0x0000000000053a00                ntfs_index_ctx_put
+                0x0000000000053a20                ntfs_index_ctx_reinit
+                0x0000000000053a50                ntfs_ie_get_vcn
+                0x0000000000053a60                ntfs_ie_filename_get
+                0x0000000000053a80                ntfs_ie_dup
+                0x0000000000053b80                ntfs_ir_lookup
+                0x0000000000053c70                ntfs_ir_lookup2
+                0x0000000000053db0                ntfs_index_block_inconsistent
+                0x0000000000054040                ntfs_index_entry_inconsistent
+                0x0000000000054710                ntfs_ib_read
+                0x0000000000054800                ntfs_index_lookup
+                0x0000000000054e20                ntfs_ibm_modify
+                0x0000000000055b30                ntfsck_update_index_entry
+                0x0000000000055ba0                ntfs_ie_add
+                0x00000000000561c0                ntfs_index_add_filename
+                0x0000000000056300                ntfs_index_rm
+                0x0000000000056af0                ntfs_index_remove
+                0x0000000000056bd0                ntfs_index_root_get
+                0x0000000000056c60                ntfs_index_walk_down
+                0x0000000000056d70                ntfs_index_walk_up
+                0x0000000000056ea0                ntfs_index_next
+ *fill*         0x0000000000056fa7        0x9 
+ .text          0x0000000000056fb0     0x2598 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+                0x0000000000057060                ntfs_inode_base
+                0x0000000000057080                ntfs_inode_mark_dirty
+                0x00000000000570a0                ntfs_inode_allocate
+                0x00000000000570c0                ntfs_inode_nidata_hash
+                0x00000000000570d0                ntfs_inode_invalidate
+                0x0000000000057150                ntfs_inode_open
+                0x00000000000575f0                ntfs_extent_inode_open
+                0x00000000000578e0                ntfs_inode_attach_all_extents
+                0x00000000000579d0                ntfs_inode_sync
+                0x00000000000579e0                ntfs_inode_real_close
+                0x0000000000057b40                ntfs_inode_nidata_free
+                0x0000000000057b50                ntfs_inode_close
+                0x0000000000057c60                ntfs_inode_sync_in_dir
+                0x00000000000586b0                ntfs_inode_close_in_dir
+                0x0000000000058730                ntfs_inode_free_space
+                0x0000000000058890                ntfs_inode_add_attrlist
+                0x0000000000058ec0                ntfs_inode_update_times
+                0x0000000000058fd0                ntfs_inode_badclus_bad
+                0x0000000000059100                ntfs_inode_get_times
+                0x0000000000059250                ntfs_inode_set_times
+ *fill*         0x0000000000059548        0x8 
+ .text          0x0000000000059550     0x11be ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+                0x00000000000596b0                ntfs_cluster_free_from_rl
+                0x00000000000597f0                ntfs_cluster_alloc
+                0x000000000005a250                ntfs_cluster_free_basic
+                0x000000000005a350                ntfs_cluster_free
+ *fill*         0x000000000005a70e        0x2 
+ .text          0x000000000005a710      0x260 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+                0x000000000005a710                find_attribute
+                0x000000000005a750                find_first_inode_attribute
+                0x000000000005a7e0                find_first_attribute
+                0x000000000005a860                utils_is_system_metadata
+                0x000000000005a950                utils_is_metadata
+ .text          0x000000000005a970      0xd34 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+                0x000000000005a970                ntfs_check_logfile
+                0x000000000005b540                ntfs_empty_logfile
+ *fill*         0x000000000005b6a4        0xc 
+ .text          0x000000000005b6b0      0x824 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+                0x000000000005b6b0                ntfs_log_handler_null
+                0x000000000005b6c0                ntfs_log_handler_syslog
+                0x000000000005b810                ntfs_log_get_levels
+                0x000000000005b820                ntfs_log_set_levels
+                0x000000000005b840                ntfs_log_clear_levels
+                0x000000000005b860                ntfs_log_set_handler
+                0x000000000005b8b0                ntfs_log_redirect
+                0x000000000005b9c0                ntfs_log_early_error
+                0x000000000005bab0                ntfs_log_handler_fprintf
+                0x000000000005bd80                ntfs_log_handler_outerr
+                0x000000000005bdf0                ntfs_log_handler_stderr
+                0x000000000005be30                ntfs_log_parse_option
+ *fill*         0x000000000005bed4        0xc 
+ .text          0x000000000005bee0     0x3a01 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+                0x000000000005cb50                ntfs_mft_records_read
+                0x000000000005ccc0                ntfs_mft_records_write
+                0x000000000005cfb0                ntfs_mft_record_check
+                0x000000000005d870                ntfs_file_record_read
+                0x000000000005d9d0                ntfs_mft_record_layout
+                0x000000000005dbb0                ntfs_mft_record_format
+                0x000000000005dc30                ntfs_mft_rec_alloc
+                0x000000000005e360                ntfs_mft_record_alloc
+                0x000000000005f770                ntfs_mft_record_free
+                0x000000000005f8a0                ntfs_mft_usn_dec
+ *fill*         0x000000000005f8e1        0xf 
+ .text          0x000000000005f8f0      0x129 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+                0x000000000005f8f0                ntfs_calloc
+                0x000000000005f950                ntfs_malloc
+                0x000000000005f9b0                ntfs_realloc
+                0x000000000005fa10                ntfs_free
+ *fill*         0x000000000005fa19        0x7 
+ .text          0x000000000005fa20      0x36c ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+                0x000000000005fa20                ntfs_mst_post_read_fixup_warn
+                0x000000000005fbe0                ntfs_mst_post_read_fixup
+                0x000000000005fbf0                ntfs_mst_pre_write_fixup
+                0x000000000005fd40                ntfs_mst_post_write_fixup
+ *fill*         0x000000000005fd8c        0x4 
+ .text          0x000000000005fd90      0xa05 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+                0x000000000005ffa0                ntfs_delete_object_id_index
+                0x0000000000060050                ntfs_get_ntfs_object_id
+                0x0000000000060270                ntfs_set_ntfs_object_id
+                0x0000000000060600                ntfs_remove_ntfs_object_id
+ *fill*         0x0000000000060795        0xb 
+ .text          0x00000000000607a0      0x6ff ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+                0x0000000000060a50                ntfs_ask_repair
+                0x0000000000060be0                ntfs_print_problem
+                0x0000000000060d10                ntfs_init_problem_ctx
+                0x0000000000060d40                ntfs_fix_problem
+ *fill*         0x0000000000060e9f        0x1 
+ .text          0x0000000000060ea0      0xc58 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+                0x00000000000611a0                ntfs_reparse_data_is_valid
+                0x00000000000611b0                ntfs_possible_symlink
+                0x0000000000061230                ntfs_reparse_index_check
+                0x0000000000061390                ntfs_delete_reparse_index
+                0x0000000000061450                ntfs_get_ntfs_reparse_data
+                0x0000000000061530                ntfs_set_ntfs_reparse_data
+                0x00000000000617e0                ntfs_remove_ntfs_reparse_data
+                0x0000000000061970                ntfs_reparse_set_wsl_symlink
+                0x0000000000061a50                ntfs_reparse_set_wsl_not_symlink
+ *fill*         0x0000000000061af8        0x8 
+ .text          0x0000000000061b00     0x2987 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+                0x0000000000061b60                ntfs_rl_extend
+                0x0000000000061c70                ntfs_rl_replace
+                0x0000000000061ed0                ntfs_runlists_merge
+                0x00000000000629e0                ntfs_mapping_pairs_decompress_i
+                0x0000000000063090                ntfs_mapping_pairs_decompress
+                0x00000000000630a0                ntfs_decompress_cluster_run
+                0x00000000000630f0                ntfs_rl_vcn_to_lcn
+                0x0000000000063160                ntfs_rl_find_vcn
+                0x00000000000631b0                ntfs_rl_pread
+                0x0000000000063370                ntfs_rl_pwrite
+                0x0000000000063550                ntfs_get_nr_significant_bytes
+                0x0000000000063580                ntfs_get_size_for_mapping_pairs
+                0x0000000000063700                ntfs_write_significant_bytes
+                0x0000000000063780                ntfs_mapping_pairs_build
+                0x0000000000063a60                ntfs_rl_truncate
+                0x0000000000063b90                ntfs_rl_sparse
+                0x0000000000063c70                ntfs_rl_get_compressed_size
+                0x0000000000063d50                ntfs_rl_punch_hole
+                0x0000000000064350                ntfs_copy_rl_clusters
+ *fill*         0x0000000000064487        0x9 
+ .text          0x0000000000064490      0x60b ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+                0x0000000000064490                ntfs_guid_is_zero
+                0x00000000000644b0                ntfs_guid_to_mbs
+                0x0000000000064560                ntfs_sid_to_mbs_size
+                0x00000000000645b0                ntfs_sid_to_mbs
+                0x0000000000064790                ntfs_generate_guid
+                0x0000000000064830                ntfs_sd_add_everyone
+                0x0000000000064940                ntfs_open_secure
+                0x0000000000064a50                ntfs_close_secure
+ *fill*         0x0000000000064a9b        0x5 
+ .text          0x0000000000064aa0     0x13ac ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+                0x0000000000064c30                ntfs_names_full_collate
+                0x0000000000064df0                ntfs_ucsncmp
+                0x0000000000064e40                ntfs_ucsncasecmp
+                0x0000000000064eb0                ntfs_names_are_equal
+                0x0000000000064f20                ntfs_ucsnlen
+                0x0000000000064f50                ntfs_ucsndup
+                0x0000000000064fa0                ntfs_name_upcase
+                0x0000000000064fd0                ntfs_name_locase
+                0x0000000000065000                ntfs_ucstombs
+                0x0000000000065330                ntfs_mbstoucs
+                0x0000000000065560                ntfs_uppercase_mbs
+                0x00000000000656d0                ntfs_upcase_table_build
+                0x0000000000065850                ntfs_upcase_build_default
+                0x0000000000065890                ntfs_locase_table_build
+                0x0000000000065940                ntfs_str2ucs
+                0x0000000000065a40                ntfs_ucsfree
+                0x0000000000065a70                ntfs_forbidden_chars
+                0x0000000000065b40                ntfs_forbidden_names
+                0x0000000000065db0                ntfs_collapsible_chars
+ *fill*         0x0000000000065e4c        0x4 
+ .text          0x0000000000065e50     0x4040 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+                0x0000000000066700                ntfs_volume_alloc
+                0x0000000000066710                ntfs_volume_startup
+                0x00000000000679e0                ntfs_volume_check_hiberfile
+                0x0000000000067bf0                ntfs_volume_invalidate_hiberfile
+                0x0000000000067d60                ntfs_umount
+                0x0000000000067da0                ntfs_check_if_mounted
+                0x0000000000067f60                ntfs_version_is_supported
+                0x0000000000067fc0                ntfs_logfile_reset
+                0x00000000000680c0                ntfs_device_mount
+                0x00000000000697d0                ntfs_mount
+                0x0000000000069840                ntfs_volume_write_flags
+                0x00000000000699c0                ntfs_volume_get_free_space
+                0x0000000000069aa0                ntfs_volume_rename
+ .text          0x0000000000069e90      0x74c ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ *fill*         0x000000000006a5dc        0x4 
+ .text          0x000000000006a5e0       0xb2 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+                0x000000000006a5e0                ntfs_sid_size
+                0x000000000006a5f0                ntfs_same_sid
+                0x000000000006a640                ntfs_is_user_sid
+                0x000000000006a670                ntfs_valid_sid
+ *fill*         0x000000000006a692        0xe 
+ .text          0x000000000006a6a0      0xba5 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+                0x000000000006aa20                ntfs_fetch_cache
+                0x000000000006ab30                ntfs_enter_cache
+                0x000000000006ae70                ntfs_invalidate_cache
+                0x000000000006afb0                ntfs_remove_cache
+                0x000000000006b010                ntfs_create_lru_caches
+                0x000000000006b200                ntfs_free_lru_caches
+ *fill*         0x000000000006b245        0xb 
+ .text          0x000000000006b250      0x278 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+                0x000000000006b440                ntfs_get_collate_function
+ *fill*         0x000000000006b4c8        0x8 
+ .text          0x000000000006b4d0      0x1b3 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+                0x000000000006b5e0                ntfs_realpath_canonicalize
+ .text          0x000000000006b683        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ .text          0x000000000006b683        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+ *(.gnu.warning)
+
+.fini           0x000000000006b684        0xd
+ *(SORT_NONE(.fini))
+ .fini          0x000000000006b684        0x8 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+                0x000000000006b684                _fini
+ .fini          0x000000000006b68c        0x5 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+                [!provide]                        PROVIDE (__etext = .)
+                [!provide]                        PROVIDE (_etext = .)
+                [!provide]                        PROVIDE (etext = .)
+                0x000000000006c000                . = ALIGN (CONSTANT (MAXPAGESIZE))
+                0x000000000006c000                . = SEGMENT_START ("rodata-segment", (ALIGN (CONSTANT (MAXPAGESIZE)) + (. & (CONSTANT (MAXPAGESIZE) - 0x1))))
+
+.rodata         0x000000000006c000    0x1550a
+ *(.rodata .rodata.* .gnu.linkonce.r.*)
+ .rodata.cst4   0x000000000006c000        0xc /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                                          0x4 (size before relaxing)
+                0x000000000006c000                _IO_stdin_used
+ *fill*         0x000000000006c00c        0x4 
+ .rodata        0x000000000006c010      0x111 roothealth_orchestrator.o
+ .rodata.str1.1
+                0x000000000006c121     0x4365 roothealth_orchestrator.o
+                                        0x37d (size before relaxing)
+ *fill*         0x0000000000070486        0x2 
+ .rodata.str1.8
+                0x0000000000070488     0xc324 roothealth_orchestrator.o
+                                        0x15c (size before relaxing)
+ *fill*         0x000000000007c7ac        0x4 
+ .rodata.cst8   0x000000000007c7b0       0x80 roothealth_orchestrator.o
+                                         0x10 (size before relaxing)
+ .rodata.cst4   0x000000000007c830        0x4 roothealth_orchestrator.o
+ .rodata.cst16  0x000000000007c830      0x190 roothealth_orchestrator.o
+                                         0x20 (size before relaxing)
+ .rodata.str1.1
+                0x000000000007c9c0      0x608 roothealth_format3.o
+ .rodata.str1.8
+                0x000000000007c9c0     0x19ce roothealth_format3.o
+ .rodata        0x000000000007c9c0      0x1a1 roothealth_format3.o
+ .rodata.str1.1
+                0x000000000007cb61        0xb roothealth_report.o
+ .rodata.str1.1
+                0x000000000007cb61       0xb4 roothealth_repair.o
+ *fill*         0x000000000007cb61        0xf 
+ .rodata        0x000000000007cb70       0x60 roothealth_repair.o
+ .rodata.str1.8
+                0x000000000007cbd0       0xef roothealth_repair.o
+ .rodata.cst16  0x000000000007cbd0       0x20 roothealth_repair.o
+ .rodata.str1.1
+                0x000000000007cbd0      0x176 roothealth_write.o
+ *fill*         0x000000000007cbd0       0x10 
+ .rodata        0x000000000007cbe0      0x200 roothealth_write.o
+ .rodata.cst16  0x000000000007cde0       0x10 roothealth_write.o
+ .rodata.cst8   0x000000000007cde0        0x8 roothealth_write.o
+ .rodata.str1.1
+                0x000000000007cde0     0x1340 roothealth_recover.o
+ .rodata.str1.8
+                0x000000000007cde0     0x1a0c roothealth_recover.o
+ .rodata        0x000000000007cde0      0x114 roothealth_recover.o
+ .rodata.str1.8
+                0x000000000007cef4      0xea5 roothealth_playlog.o
+ .rodata.str1.1
+                0x000000000007cef4      0x41d roothealth_playlog.o
+ *fill*         0x000000000007cef4        0xc 
+ .rodata        0x000000000007cf00      0x737 roothealth_playlog.o
+ .rodata.cst8   0x000000000007d637       0x20 roothealth_playlog.o
+ *fill*         0x000000000007d637        0x1 
+ .rodata        0x000000000007d638       0xe0 roothealth_replay_guard.o
+ .rodata.str1.1
+                0x000000000007d718      0x32e roothealth_replay_guard.o
+ .rodata        0x000000000007d718       0xf0 roothealth_replay_analysis.o
+ .rodata.cst8   0x000000000007d808        0x8 roothealth_replay_analysis.o
+ *fill*         0x000000000007d808       0x18 
+ .rodata        0x000000000007d820      0x140 roothealth_wal.o
+ .rodata.str1.1
+                0x000000000007d960        0xe roothealth_wal.o
+ .rodata.cst16  0x000000000007d960       0x20 roothealth_wal.o
+ .rodata.cst8   0x000000000007d960       0x18 roothealth_wal.o
+ .rodata.str1.1
+                0x000000000007d960        0x1 roothealth_bitmap.o
+ .rodata.cst8   0x000000000007d960       0x10 roothealth_bitmap.o
+ .rodata.str1.1
+                0x000000000007d960       0xef roothealth_coverage.o
+ .rodata        0x000000000007d960        0x8 roothealth_coverage.o
+ .rodata.str1.1
+                0x000000000007d968        0x1 roothealth_dirty.o
+ .rodata.cst16  0x000000000007d968       0x10 roothealth_dirty.o
+ .rodata.cst8   0x000000000007d968        0x8 roothealth_dirty.o
+ *fill*         0x000000000007d968       0x18 
+ .rodata        0x000000000007d980      0x100 roothealth_hash_stream.o
+ .rodata.cst16  0x000000000007da80       0x30 roothealth_hash_stream.o
+ .rodata.str1.1
+                0x000000000007da80      0xaef roothealth_policy.o
+ .rodata        0x000000000007da80        0x8 roothealth_policy.o
+ .rodata.str1.8
+                0x000000000007da88      0x249 roothealth_policy.o
+ .rodata.cst16  0x000000000007da88       0x10 roothealth_policy.o
+ .rodata.str1.1
+                0x000000000007da88        0xb roothealth_raw_mft.o
+ *fill*         0x000000000007da88       0x18 
+ .rodata        0x000000000007daa0      0x441 roothealth_raw_mft.o
+ .rodata.str1.1
+                0x000000000007dee1      0x1d2 utils.o
+ .rodata.str1.8
+                0x000000000007dee1      0xc59 utils.o
+ *fill*         0x000000000007dee1        0xf 
+ .rodata        0x000000000007def0      0x281 utils.o
+ .rodata.cst8   0x000000000007e171       0x10 utils.o
+ .rodata.str1.1
+                0x000000000007e171      0x670 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .rodata.str1.8
+                0x000000000007e171     0x115a ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ *fill*         0x000000000007e171        0xf 
+ .rodata        0x000000000007e180      0x569 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .rodata.cst16  0x000000000007e6e9       0xc0 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .rodata.str1.8
+                0x000000000007e6e9      0x142 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .rodata.str1.1
+                0x000000000007e6e9        0x9 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ *fill*         0x000000000007e6e9        0x7 
+ .rodata        0x000000000007e6f0       0x1c ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .rodata.str1.1
+                0x000000000007e70c       0x47 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .rodata.str1.8
+                0x000000000007e70c      0x3bb ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ *fill*         0x000000000007e70c        0x4 
+ .rodata        0x000000000007e710       0x39 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .rodata.str1.1
+                0x000000000007e749       0x94 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .rodata.str1.8
+                0x000000000007e749      0x264 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ *fill*         0x000000000007e749        0x7 
+ .rodata        0x000000000007e750       0xbb ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .rodata.cst16  0x000000000007e80b       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .rodata.str1.8
+                0x000000000007e80b       0x60 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .rodata.str1.1
+                0x000000000007e80b       0x3b ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ *fill*         0x000000000007e80b        0x5 
+ .rodata        0x000000000007e810       0x32 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .rodata.str1.1
+                0x000000000007e842       0xf4 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .rodata.str1.8
+                0x000000000007e842      0x6b2 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ *fill*         0x000000000007e842        0xe 
+ .rodata        0x000000000007e850      0x16a ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .rodata.cst8   0x000000000007e9ba       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .rodata.str1.8
+                0x000000000007e9ba       0xfd ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .rodata.str1.1
+                0x000000000007e9ba        0x5 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ *fill*         0x000000000007e9ba        0x6 
+ .rodata        0x000000000007e9c0       0x4f ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .rodata.str1.1
+                0x000000000007ea0f       0x4e ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .rodata.str1.8
+                0x000000000007ea0f      0x14a ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ *fill*         0x000000000007ea0f        0x1 
+ .rodata        0x000000000007ea10       0x7b ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .rodata.cst16  0x000000000007ea8b       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .rodata.str1.8
+                0x000000000007ea8b      0x549 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .rodata.str1.1
+                0x000000000007ea8b      0x235 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ *fill*         0x000000000007ea8b        0x5 
+ .rodata        0x000000000007ea90      0x21e ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .rodata.str1.1
+                0x000000000007ecae       0xca ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .rodata.str1.8
+                0x000000000007ecae      0x656 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ *fill*         0x000000000007ecae       0x12 
+ .rodata        0x000000000007ecc0      0x1e6 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .rodata.str1.8
+                0x000000000007eea6      0x108 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .rodata.str1.1
+                0x000000000007eea6       0x80 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ *fill*         0x000000000007eea6        0xa 
+ .rodata        0x000000000007eeb0       0x93 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .rodata.str1.8
+                0x000000000007ef43       0x23 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .rodata.str1.1
+                0x000000000007ef43        0xc ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ *fill*         0x000000000007ef43        0xd 
+ .rodata        0x000000000007ef50       0x3b ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .rodata.str1.1
+                0x000000000007ef8b       0x56 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .rodata.str1.8
+                0x000000000007ef8b      0x59a ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ *fill*         0x000000000007ef8b       0x15 
+ .rodata        0x000000000007efa0       0xc3 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .rodata.str1.1
+                0x000000000007f063       0xa9 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ *fill*         0x000000000007f063        0x1 
+ .rodata        0x000000000007f064       0x84 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .rodata.str1.1
+                0x000000000007f0e8      0x17c ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .rodata.str1.8
+                0x000000000007f0e8      0xbaa ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ *fill*         0x000000000007f0e8       0x18 
+ .rodata        0x000000000007f100      0x1e6 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .rodata.cst8   0x000000000007f2e6        0x8 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .rodata.str1.1
+                0x000000000007f2e6       0x5c ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ *fill*         0x000000000007f2e6        0x2 
+ .rodata        0x000000000007f2e8       0x2c ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .rodata.str1.8
+                0x000000000007f314       0xa9 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .rodata.str1.1
+                0x000000000007f314       0x1a ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ *fill*         0x000000000007f314        0xc 
+ .rodata        0x000000000007f320       0x3e ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .rodata.str1.1
+                0x000000000007f35e       0x2f ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .rodata.str1.8
+                0x000000000007f35e       0x6a ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ *fill*         0x000000000007f35e        0x2 
+ .rodata        0x000000000007f360       0x31 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .rodata.str1.1
+                0x000000000007f391       0x7d ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ *fill*         0x000000000007f391        0xf 
+ .rodata        0x000000000007f3a0       0xe0 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .rodata.str1.8
+                0x000000000007f480     0x1a80 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .rodata.str1.1
+                0x000000000007f480       0x13 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .rodata.str1.8
+                0x000000000007f480       0x8d ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .rodata        0x000000000007f480       0x34 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .rodata.str1.8
+                0x000000000007f4b4      0x2a2 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .rodata.str1.1
+                0x000000000007f4b4       0xb4 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ *fill*         0x000000000007f4b4        0xc 
+ .rodata        0x000000000007f4c0       0xe7 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .rodata.cst16  0x000000000007f5a7       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .rodata.str1.8
+                0x000000000007f5a7       0x95 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .rodata.str1.1
+                0x000000000007f5a7       0x39 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ *fill*         0x000000000007f5a7        0x9 
+ .rodata        0x000000000007f5b0       0x50 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .rodata.cst2   0x000000000007f600        0x2 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .rodata.cst8   0x000000000007f602       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .rodata.str1.8
+                0x000000000007f602       0x49 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .rodata.str1.1
+                0x000000000007f602        0x9 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ *fill*         0x000000000007f602       0x1e 
+ .rodata        0x000000000007f620      0x700 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .rodata.cst4   0x000000000007fd20        0x4 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .rodata.str1.8
+                0x000000000007fd20      0xe83 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .rodata.str1.1
+                0x000000000007fd20      0x3a3 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .rodata        0x000000000007fd20     0x1600 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .rodata.str1.1
+                0x0000000000081320      0x14c ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .rodata        0x0000000000081320       0xd9 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ *fill*         0x00000000000813f9        0x7 
+ .rodata        0x0000000000081400       0x1c ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .rodata.str1.8
+                0x000000000008141c       0x90 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .rodata.str1.1
+                0x000000000008141c       0x2b ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ *fill*         0x000000000008141c        0x4 
+ .rodata        0x0000000000081420       0x1e ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .rodata.str1.8
+                0x000000000008143e       0x84 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .rodata.str1.1
+                0x000000000008143e        0xa ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ *fill*         0x000000000008143e        0x2 
+ .rodata        0x0000000000081440       0xca ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .rodata.str1.1
+                0x000000000008150a       0x2c ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.rodata1
+ *(.rodata1)
+
+.eh_frame_hdr   0x000000000008150c     0x1614
+ *(.eh_frame_hdr)
+ .eh_frame_hdr  0x000000000008150c     0x1614 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x000000000008150c                __GNU_EH_FRAME_HDR
+ *(.eh_frame_entry .eh_frame_entry.*)
+
+.eh_frame       0x0000000000082b20     0xb370
+ *(.eh_frame)
+ .eh_frame      0x0000000000082b20       0x30 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                                         0x2c (size before relaxing)
+ *fill*         0x0000000000082b50        0x0 
+ .eh_frame      0x0000000000082b50       0x28 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                                         0x40 (size before relaxing)
+ .eh_frame      0x0000000000082b78       0x18 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                                         0x30 (size before relaxing)
+ .eh_frame      0x0000000000082b90       0x18 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                                         0x30 (size before relaxing)
+ .eh_frame      0x0000000000082ba8       0x70 roothealth_repair_main.o
+                                         0x88 (size before relaxing)
+ .eh_frame      0x0000000000082c18      0x4a8 roothealth_orchestrator.o
+                                        0x4c0 (size before relaxing)
+ .eh_frame      0x00000000000830c0      0x2d0 roothealth_format3.o
+                                        0x2e8 (size before relaxing)
+ .eh_frame      0x0000000000083390      0x1e8 roothealth_report.o
+                                        0x200 (size before relaxing)
+ .eh_frame      0x0000000000083578      0x238 roothealth_repair.o
+                                        0x250 (size before relaxing)
+ .eh_frame      0x00000000000837b0      0x770 roothealth_write.o
+                                        0x788 (size before relaxing)
+ .eh_frame      0x0000000000083f20      0xa00 roothealth_recover.o
+                                        0xa18 (size before relaxing)
+ .eh_frame      0x0000000000084920      0xe48 roothealth_playlog.o
+                                        0xe60 (size before relaxing)
+ .eh_frame      0x0000000000085768       0xb8 roothealth_replay_guard.o
+                                         0xd0 (size before relaxing)
+ .eh_frame      0x0000000000085820       0xc8 roothealth_replay_analysis.o
+                                         0xe0 (size before relaxing)
+ .eh_frame      0x00000000000858e8      0xa70 roothealth_wal.o
+                                        0xa88 (size before relaxing)
+ .eh_frame      0x0000000000086358      0x100 roothealth_bitmap.o
+                                        0x118 (size before relaxing)
+ .eh_frame      0x0000000000086458       0xa0 roothealth_coverage.o
+                                         0xb8 (size before relaxing)
+ .eh_frame      0x00000000000864f8      0x110 roothealth_dirty.o
+                                        0x128 (size before relaxing)
+ .eh_frame      0x0000000000086608       0xf0 roothealth_hash_stream.o
+                                        0x108 (size before relaxing)
+ .eh_frame      0x00000000000866f8      0x218 roothealth_overlay.o
+                                        0x230 (size before relaxing)
+ .eh_frame      0x0000000000086910      0x2a0 roothealth_policy.o
+                                        0x2b8 (size before relaxing)
+ .eh_frame      0x0000000000086bb0      0x620 roothealth_raw_mft.o
+                                        0x638 (size before relaxing)
+ .eh_frame      0x00000000000871d0      0x448 utils.o
+                                        0x460 (size before relaxing)
+ .eh_frame      0x0000000000087618     0x16a0 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+                                       0x16b8 (size before relaxing)
+ .eh_frame      0x0000000000088cb8       0xd0 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+                                         0xe8 (size before relaxing)
+ .eh_frame      0x0000000000088d88      0x1a0 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+                                        0x1b8 (size before relaxing)
+ .eh_frame      0x0000000000088f28       0xf0 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+                                        0x108 (size before relaxing)
+ .eh_frame      0x0000000000089018      0x388 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+                                        0x3a0 (size before relaxing)
+ .eh_frame      0x00000000000893a0      0x398 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+                                        0x3b0 (size before relaxing)
+ .eh_frame      0x0000000000089738      0x8e0 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+                                        0x8f8 (size before relaxing)
+ .eh_frame      0x000000000008a018      0x1a0 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+                                        0x1b8 (size before relaxing)
+ .eh_frame      0x000000000008a1b8      0x3f8 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+                                        0x410 (size before relaxing)
+ .eh_frame      0x000000000008a5b0      0x978 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+                                        0x990 (size before relaxing)
+ .eh_frame      0x000000000008af28      0x678 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+                                        0x690 (size before relaxing)
+ .eh_frame      0x000000000008b5a0      0x228 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+                                        0x240 (size before relaxing)
+ .eh_frame      0x000000000008b7c8       0xc8 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+                                         0xe0 (size before relaxing)
+ .eh_frame      0x000000000008b890       0xa8 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+                                         0xc0 (size before relaxing)
+ .eh_frame      0x000000000008b938      0x1d8 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+                                        0x1f0 (size before relaxing)
+ .eh_frame      0x000000000008bb10      0x6b0 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+                                        0x6c8 (size before relaxing)
+ .eh_frame      0x000000000008c1c0       0xc0 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+                                         0xd8 (size before relaxing)
+ .eh_frame      0x000000000008c280       0xf8 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+                                        0x110 (size before relaxing)
+ .eh_frame      0x000000000008c378      0x1a0 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+                                        0x1b8 (size before relaxing)
+ .eh_frame      0x000000000008c518      0x170 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+                                        0x188 (size before relaxing)
+ .eh_frame      0x000000000008c688      0x298 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+                                        0x2b0 (size before relaxing)
+ .eh_frame      0x000000000008c920      0x4a0 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+                                        0x4b8 (size before relaxing)
+ .eh_frame      0x000000000008cdc0      0x188 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+                                        0x1a0 (size before relaxing)
+ .eh_frame      0x000000000008cf48      0x340 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+                                        0x358 (size before relaxing)
+ .eh_frame      0x000000000008d288      0x640 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+                                        0x658 (size before relaxing)
+ .eh_frame      0x000000000008d8c8      0x1e8 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+                                        0x200 (size before relaxing)
+ .eh_frame      0x000000000008dab0       0x68 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+                                         0x80 (size before relaxing)
+ .eh_frame      0x000000000008db18      0x250 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+                                        0x268 (size before relaxing)
+ .eh_frame      0x000000000008dd68       0xa8 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+                                         0xc0 (size before relaxing)
+ .eh_frame      0x000000000008de10       0x7c ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+                                         0x98 (size before relaxing)
+ .eh_frame      0x000000000008de8c        0x4 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ *(.eh_frame.*)
+
+.sframe         0x000000000008de90        0x0
+ *(.sframe)
+ .sframe        0x000000000008de90        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .sframe        0x000000000008de90        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.sframe.*)
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+
+.gnu_extab
+ *(.gnu_extab*)
+
+.exception_ranges
+ *(.exception_ranges*)
+                0x000000000008ef90                . = DATA_SEGMENT_ALIGN (CONSTANT (MAXPAGESIZE), CONSTANT (COMMONPAGESIZE))
+
+.eh_frame
+ *(.eh_frame)
+ *(.eh_frame.*)
+
+.sframe
+ *(.sframe)
+ *(.sframe.*)
+
+.gnu_extab
+ *(.gnu_extab)
+
+.gcc_except_table
+ *(.gcc_except_table .gcc_except_table.*)
+
+.exception_ranges
+ *(.exception_ranges*)
+
+.tdata          0x000000000008ef90        0x0
+                [!provide]                        PROVIDE (__tdata_start = .)
+ *(.tdata .tdata.* .gnu.linkonce.td.*)
+
+.tbss
+ *(.tbss .tbss.* .gnu.linkonce.tb.*)
+ *(.tcommon)
+
+.preinit_array  0x000000000008ef90        0x0
+                [!provide]                        PROVIDE (__preinit_array_start = .)
+ *(.preinit_array)
+                [!provide]                        PROVIDE (__preinit_array_end = .)
+
+.init_array     0x000000000008ef90        0x8
+                [!provide]                        PROVIDE (__init_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
+ *(.init_array EXCLUDE_FILE(*crtend?.o *crtend.o *crtbegin?.o *crtbegin.o) .ctors)
+ .init_array    0x000000000008ef90        0x8 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+                [!provide]                        PROVIDE (__init_array_end = .)
+
+.fini_array     0x000000000008ef98        0x8
+                [!provide]                        PROVIDE (__fini_array_start = .)
+ *(SORT_BY_INIT_PRIORITY(.fini_array.*) SORT_BY_INIT_PRIORITY(.dtors.*))
+ *(.fini_array EXCLUDE_FILE(*crtend?.o *crtend.o *crtbegin?.o *crtbegin.o) .dtors)
+ .fini_array    0x000000000008ef98        0x8 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+                [!provide]                        PROVIDE (__fini_array_end = .)
+
+.ctors
+ *crtbegin.o(.ctors)
+ *crtbegin?.o(.ctors)
+ *(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+ *(SORT_BY_NAME(.ctors.*))
+ *(.ctors)
+
+.dtors
+ *crtbegin.o(.dtors)
+ *crtbegin?.o(.dtors)
+ *(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+ *(SORT_BY_NAME(.dtors.*))
+ *(.dtors)
+
+.jcr
+ *(.jcr)
+
+.data.rel.ro    0x000000000008efa0     0x2a60
+ *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*)
+ .data.rel.ro.local
+                0x000000000008efa0      0x240 roothealth_orchestrator.o
+ .data.rel.ro.local
+                0x000000000008f1e0      0x130 roothealth_repair.o
+ *fill*         0x000000000008f310       0x10 
+ .data.rel.ro.local
+                0x000000000008f320       0xc8 roothealth_write.o
+ *fill*         0x000000000008f3e8       0x18 
+ .data.rel.ro.local
+                0x000000000008f400      0x4c0 roothealth_replay_guard.o
+ .data.rel.ro.local
+                0x000000000008f8c0       0x38 roothealth_wal.o
+ *fill*         0x000000000008f8f8        0x8 
+ .data.rel.ro.local
+                0x000000000008f900       0x88 roothealth_coverage.o
+ *fill*         0x000000000008f988       0x18 
+ .data.rel.ro.local
+                0x000000000008f9a0     0x2060 roothealth_policy.o
+ *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)
+ .data.rel.ro   0x0000000000091a00        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+
+.dynamic        0x0000000000091a00      0x1f0
+ *(.dynamic)
+ .dynamic       0x0000000000091a00      0x1f0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000091a00                _DYNAMIC
+
+.got            0x0000000000091bf0      0x3f8
+ *(.got.plt)
+ .got.plt       0x0000000000091bf0      0x398 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000091bf0                _GLOBAL_OFFSET_TABLE_
+ *(.igot.plt)
+ *(.got)
+ .got           0x0000000000091f88       0x60 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ *(.igot)
+                0x0000000000092000                . = DATA_SEGMENT_RELRO_END (., 0x0)
+
+.data           0x0000000000092000      0xb20
+ *(.data .data.* .gnu.linkonce.d.*)
+ .data          0x0000000000092000        0x4 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000092000                data_start
+                0x0000000000092000                __data_start
+ .data          0x0000000000092004        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+ .data          0x0000000000092004        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ *fill*         0x0000000000092004        0x4 
+ .data.rel.local
+                0x0000000000092008        0x8 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+                0x0000000000092008                __dso_handle
+ .data          0x0000000000092010        0x0 roothealth_repair_main.o
+ .data          0x0000000000092010        0x0 roothealth_orchestrator.o
+ .data          0x0000000000092010        0x0 roothealth_format3.o
+ .data          0x0000000000092010        0x0 roothealth_report.o
+ .data          0x0000000000092010        0x0 roothealth_repair.o
+ .data          0x0000000000092010        0x0 roothealth_write.o
+ .data          0x0000000000092010        0x0 roothealth_recover.o
+ .data          0x0000000000092010        0x0 roothealth_playlog.o
+ .data          0x0000000000092010        0x0 roothealth_replay_guard.o
+ .data          0x0000000000092010        0x0 roothealth_replay_analysis.o
+ .data          0x0000000000092010        0x0 roothealth_wal.o
+ .data          0x0000000000092010        0x0 roothealth_bitmap.o
+ .data          0x0000000000092010        0x0 roothealth_coverage.o
+ .data          0x0000000000092010        0x0 roothealth_dirty.o
+ .data          0x0000000000092010        0x0 roothealth_hash_stream.o
+ .data          0x0000000000092010        0x0 roothealth_overlay.o
+ *fill*         0x0000000000092010       0x10 
+ .data.rel.local
+                0x0000000000092020       0x50 roothealth_overlay.o
+ .data          0x0000000000092070        0x0 roothealth_policy.o
+ .data          0x0000000000092070        0x0 roothealth_raw_mft.o
+ .data          0x0000000000092070       0x10 utils.o
+ .data.rel.local
+                0x0000000000092080       0x10 utils.o
+                0x0000000000092080                ntfs_gpl
+                0x0000000000092088                ntfs_bugs
+ .data          0x0000000000092090       0x22 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+                0x0000000000092090                TXF_DATA
+                0x00000000000920a8                STREAM_SDS
+ .data          0x00000000000920b2        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .data          0x00000000000920b2        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .data          0x00000000000920b2        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .data          0x00000000000920b2        0xd ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .data          0x00000000000920bf        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ *fill*         0x00000000000920bf        0x1 
+ .data          0x00000000000920c0       0x42 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+                0x00000000000920c0                NTFS_INDEX_R
+                0x00000000000920c6                NTFS_INDEX_Q
+                0x00000000000920cc                NTFS_INDEX_O
+                0x00000000000920d8                NTFS_INDEX_SDH
+                0x00000000000920e8                NTFS_INDEX_SII
+                0x00000000000920f8                NTFS_INDEX_I30
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .data          0x0000000000092102        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ *fill*         0x0000000000092102        0xe 
+ .data.rel      0x0000000000092110       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .data          0x0000000000092120        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .data          0x0000000000092120        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .data          0x0000000000092120        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .data          0x0000000000092120        0x4 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .data          0x0000000000092124        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ *fill*         0x0000000000092124       0x1c 
+ .data.rel.local
+                0x0000000000092140      0x948 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .data          0x0000000000092a88        0x4 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .data          0x0000000000092a8c        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ *fill*         0x0000000000092a8c        0x4 
+ .data          0x0000000000092a90       0x1a ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .data          0x0000000000092aaa        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .data          0x0000000000092aaa        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ *fill*         0x0000000000092aaa        0x6 
+ .data.rel.local
+                0x0000000000092ab0        0x8 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+                0x0000000000092ab0                ntfs_home
+ .data          0x0000000000092ab8        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ *fill*         0x0000000000092ab8        0x8 
+ .data.rel.local
+                0x0000000000092ac0       0x50 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+                0x0000000000092ac0                ntfs_device_unix_io_ops
+ .data          0x0000000000092b10        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .data.rel.local
+                0x0000000000092b10       0x10 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+                0x0000000000092b10                adminsid
+                0x0000000000092b18                worldsid
+ .data          0x0000000000092b20        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .data          0x0000000000092b20        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .data          0x0000000000092b20        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+ .data          0x0000000000092b20        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ .data          0x0000000000092b20        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+
+.tm_clone_table
+                0x0000000000092b20        0x0
+ .tm_clone_table
+                0x0000000000092b20        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ .tm_clone_table
+                0x0000000000092b20        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+
+.data1
+ *(.data1)
+                0x0000000000092b20                _edata = .
+                [!provide]                        PROVIDE (edata = .)
+                0x0000000000092b20                . = ALIGN (ALIGNOF (NEXT_SECTION))
+                0x0000000000092b20                __bss_start = .
+
+.bss            0x0000000000092b20     0x6978
+ *(.dynbss)
+ .dynbss        0x0000000000092b20       0x48 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+                0x0000000000092b20                stdout@@GLIBC_2.2.5
+                0x0000000000092b28                optind@@GLIBC_2.2.5
+                0x0000000000092b40                optarg@@GLIBC_2.2.5
+                0x0000000000092b48                opterr@@GLIBC_2.2.5
+                0x0000000000092b60                stderr@@GLIBC_2.2.5
+ *(.bss .bss.* .gnu.linkonce.b.*)
+ .bss           0x0000000000092b68        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/Scrt1.o
+ .bss           0x0000000000092b68        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crti.o
+ .bss           0x0000000000092b68        0x1 /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+ .bss           0x0000000000092b69        0x0 roothealth_repair_main.o
+ .bss           0x0000000000092b69        0x0 roothealth_orchestrator.o
+ .bss           0x0000000000092b69        0x0 roothealth_format3.o
+ .bss           0x0000000000092b69        0x0 roothealth_report.o
+ .bss           0x0000000000092b69        0x0 roothealth_repair.o
+ .bss           0x0000000000092b69        0x0 roothealth_write.o
+ *fill*         0x0000000000092b69       0x17 
+ .bss           0x0000000000092b80      0x6b8 roothealth_recover.o
+                0x0000000000092b80                rh_replay_slot_authority_provider
+                0x0000000000092b88                rh_replay_writer
+                0x0000000000092ba0                redirect
+                0x0000000000092c40                buffer_table
+                0x0000000000092e60                undocount
+                0x0000000000092e64                redocount
+                0x0000000000092e68                playedactions
+                0x0000000000092e6c                playcount
+                0x0000000000092e70                attrcount
+                0x0000000000092e74                actionnum
+                0x0000000000092e78                attrtable
+                0x0000000000092e80                optx
+                0x0000000000092eac                optV
+                0x0000000000092eb0                optv
+                0x0000000000092eb4                optu
+                0x0000000000092eb8                optt
+                0x0000000000092ebc                opts
+                0x0000000000092ec0                optr
+                0x0000000000092ec4                optp
+                0x0000000000092ec8                optn
+                0x0000000000092ecc                optk
+                0x0000000000092ed0                optf
+                0x0000000000092ed4                opti
+                0x0000000000092ed8                opth
+                0x0000000000092edc                optd
+                0x0000000000092ee0                optc
+                0x0000000000092ee4                optb
+                0x0000000000092ee8                lastlcn
+                0x0000000000092ef0                firstlcn
+                0x0000000000092ef8                lastblk
+                0x0000000000092f00                firstblk
+                0x0000000000092f08                offset_mask
+                0x0000000000092f10                restart_lsn
+                0x0000000000092f18                latest_lsn
+                0x0000000000092f20                synced_lsn
+                0x0000000000092f28                committed_lsn
+                0x0000000000092f30                redos_met
+                0x0000000000092f38                logfilesz
+                0x0000000000092f40                logfilelcn
+                0x0000000000092f48                log_na
+                0x0000000000092f50                log_ni
+                0x0000000000092f58                mftcnt
+                0x0000000000092f5c                mftrecbits
+                0x0000000000092f60                mftrecsz
+                0x0000000000092f68                mftlcn
+                0x0000000000092f70                bytespersect
+                0x0000000000092f74                log_major
+                0x0000000000092f78                blockbits
+                0x0000000000092f7c                blocksz
+                0x0000000000092f80                clusterbits
+                0x0000000000092f84                clustersz
+                0x0000000000092fa0                client
+                0x0000000000093040                restart
+                0x0000000000093080                log_header
+ .bss           0x0000000000093238        0xc roothealth_playlog.o
+                0x0000000000093238                cluster_door
+ .bss           0x0000000000093244        0x0 roothealth_replay_guard.o
+ .bss           0x0000000000093244        0x0 roothealth_replay_analysis.o
+ .bss           0x0000000000093244        0x0 roothealth_wal.o
+ .bss           0x0000000000093244        0x0 roothealth_bitmap.o
+ .bss           0x0000000000093244        0x0 roothealth_coverage.o
+ .bss           0x0000000000093244        0x0 roothealth_dirty.o
+ .bss           0x0000000000093244        0x0 roothealth_hash_stream.o
+ .bss           0x0000000000093244        0x0 roothealth_overlay.o
+ .bss           0x0000000000093244        0x0 roothealth_policy.o
+ .bss           0x0000000000093244        0x0 roothealth_raw_mft.o
+ *fill*         0x0000000000093244       0x1c 
+ .bss           0x0000000000093260     0x2200 utils.o
+ .bss           0x0000000000095460        0x2 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+                0x0000000000095460                AT_UNNAMED
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .bss           0x0000000000095462        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ *fill*         0x0000000000095462       0x1e 
+ .bss           0x0000000000095480     0x4008 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+                0x0000000000095480                zero_bm
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .bss           0x0000000000099488        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .bss           0x0000000000099488        0x4 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+                0x0000000000099488                fsck_step_header_open
+ .bss           0x000000000009948c        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .bss           0x000000000009948c        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .bss           0x000000000009948c        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .bss           0x000000000009948c        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .bss           0x000000000009948c        0x8 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+                0x000000000009948c                fsck_fixes
+                0x0000000000099490                fsck_errors
+ .bss           0x0000000000099494        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .bss           0x0000000000099494        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .bss           0x0000000000099494        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .bss           0x0000000000099494        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .bss           0x0000000000099494        0x0 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+ .bss           0x0000000000099494        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+ .bss           0x0000000000099494        0x0 /usr/lib/gcc/x86_64-linux-gnu/13/../../../x86_64-linux-gnu/crtn.o
+ *(COMMON)
+                0x0000000000099498                . = ALIGN ((. != 0x0)?0x8:0x1)
+ *fill*         0x0000000000099494        0x4 
+
+.lbss
+ *(.dynlbss)
+ *(.lbss .lbss.* .gnu.linkonce.lb.*)
+ *(LARGE_COMMON)
+                0x0000000000099498                . = ALIGN (0x8)
+                0x0000000000099498                . = SEGMENT_START ("ldata-segment", .)
+
+.lrodata
+ *(.lrodata .lrodata.* .gnu.linkonce.lr.*)
+
+.ldata          0x000000000009b498        0x0
+ *(.ldata .ldata.* .gnu.linkonce.l.*)
+                0x000000000009b498                . = ALIGN ((. != 0x0)?0x8:0x1)
+                0x000000000009b498                . = ALIGN (0x8)
+                0x0000000000099498                _end = .
+                [!provide]                        PROVIDE (end = .)
+                0x000000000009b498                . = DATA_SEGMENT_END (.)
+
+.stab
+ *(.stab)
+
+.stabstr
+ *(.stabstr)
+
+.stab.excl
+ *(.stab.excl)
+
+.stab.exclstr
+ *(.stab.exclstr)
+
+.stab.index
+ *(.stab.index)
+
+.stab.indexstr
+ *(.stab.indexstr)
+
+.comment        0x0000000000000000       0x2d
+ *(.comment)
+ .comment       0x0000000000000000       0x2d /usr/lib/gcc/x86_64-linux-gnu/13/crtbeginS.o
+                                         0x2e (size before relaxing)
+ .comment       0x000000000000002d       0x2e roothealth_repair_main.o
+ .comment       0x000000000000002d       0x2e roothealth_orchestrator.o
+ .comment       0x000000000000002d       0x2e roothealth_format3.o
+ .comment       0x000000000000002d       0x2e roothealth_report.o
+ .comment       0x000000000000002d       0x2e roothealth_repair.o
+ .comment       0x000000000000002d       0x2e roothealth_write.o
+ .comment       0x000000000000002d       0x2e roothealth_recover.o
+ .comment       0x000000000000002d       0x2e roothealth_playlog.o
+ .comment       0x000000000000002d       0x2e roothealth_replay_guard.o
+ .comment       0x000000000000002d       0x2e roothealth_replay_analysis.o
+ .comment       0x000000000000002d       0x2e roothealth_wal.o
+ .comment       0x000000000000002d       0x2e roothealth_bitmap.o
+ .comment       0x000000000000002d       0x2e roothealth_coverage.o
+ .comment       0x000000000000002d       0x2e roothealth_dirty.o
+ .comment       0x000000000000002d       0x2e roothealth_hash_stream.o
+ .comment       0x000000000000002d       0x2e roothealth_overlay.o
+ .comment       0x000000000000002d       0x2e roothealth_policy.o
+ .comment       0x000000000000002d       0x2e roothealth_raw_mft.o
+ .comment       0x000000000000002d       0x2e utils.o
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .comment       0x000000000000002d       0x2e ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+ .comment       0x000000000000002d       0x2e /usr/lib/gcc/x86_64-linux-gnu/13/crtendS.o
+
+.gnu.build.attributes
+ *(.gnu.build.attributes .gnu.build.attributes.*)
+
+.debug
+ *(.debug)
+
+.line
+ *(.line)
+
+.debug_srcinfo
+ *(.debug_srcinfo)
+
+.debug_sfnames
+ *(.debug_sfnames)
+
+.debug_aranges  0x0000000000000000      0x930
+ *(.debug_aranges)
+ .debug_aranges
+                0x0000000000000000       0x30 roothealth_repair_main.o
+ .debug_aranges
+                0x0000000000000030       0x30 roothealth_orchestrator.o
+ .debug_aranges
+                0x0000000000000060       0x30 roothealth_format3.o
+ .debug_aranges
+                0x0000000000000090       0x30 roothealth_report.o
+ .debug_aranges
+                0x00000000000000c0       0x30 roothealth_repair.o
+ .debug_aranges
+                0x00000000000000f0       0x30 roothealth_write.o
+ .debug_aranges
+                0x0000000000000120       0x30 roothealth_recover.o
+ .debug_aranges
+                0x0000000000000150       0x30 roothealth_playlog.o
+ .debug_aranges
+                0x0000000000000180       0x30 roothealth_replay_guard.o
+ .debug_aranges
+                0x00000000000001b0       0x30 roothealth_replay_analysis.o
+ .debug_aranges
+                0x00000000000001e0       0x30 roothealth_wal.o
+ .debug_aranges
+                0x0000000000000210       0x30 roothealth_bitmap.o
+ .debug_aranges
+                0x0000000000000240       0x30 roothealth_coverage.o
+ .debug_aranges
+                0x0000000000000270       0x30 roothealth_dirty.o
+ .debug_aranges
+                0x00000000000002a0       0x30 roothealth_hash_stream.o
+ .debug_aranges
+                0x00000000000002d0       0x30 roothealth_overlay.o
+ .debug_aranges
+                0x0000000000000300       0x30 roothealth_policy.o
+ .debug_aranges
+                0x0000000000000330       0x30 roothealth_raw_mft.o
+ .debug_aranges
+                0x0000000000000360       0x30 utils.o
+ .debug_aranges
+                0x0000000000000390       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_aranges
+                0x00000000000003c0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_aranges
+                0x00000000000003f0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_aranges
+                0x0000000000000420       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_aranges
+                0x0000000000000450       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_aranges
+                0x0000000000000480       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_aranges
+                0x00000000000004b0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_aranges
+                0x00000000000004e0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_aranges
+                0x0000000000000510       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_aranges
+                0x0000000000000540       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_aranges
+                0x0000000000000570       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_aranges
+                0x00000000000005a0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_aranges
+                0x00000000000005d0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_aranges
+                0x0000000000000600       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_aranges
+                0x0000000000000630       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_aranges
+                0x0000000000000660       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_aranges
+                0x0000000000000690       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_aranges
+                0x00000000000006c0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_aranges
+                0x00000000000006f0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_aranges
+                0x0000000000000720       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_aranges
+                0x0000000000000750       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_aranges
+                0x0000000000000780       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_aranges
+                0x00000000000007b0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_aranges
+                0x00000000000007e0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_aranges
+                0x0000000000000810       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_aranges
+                0x0000000000000840       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_aranges
+                0x0000000000000870       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_aranges
+                0x00000000000008a0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_aranges
+                0x00000000000008d0       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_aranges
+                0x0000000000000900       0x30 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_pubnames
+ *(.debug_pubnames)
+
+.debug_info     0x0000000000000000    0xdeade
+ *(.debug_info .gnu.linkonce.wi.*)
+ .debug_info    0x0000000000000000     0x1ae6 roothealth_repair_main.o
+ .debug_info    0x0000000000001ae6     0x599a roothealth_orchestrator.o
+ .debug_info    0x0000000000007480     0x4852 roothealth_format3.o
+ .debug_info    0x000000000000bcd2     0x14bd roothealth_report.o
+ .debug_info    0x000000000000d18f     0x5248 roothealth_repair.o
+ .debug_info    0x00000000000123d7     0x518c roothealth_write.o
+ .debug_info    0x0000000000017563    0x129c6 roothealth_recover.o
+ .debug_info    0x0000000000029f29    0x17d43 roothealth_playlog.o
+ .debug_info    0x0000000000041c6c     0x1212 roothealth_replay_guard.o
+ .debug_info    0x0000000000042e7e     0x289d roothealth_replay_analysis.o
+ .debug_info    0x000000000004571b     0xd0cc roothealth_wal.o
+ .debug_info    0x00000000000527e7     0x4910 roothealth_bitmap.o
+ .debug_info    0x00000000000570f7     0x1919 roothealth_coverage.o
+ .debug_info    0x0000000000058a10     0x2c16 roothealth_dirty.o
+ .debug_info    0x000000000005b626      0x849 roothealth_hash_stream.o
+ .debug_info    0x000000000005be6f     0x3325 roothealth_overlay.o
+ .debug_info    0x000000000005f194     0x286d roothealth_policy.o
+ .debug_info    0x0000000000061a01     0x9dca roothealth_raw_mft.o
+ .debug_info    0x000000000006b7cb     0x440d utils.o
+ .debug_info    0x000000000006fbd8     0xdd4e ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_info    0x000000000007d926     0x2347 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_info    0x000000000007fc6d     0x23c3 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_info    0x0000000000082030     0x2109 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_info    0x0000000000084139     0x4d51 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_info    0x0000000000088e8a     0x2ce0 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_info    0x000000000008bb6a     0x7c48 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_info    0x00000000000937b2     0x2deb ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_info    0x000000000009659d     0x3cbd ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_info    0x000000000009a25a     0x8cc7 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_info    0x00000000000a2f21     0x559e ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_info    0x00000000000a84bf     0x321c ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_info    0x00000000000ab6db     0x223e ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_info    0x00000000000ad919     0x2fa8 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_info    0x00000000000b08c1     0x1531 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_info    0x00000000000b1df2     0x6a2c ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_info    0x00000000000b881e      0x3f3 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_info    0x00000000000b8c11      0x6d6 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_info    0x00000000000b92e7     0x343e ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_info    0x00000000000bc725     0x312e ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_info    0x00000000000bf853     0x3746 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_info    0x00000000000c2f99     0x560b ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_info    0x00000000000c85a4     0x2f65 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_info    0x00000000000cb509     0x35f3 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_info    0x00000000000ceafc     0x8aa8 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_info    0x00000000000d75a4     0x176a ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_info    0x00000000000d8d0e      0x482 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_info    0x00000000000d9190     0x2c61 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_info    0x00000000000dbdf1     0x23d2 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_info    0x00000000000de1c3      0x91b ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_abbrev   0x0000000000000000     0xfba0
+ *(.debug_abbrev)
+ .debug_abbrev  0x0000000000000000      0x2dd roothealth_repair_main.o
+ .debug_abbrev  0x00000000000002dd      0x653 roothealth_orchestrator.o
+ .debug_abbrev  0x0000000000000930      0x4ab roothealth_format3.o
+ .debug_abbrev  0x0000000000000ddb      0x444 roothealth_report.o
+ .debug_abbrev  0x000000000000121f      0x6ae roothealth_repair.o
+ .debug_abbrev  0x00000000000018cd      0x72a roothealth_write.o
+ .debug_abbrev  0x0000000000001ff7      0x8a2 roothealth_recover.o
+ .debug_abbrev  0x0000000000002899      0x7d1 roothealth_playlog.o
+ .debug_abbrev  0x000000000000306a      0x2da roothealth_replay_guard.o
+ .debug_abbrev  0x0000000000003344      0x44a roothealth_replay_analysis.o
+ .debug_abbrev  0x000000000000378e      0x876 roothealth_wal.o
+ .debug_abbrev  0x0000000000004004      0x58b roothealth_bitmap.o
+ .debug_abbrev  0x000000000000458f      0x3a7 roothealth_coverage.o
+ .debug_abbrev  0x0000000000004936      0x47a roothealth_dirty.o
+ .debug_abbrev  0x0000000000004db0      0x24f roothealth_hash_stream.o
+ .debug_abbrev  0x0000000000004fff      0x5e7 roothealth_overlay.o
+ .debug_abbrev  0x00000000000055e6      0x507 roothealth_policy.o
+ .debug_abbrev  0x0000000000005aed      0x6f7 roothealth_raw_mft.o
+ .debug_abbrev  0x00000000000061e4      0x586 utils.o
+ .debug_abbrev  0x000000000000676a      0x7fb ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_abbrev  0x0000000000006f65      0x3d5 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_abbrev  0x000000000000733a      0x442 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_abbrev  0x000000000000777c      0x33d ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_abbrev  0x0000000000007ab9      0x640 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_abbrev  0x00000000000080f9      0x4e1 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_abbrev  0x00000000000085da      0x689 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_abbrev  0x0000000000008c63      0x526 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_abbrev  0x0000000000009189      0x686 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_abbrev  0x000000000000980f      0x716 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_abbrev  0x0000000000009f25      0x65e ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_abbrev  0x000000000000a583      0x537 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_abbrev  0x000000000000aaba      0x385 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_abbrev  0x000000000000ae3f      0x4c0 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_abbrev  0x000000000000b2ff      0x41b ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_abbrev  0x000000000000b71a      0x656 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_abbrev  0x000000000000bd70      0x18d ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_abbrev  0x000000000000befd      0x214 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_abbrev  0x000000000000c111      0x56b ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_abbrev  0x000000000000c67c      0x551 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_abbrev  0x000000000000cbcd      0x598 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_abbrev  0x000000000000d165      0x675 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_abbrev  0x000000000000d7da      0x55b ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_abbrev  0x000000000000dd35      0x62e ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_abbrev  0x000000000000e363      0x6f5 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_abbrev  0x000000000000ea58      0x40e ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_abbrev  0x000000000000ee66      0x200 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_abbrev  0x000000000000f066      0x525 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_abbrev  0x000000000000f58b      0x3a0 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_abbrev  0x000000000000f92b      0x275 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_line     0x0000000000000000    0x5779e
+ *(.debug_line .debug_line.* .debug_line_end)
+ .debug_line    0x0000000000000000      0x35d roothealth_repair_main.o
+ .debug_line    0x000000000000035d     0x21f6 roothealth_orchestrator.o
+ .debug_line    0x0000000000002553     0x17bc roothealth_format3.o
+ .debug_line    0x0000000000003d0f      0xab0 roothealth_report.o
+ .debug_line    0x00000000000047bf     0x192b roothealth_repair.o
+ .debug_line    0x00000000000060ea     0x3379 roothealth_write.o
+ .debug_line    0x0000000000009463     0x9573 roothealth_recover.o
+ .debug_line    0x00000000000129d6     0xad72 roothealth_playlog.o
+ .debug_line    0x000000000001d748     0x1046 roothealth_replay_guard.o
+ .debug_line    0x000000000001e78e     0x181c roothealth_replay_analysis.o
+ .debug_line    0x000000000001ffaa     0x6ab5 roothealth_wal.o
+ .debug_line    0x0000000000026a5f     0x1385 roothealth_bitmap.o
+ .debug_line    0x0000000000027de4      0xcfa roothealth_coverage.o
+ .debug_line    0x0000000000028ade      0x744 roothealth_dirty.o
+ .debug_line    0x0000000000029222      0x689 roothealth_hash_stream.o
+ .debug_line    0x00000000000298ab      0xac6 roothealth_overlay.o
+ .debug_line    0x000000000002a371     0x1078 roothealth_policy.o
+ .debug_line    0x000000000002b3e9     0x53dd roothealth_raw_mft.o
+ .debug_line    0x00000000000307c6     0x10df utils.o
+ .debug_line    0x00000000000318a5     0x8277 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_line    0x0000000000039b1c      0x67b ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_line    0x000000000003a197      0x60b ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_line    0x000000000003a7a2      0x465 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_line    0x000000000003ac07     0x27e6 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_line    0x000000000003d3ed      0xa33 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_line    0x000000000003de20     0x3303 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_line    0x0000000000041123      0x717 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_line    0x000000000004183a     0x136a ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_line    0x0000000000042ba4     0x36e7 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_line    0x000000000004628b     0x1d21 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_line    0x0000000000047fac      0xe3a ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_line    0x0000000000048de6      0x31c ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_line    0x0000000000049102      0x9b0 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_line    0x0000000000049ab2      0x6bb ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_line    0x000000000004a16d     0x2ad6 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_line    0x000000000004cc43      0x11b ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_line    0x000000000004cd5e      0x31f ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_line    0x000000000004d07d      0x9eb ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_line    0x000000000004da68      0x7cc ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_line    0x000000000004e234      0x9ea ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_line    0x000000000004ec1e     0x28b4 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_line    0x00000000000514d2      0x7bd ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_line    0x0000000000051c8f     0x1472 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_line    0x0000000000053101     0x2d81 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_line    0x0000000000055e82      0x60e ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_line    0x0000000000056490      0x10f ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_line    0x000000000005659f      0xca7 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_line    0x0000000000057246      0x2e3 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_line    0x0000000000057529      0x275 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_frame
+ *(.debug_frame)
+
+.debug_str      0x0000000000000000    0x1207e
+ *(.debug_str)
+ .debug_str     0x0000000000000000    0x1207e roothealth_repair_main.o
+                                       0x172a (size before relaxing)
+ .debug_str     0x000000000001207e     0x2232 roothealth_orchestrator.o
+ .debug_str     0x000000000001207e     0x148d roothealth_format3.o
+ .debug_str     0x000000000001207e      0x66b roothealth_report.o
+ .debug_str     0x000000000001207e     0x2e77 roothealth_repair.o
+ .debug_str     0x000000000001207e     0x1448 roothealth_write.o
+ .debug_str     0x000000000001207e     0x45de roothealth_recover.o
+ .debug_str     0x000000000001207e     0x402f roothealth_playlog.o
+ .debug_str     0x000000000001207e      0x710 roothealth_replay_guard.o
+ .debug_str     0x000000000001207e      0xb11 roothealth_replay_analysis.o
+ .debug_str     0x000000000001207e     0x4090 roothealth_wal.o
+ .debug_str     0x000000000001207e     0x2f65 roothealth_bitmap.o
+ .debug_str     0x000000000001207e      0x829 roothealth_coverage.o
+ .debug_str     0x000000000001207e     0x2171 roothealth_dirty.o
+ .debug_str     0x000000000001207e      0x287 roothealth_hash_stream.o
+ .debug_str     0x000000000001207e     0x2413 roothealth_overlay.o
+ .debug_str     0x000000000001207e     0x21f6 roothealth_policy.o
+ .debug_str     0x000000000001207e     0x329e roothealth_raw_mft.o
+ .debug_str     0x000000000001207e     0x2078 utils.o
+ .debug_str     0x000000000001207e     0x36f1 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_str     0x000000000001207e     0x17fa ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_str     0x000000000001207e     0x17d3 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_str     0x000000000001207e     0x1823 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_str     0x000000000001207e     0x1d4e ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_str     0x000000000001207e     0x1a6b ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_str     0x000000000001207e     0x270f ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_str     0x000000000001207e     0x1970 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_str     0x000000000001207e     0x2bb7 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_str     0x000000000001207e     0x2bc0 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_str     0x000000000001207e     0x2214 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_str     0x000000000001207e     0x1ac5 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_str     0x000000000001207e     0x1807 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_str     0x000000000001207e     0x1bb6 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_str     0x000000000001207e      0x676 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_str     0x000000000001207e     0x2c35 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_str     0x000000000001207e      0x1aa ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_str     0x000000000001207e      0x2e1 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_str     0x000000000001207e     0x1b51 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_str     0x000000000001207e     0x2696 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_str     0x000000000001207e     0x1f9c ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_str     0x000000000001207e     0x1d6c ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_str     0x000000000001207e     0x27e4 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_str     0x000000000001207e     0x1b16 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_str     0x000000000001207e     0x3531 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_str     0x000000000001207e      0x696 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_str     0x000000000001207e      0x31c ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_str     0x000000000001207e     0x190f ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_str     0x000000000001207e     0x175c ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_str     0x000000000001207e      0x486 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_loc
+ *(.debug_loc)
+
+.debug_macinfo
+ *(.debug_macinfo)
+
+.debug_weaknames
+ *(.debug_weaknames)
+
+.debug_funcnames
+ *(.debug_funcnames)
+
+.debug_typenames
+ *(.debug_typenames)
+
+.debug_varnames
+ *(.debug_varnames)
+
+.debug_pubtypes
+ *(.debug_pubtypes)
+
+.debug_ranges
+ *(.debug_ranges)
+
+.debug_addr
+ *(.debug_addr)
+
+.debug_line_str
+                0x0000000000000000      0x7f2
+ *(.debug_line_str)
+ .debug_line_str
+                0x0000000000000000      0x7f2 roothealth_repair_main.o
+                                        0x23f (size before relaxing)
+ .debug_line_str
+                0x00000000000007f2      0x2fc roothealth_orchestrator.o
+ .debug_line_str
+                0x00000000000007f2      0x20d roothealth_format3.o
+ .debug_line_str
+                0x00000000000007f2      0x1ac roothealth_report.o
+ .debug_line_str
+                0x00000000000007f2      0x26d roothealth_repair.o
+ .debug_line_str
+                0x00000000000007f2      0x1fb roothealth_write.o
+ .debug_line_str
+                0x00000000000007f2      0x2a2 roothealth_recover.o
+ .debug_line_str
+                0x00000000000007f2      0x260 roothealth_playlog.o
+ .debug_line_str
+                0x00000000000007f2      0x109 roothealth_replay_guard.o
+ .debug_line_str
+                0x00000000000007f2      0x12f roothealth_replay_analysis.o
+ .debug_line_str
+                0x00000000000007f2      0x2a1 roothealth_wal.o
+ .debug_line_str
+                0x00000000000007f2      0x25c roothealth_bitmap.o
+ .debug_line_str
+                0x00000000000007f2      0x128 roothealth_coverage.o
+ .debug_line_str
+                0x00000000000007f2      0x1e5 roothealth_dirty.o
+ .debug_line_str
+                0x00000000000007f2      0x10f roothealth_hash_stream.o
+ .debug_line_str
+                0x00000000000007f2      0x1ff roothealth_overlay.o
+ .debug_line_str
+                0x00000000000007f2      0x192 roothealth_policy.o
+ .debug_line_str
+                0x00000000000007f2      0x229 roothealth_raw_mft.o
+ .debug_line_str
+                0x00000000000007f2      0x228 utils.o
+ .debug_line_str
+                0x00000000000007f2      0x1fc ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_line_str
+                0x00000000000007f2      0x197 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_line_str
+                0x00000000000007f2      0x1a1 ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_line_str
+                0x00000000000007f2      0x14b ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_line_str
+                0x00000000000007f2      0x1b5 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_line_str
+                0x00000000000007f2      0x1ac ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_line_str
+                0x00000000000007f2      0x231 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_line_str
+                0x00000000000007f2      0x1c6 ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_line_str
+                0x00000000000007f2      0x207 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_line_str
+                0x00000000000007f2      0x1bb ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_line_str
+                0x00000000000007f2      0x211 ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_line_str
+                0x00000000000007f2      0x1a6 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_line_str
+                0x00000000000007f2      0x144 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_line_str
+                0x00000000000007f2      0x1ad ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_line_str
+                0x00000000000007f2      0x19f ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_line_str
+                0x00000000000007f2      0x1ee ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_line_str
+                0x00000000000007f2       0xc8 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_line_str
+                0x00000000000007f2       0x9b ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_line_str
+                0x00000000000007f2      0x1c2 ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_line_str
+                0x00000000000007f2      0x1bb ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_line_str
+                0x00000000000007f2      0x1d8 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_line_str
+                0x00000000000007f2      0x1a6 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_line_str
+                0x00000000000007f2      0x1d3 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_line_str
+                0x00000000000007f2      0x1dd ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_line_str
+                0x00000000000007f2      0x220 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_line_str
+                0x00000000000007f2      0x1c9 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_line_str
+                0x00000000000007f2       0xe4 ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_line_str
+                0x00000000000007f2      0x19e ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_line_str
+                0x00000000000007f2      0x182 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_line_str
+                0x00000000000007f2      0x134 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_loclists
+                0x0000000000000000    0x6e044
+ *(.debug_loclists)
+ .debug_loclists
+                0x0000000000000000      0x1ef roothealth_repair_main.o
+ .debug_loclists
+                0x00000000000001ef     0x18f2 roothealth_orchestrator.o
+ .debug_loclists
+                0x0000000000001ae1     0x111d roothealth_format3.o
+ .debug_loclists
+                0x0000000000002bfe      0x71c roothealth_report.o
+ .debug_loclists
+                0x000000000000331a     0x19fd roothealth_repair.o
+ .debug_loclists
+                0x0000000000004d17     0x3cf1 roothealth_write.o
+ .debug_loclists
+                0x0000000000008a08     0xb94a roothealth_recover.o
+ .debug_loclists
+                0x0000000000014352     0xfe48 roothealth_playlog.o
+ .debug_loclists
+                0x000000000002419a     0x3c03 roothealth_replay_guard.o
+ .debug_loclists
+                0x0000000000027d9d     0x1a9d roothealth_replay_analysis.o
+ .debug_loclists
+                0x000000000002983a     0x89ec roothealth_wal.o
+ .debug_loclists
+                0x0000000000032226     0x1324 roothealth_bitmap.o
+ .debug_loclists
+                0x000000000003354a      0xd4d roothealth_coverage.o
+ .debug_loclists
+                0x0000000000034297      0x600 roothealth_dirty.o
+ .debug_loclists
+                0x0000000000034897      0xb40 roothealth_hash_stream.o
+ .debug_loclists
+                0x00000000000353d7      0xaa4 roothealth_overlay.o
+ .debug_loclists
+                0x0000000000035e7b      0xe77 roothealth_policy.o
+ .debug_loclists
+                0x0000000000036cf2     0x691c roothealth_raw_mft.o
+ .debug_loclists
+                0x000000000003d60e     0x1087 utils.o
+ .debug_loclists
+                0x000000000003e695     0xaec1 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_loclists
+                0x0000000000049556      0x4e6 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_loclists
+                0x0000000000049a3c      0x89a ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_loclists
+                0x000000000004a2d6      0x1d6 ../libntfs/.libs/libntfs.a(libntfs_la-bootsect.o)
+ .debug_loclists
+                0x000000000004a4ac     0x453c ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_loclists
+                0x000000000004e9e8      0xd19 ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_loclists
+                0x000000000004f701     0x44fe ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_loclists
+                0x0000000000053bff      0x85f ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_loclists
+                0x000000000005445e     0x16c1 ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_loclists
+                0x0000000000055b1f     0x3ab7 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_loclists
+                0x00000000000595d6     0x19fe ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_loclists
+                0x000000000005afd4     0x15d6 ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_loclists
+                0x000000000005c5aa      0x2e5 ../libntfs/.libs/libntfs.a(libntfs_la-lib_utils.o)
+ .debug_loclists
+                0x000000000005c88f      0xd55 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_loclists
+                0x000000000005d5e4      0x90c ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_loclists
+                0x000000000005def0     0x3734 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_loclists
+                0x0000000000061624      0x110 ../libntfs/.libs/libntfs.a(libntfs_la-misc.o)
+ .debug_loclists
+                0x0000000000061734      0x417 ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_loclists
+                0x0000000000061b4b      0xefc ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_loclists
+                0x0000000000062a47      0x8a0 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_loclists
+                0x00000000000632e7      0xc53 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_loclists
+                0x0000000000063f3a     0x388a ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_loclists
+                0x00000000000677c4      0x648 ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_loclists
+                0x0000000000067e0c     0x1f42 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_loclists
+                0x0000000000069d4e     0x2910 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_loclists
+                0x000000000006c65e      0x5e0 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_loclists
+                0x000000000006cc3e       0x4d ../libntfs/.libs/libntfs.a(libntfs_la-acls.o)
+ .debug_loclists
+                0x000000000006cc8b      0xbd4 ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_loclists
+                0x000000000006d85f      0x5e6 ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_loclists
+                0x000000000006de45      0x1ff ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_macro
+ *(.debug_macro)
+
+.debug_names
+ *(.debug_names)
+
+.debug_rnglists
+                0x0000000000000000     0x7e11
+ *(.debug_rnglists)
+ .debug_rnglists
+                0x0000000000000000       0x5e roothealth_repair_main.o
+ .debug_rnglists
+                0x000000000000005e      0x368 roothealth_orchestrator.o
+ .debug_rnglists
+                0x00000000000003c6      0x1a1 roothealth_format3.o
+ .debug_rnglists
+                0x0000000000000567       0xbf roothealth_report.o
+ .debug_rnglists
+                0x0000000000000626      0x19e roothealth_repair.o
+ .debug_rnglists
+                0x00000000000007c4      0x434 roothealth_write.o
+ .debug_rnglists
+                0x0000000000000bf8     0x16bd roothealth_recover.o
+ .debug_rnglists
+                0x00000000000022b5     0x169a roothealth_playlog.o
+ .debug_rnglists
+                0x000000000000394f       0x9c roothealth_replay_guard.o
+ .debug_rnglists
+                0x00000000000039eb      0x283 roothealth_replay_analysis.o
+ .debug_rnglists
+                0x0000000000003c6e      0xbb4 roothealth_wal.o
+ .debug_rnglists
+                0x0000000000004822      0x299 roothealth_bitmap.o
+ .debug_rnglists
+                0x0000000000004abb       0x9c roothealth_coverage.o
+ .debug_rnglists
+                0x0000000000004b57       0x41 roothealth_dirty.o
+ .debug_rnglists
+                0x0000000000004b98       0xd2 roothealth_hash_stream.o
+ .debug_rnglists
+                0x0000000000004c6a       0xa3 roothealth_overlay.o
+ .debug_rnglists
+                0x0000000000004d0d      0x1bd roothealth_policy.o
+ .debug_rnglists
+                0x0000000000004eca      0xae1 roothealth_raw_mft.o
+ .debug_rnglists
+                0x00000000000059ab       0xea utils.o
+ .debug_rnglists
+                0x0000000000005a95      0x774 ../libntfs/.libs/libntfs.a(libntfs_la-attrib.o)
+ .debug_rnglists
+                0x0000000000006209       0x53 ../libntfs/.libs/libntfs.a(libntfs_la-attrlist.o)
+ .debug_rnglists
+                0x000000000000625c       0x1b ../libntfs/.libs/libntfs.a(libntfs_la-bitmap.o)
+ .debug_rnglists
+                0x0000000000006277      0x274 ../libntfs/.libs/libntfs.a(libntfs_la-compress.o)
+ .debug_rnglists
+                0x00000000000064eb       0x7e ../libntfs/.libs/libntfs.a(libntfs_la-device.o)
+ .debug_rnglists
+                0x0000000000006569      0x1a2 ../libntfs/.libs/libntfs.a(libntfs_la-dir.o)
+ .debug_rnglists
+                0x000000000000670b       0x7c ../libntfs/.libs/libntfs.a(libntfs_la-ea.o)
+ .debug_rnglists
+                0x0000000000006787       0xda ../libntfs/.libs/libntfs.a(libntfs_la-fsck.o)
+ .debug_rnglists
+                0x0000000000006861      0x594 ../libntfs/.libs/libntfs.a(libntfs_la-index.o)
+ .debug_rnglists
+                0x0000000000006df5      0x15f ../libntfs/.libs/libntfs.a(libntfs_la-inode.o)
+ .debug_rnglists
+                0x0000000000006f54       0x6d ../libntfs/.libs/libntfs.a(libntfs_la-lcnalloc.o)
+ .debug_rnglists
+                0x0000000000006fc1       0xc1 ../libntfs/.libs/libntfs.a(libntfs_la-logfile.o)
+ .debug_rnglists
+                0x0000000000007082       0x58 ../libntfs/.libs/libntfs.a(libntfs_la-logging.o)
+ .debug_rnglists
+                0x00000000000070da      0x237 ../libntfs/.libs/libntfs.a(libntfs_la-mft.o)
+ .debug_rnglists
+                0x0000000000007311       0x1f ../libntfs/.libs/libntfs.a(libntfs_la-mst.o)
+ .debug_rnglists
+                0x0000000000007330      0x13c ../libntfs/.libs/libntfs.a(libntfs_la-object_id.o)
+ .debug_rnglists
+                0x000000000000746c       0xf5 ../libntfs/.libs/libntfs.a(libntfs_la-problem.o)
+ .debug_rnglists
+                0x0000000000007561       0x57 ../libntfs/.libs/libntfs.a(libntfs_la-reparse.o)
+ .debug_rnglists
+                0x00000000000075b8      0x3b0 ../libntfs/.libs/libntfs.a(libntfs_la-runlist.o)
+ .debug_rnglists
+                0x0000000000007968       0x3f ../libntfs/.libs/libntfs.a(libntfs_la-security.o)
+ .debug_rnglists
+                0x00000000000079a7       0xc3 ../libntfs/.libs/libntfs.a(libntfs_la-unistr.o)
+ .debug_rnglists
+                0x0000000000007a6a      0x2b4 ../libntfs/.libs/libntfs.a(libntfs_la-volume.o)
+ .debug_rnglists
+                0x0000000000007d1e       0x48 ../libntfs/.libs/libntfs.a(libntfs_la-unix_io.o)
+ .debug_rnglists
+                0x0000000000007d66       0x3d ../libntfs/.libs/libntfs.a(libntfs_la-cache.o)
+ .debug_rnglists
+                0x0000000000007da3       0x2d ../libntfs/.libs/libntfs.a(libntfs_la-collate.o)
+ .debug_rnglists
+                0x0000000000007dd0       0x41 ../libntfs/.libs/libntfs.a(libntfs_la-realpath.o)
+
+.debug_str_offsets
+ *(.debug_str_offsets)
+
+.debug_sup
+ *(.debug_sup)
+
+.gnu.attributes
+ *(.gnu.attributes)
+
+/DISCARD/
+ *(.note.GNU-stack)
+ *(.gnu_debuglink)
+ *(.gnu.lto_*)
+OUTPUT(roothealth elf64-x86-64)

@@ -1,0 +1,225 @@
+{
+  "format": 1,
+  "component": "python-legacy-evidence",
+  "release": "3.13.5-t1os.34",
+  "tree_algorithm": "t1os-tree-sha256-v1",
+  "conclusions": {
+    "authoritative_binary_input": "resource/python/portable python/portable python 3.13.5 linux x86_64.tar.gz",
+    "duplicate_runtime_is_not_an_official_build": true,
+    "getpath_patch_is_historical_and_not_applied": true,
+    "byte_identical_source_rebuild_claimed": false,
+    "reproducible_recovered_artifact_transformation_claimed": true
+  },
+  "upstream": {
+    "cpython_archive": {
+      "path": "resource/python/pythonofficial/Python-3.13.5.tgz",
+      "size": 29450781,
+      "sha256": "e6190f52699b534ee203d9f417bdbca05a92f23e35c19c691a50ed2942835385"
+    },
+    "portable_archive": {
+      "path": "resource/python/portable python/portable python 3.13.5 linux x86_64.tar.gz",
+      "size": 90218112,
+      "sha256": "b3c0af3cbe8a6e93f3d62ba1b72daf238b14bb6b3265f48ca2811ba5727d30a6",
+      "topology": {
+        "regular_files": 2411,
+        "regular_bytes": 216113591,
+        "directories": 217,
+        "symbolic_links": 8,
+        "hard_links": 0
+      }
+    }
+  },
+  "source_tree": {
+    "archive_files": 4808,
+    "archive_bytes": 106151302,
+    "working_files": 5261,
+    "working_bytes": 254014474,
+    "missing_archive_members": [],
+    "content_changes": [
+      {
+        "path": "Modules/getpath.c",
+        "upstream_size": 27291,
+        "upstream_sha256": "7483bff1382baa27ff1db8dd4b237bc3aa58e64e28996ddab5d83a5e8b642576",
+        "working_size": 28339,
+        "working_sha256": "b03a1e38444b6536a029fa834ba843d880a882de60b199d3f3abc2bc018621c0"
+      }
+    ],
+    "generated_files": {
+      "count": 453,
+      "bytes": 147862124,
+      "sha256": "91e3863644f85b6847378fa78400fe1f6538a537cde458c32e8e5624e58f4448",
+      "suffixes": {
+        ".a": 3,
+        ".bootstrap": 1,
+        ".c": 1,
+        ".h": 5,
+        ".local": 1,
+        ".log": 2,
+        ".o": 353,
+        ".pc": 2,
+        ".pre": 1,
+        ".py": 2,
+        ".sh": 1,
+        ".so": 75,
+        ".status": 1,
+        ".stdlib": 1,
+        "<none>": 4
+      }
+    }
+  },
+  "stages": {
+    "portable": {
+      "algorithm": "t1os-tree-sha256-v1",
+      "files": 1467,
+      "bytes": 201057698,
+      "sha256": "7c14cb9b78c7f1985b203f5ee914d84e8d40a9079e9b67ca259193cfbd8a06a4",
+      "generated_bytecode_excluded": true
+    },
+    "duplicate_portable": {
+      "algorithm": "t1os-tree-sha256-v1",
+      "files": 1467,
+      "bytes": 201057698,
+      "sha256": "7c14cb9b78c7f1985b203f5ee914d84e8d40a9079e9b67ca259193cfbd8a06a4",
+      "generated_bytecode_excluded": true
+    },
+    "readline": {
+      "algorithm": "t1os-tree-sha256-v1",
+      "files": 1475,
+      "bytes": 201183555,
+      "sha256": "f13011d0188cc8748fcb9028a52bed9b24005af7bd4d92bea58fb26008c7a690",
+      "generated_bytecode_excluded": true
+    },
+    "final": {
+      "algorithm": "t1os-tree-sha256-v1",
+      "files": 1476,
+      "bytes": 201185143,
+      "sha256": "b0d05a7c7b93e9571970b2722ca499db4f0147dff918fca2c67a4a59cb511200",
+      "generated_bytecode_excluded": true
+    },
+    "native_catalogue": {
+      "algorithm": "t1os-tree-sha256-v1",
+      "files": 90,
+      "bytes": 45956772,
+      "sha256": "9fe1abdf8b141b158a9fcf72438467363ef7867e33b070178a168e204721d5ae",
+      "generated_bytecode_excluded": false
+    }
+  },
+  "deltas": {
+    "portable_to_readline": {
+      "added": [
+        "include/python3.13/readline/chardefs.h",
+        "include/python3.13/readline/history.h",
+        "include/python3.13/readline/keymaps.h",
+        "include/python3.13/readline/readline.h",
+        "include/python3.13/readline/rlconf.h",
+        "include/python3.13/readline/rlstdc.h",
+        "include/python3.13/readline/rltypedefs.h",
+        "include/python3.13/readline/tilde.h"
+      ],
+      "removed": [],
+      "changed": [
+        "bin/python3.13",
+        "lib/python3.13/lib-dynload/readline.cpython-313-x86_64-linux-gnu.so"
+      ]
+    },
+    "readline_to_final": {
+      "added": [
+        "lib/python3.13/site-packages/sitecustomize.py"
+      ],
+      "removed": [],
+      "changed": [
+        "lib/python3.13/lib-dynload/_asyncio.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_bisect.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_blake2.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_bz2.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_cn.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_hk.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_iso2022.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_jp.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_kr.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_codecs_tw.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_contextvars.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_csv.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_ctypes.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_curses.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_curses_panel.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_datetime.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_dbm.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_decimal.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_elementtree.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_gdbm.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_hashlib.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_heapq.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_interpchannels.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_interpqueues.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_interpreters.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_json.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_lsprof.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_lzma.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_md5.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_multibytecodec.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_multiprocessing.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_opcode.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_pickle.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_posixshmem.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_posixsubprocess.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_queue.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_random.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_sha1.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_sha2.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_sha3.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_socket.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_sqlite3.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_ssl.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_statistics.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_struct.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_tkinter.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_uuid.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/_zoneinfo.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/array.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/binascii.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/cmath.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/fcntl.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/grp.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/math.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/mmap.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/pyexpat.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/readline.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/resource.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/select.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/syslog.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/termios.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/unicodedata.cpython-313-x86_64-linux-gnu.so",
+        "lib/python3.13/lib-dynload/zlib.cpython-313-x86_64-linux-gnu.so"
+      ]
+    }
+  },
+  "module_recovery": {
+    "freetype_py_2_5_1": {
+      "match": true,
+      "expected_files": 39,
+      "actual_files": 39,
+      "missing": [],
+      "extra": [],
+      "changed": []
+    },
+    "pyroute2_0_9_4": {
+      "match": true,
+      "expected_files": 223,
+      "actual_files": 223,
+      "missing": [],
+      "extra": [],
+      "changed": []
+    }
+  },
+  "known_unknowns": [
+    "the exact historical patchelf version and command sequence",
+    "the exact Portable Python 1.9.9 transitive Python dependencies",
+    "the complete package provenance of the 90-file shared native catalogue",
+    "the complete build-host package set and environment"
+  ],
+  "volatile_legacy_bytecode": {
+    "excluded_from_normalized_stage_trees": true,
+    "reason": "legacy pyc files embed build/install paths and can be rewritten on import"
+  }
+}

@@ -1,0 +1,35 @@
+--- a/Modules/getpath.c
++++ b/Modules/getpath.c
+@@ -863,6 +863,32 @@
+ PyStatus
+ _PyConfig_InitPathConfig(PyConfig *config, int compute_path_config)
+ {
++    /* --- BEGIN SHORT‑CIRCUIT TO FORCE YOUR TREE ONLY --- */
++    config->home    = _PyMem_RawWcsdup(L"/the one/python");
++    config->prefix  = _PyMem_RawWcsdup(L"/the one/python");
++    config->exec_prefix = _PyMem_RawWcsdup(L"/the one/python");
++
++    /* force only your two paths */
++    config->module_search_paths.length = 2;
++    config->module_search_paths.strings =
++        (wchar_t **)PyMem_RawMalloc(2 * sizeof(wchar_t *));
++    if (config->module_search_paths.strings == NULL) {
++        return PyStatus_NoMemory();
++    }
++    config->module_search_paths.strings[0] =
++        _PyMem_RawWcsdup(L"/the one/python/lib/python3.13");
++    config->module_search_paths.strings[1] =
++        _PyMem_RawWcsdup(L"/the one/python/lib/python3.13/lib-dynload");
++    if (!config->module_search_paths.strings[0] ||
++        !config->module_search_paths.strings[1]) {
++        return PyStatus_NoMemory();
++    }
++    config->module_search_paths_set = 1;
++
++    config->module_search_paths_set = 1;
++    return PyStatus_Ok();
++    /* --- END SHORT‑CIRCUIT --- */
++    
+     PyStatus status = _PyPathConfig_ReadGlobal(config);
+ 
+     if (_PyStatus_EXCEPTION(status) || !compute_path_config) {

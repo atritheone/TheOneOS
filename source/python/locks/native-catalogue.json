@@ -1,0 +1,1844 @@
+{
+  "format": 1,
+  "component": "python-native-catalogue-legacy-lock",
+  "role": "shared T1OS platform base consumed by Python, graphics, audio, image and VirtualBox",
+  "source": "resource/python/T1OS python/catalogues/T1OS 0.2/python",
+  "source_script": {
+    "path": "resource/python/T1OS python/catalogues/copylibs.sh",
+    "sha256": "edd184e193d6107a533d88385bab1c8a3087cb577bd77d6b565df6f9e054d2bd",
+    "declared_names": 41,
+    "undeclared_files": 49
+  },
+  "tree": {
+    "algorithm": "t1os-tree-sha256-v1",
+    "files": 90,
+    "bytes": 45956772,
+    "sha256": "9fe1abdf8b141b158a9fcf72438467363ef7867e33b070178a168e204721d5ae",
+    "generated_bytecode_excluded": false
+  },
+  "files": [
+    {
+      "path": "ld-linux-x86-64.so.2",
+      "size": 225600,
+      "sha256": "18f7a1256e56b344abb380cbb8b9d3b49ddfdaedf482d2daa3b5a595e1133196",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [],
+        "soname": "ld-linux-x86-64.so.2",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "376e67f090d29980ab87815525618c98be08c0a5",
+        "package": null
+      }
+    },
+    {
+      "path": "libFLAC.so.14",
+      "size": 446953,
+      "sha256": "affa1cfdacc85869625e648c7b67731294fc2b1caf2bbbc3d65ecc590edb2086",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6",
+          "libogg.so.0"
+        ],
+        "soname": "libFLAC.so.14",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "09037e6d99772c6a63ef28b702031be4f79ef927",
+        "package": null
+      }
+    },
+    {
+      "path": "libLerc.so.4",
+      "size": 579608,
+      "sha256": "b04bc6a13a8cda1d3f60b7e8b9b69e38f8a998b3364705168510285c29719bee",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libgcc_s.so.1",
+          "libm.so.6",
+          "libstdc++.so.6"
+        ],
+        "soname": "libLerc.so.4",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "22223f40ffa678871d4099bea853de7bc79ace86",
+        "package": null
+      }
+    },
+    {
+      "path": "libSDL2-2.0.so.0",
+      "size": 2033937,
+      "sha256": "d3120357eef35fe1c43005c5e9de9de47096d9db8f26419c75ddfb8a5d4affc4",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libXcursor.so.1",
+          "libXext.so.6",
+          "libXfixes.so.3",
+          "libXi.so.6",
+          "libXrandr.so.2",
+          "libXss.so.1",
+          "libasound.so.2",
+          "libc.so.6",
+          "libdecor-0.so.0",
+          "libdrm.so.2",
+          "libgbm.so.1",
+          "libm.so.6",
+          "libpulse.so.0",
+          "libsamplerate.so.0",
+          "libwayland-client.so.0",
+          "libwayland-cursor.so.0",
+          "libwayland-egl.so.1",
+          "libxkbcommon.so.0"
+        ],
+        "soname": "libSDL2-2.0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "ba11ec6cc627e78ef7103144630792da02ed18b6",
+        "package": null
+      }
+    },
+    {
+      "path": "libSDL2_image-2.0.so.0",
+      "size": 135377,
+      "sha256": "804c893af3b409bf668cf4bac9e85dc45a51cf84576a4eff4c75287b799c17b7",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libSDL2-2.0.so.0",
+          "libc.so.6",
+          "libjpeg.so.62",
+          "libpng16.so.16",
+          "libtiff.so.6",
+          "libwebp.so.7",
+          "libwebpdemux.so.2"
+        ],
+        "soname": "libSDL2_image-2.0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "78ef06c39d350356fcad16ddb89634cb6693bc51",
+        "package": null
+      }
+    },
+    {
+      "path": "libSDL2_mixer-2.0.so.0",
+      "size": 182009,
+      "sha256": "075928847bd8549e6305ba20ed5efcc096d6cdd2776b4ea0d37be45bdd347e35",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libFLAC.so.14",
+          "libSDL2-2.0.so.0",
+          "libc.so.6",
+          "libmpg123.so.0",
+          "libopusfile.so.0",
+          "libvorbisfile.so.3",
+          "libxmp.so.4"
+        ],
+        "soname": "libSDL2_mixer-2.0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "d743476c093dfc951ffced8191142d35abef8765",
+        "package": null
+      }
+    },
+    {
+      "path": "libSDL2_ttf-2.0.so.0",
+      "size": 86257,
+      "sha256": "cc07750fbbf30c6a1afa4dae4b7cac3cbde22029cb55111caf61d39410ce140b",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libSDL2-2.0.so.0",
+          "libc.so.6",
+          "libfreetype.so.6",
+          "libharfbuzz.so.0"
+        ],
+        "soname": "libSDL2_ttf-2.0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "02755d1db242e916fae821143972e40ad5bcd57a",
+        "package": null
+      }
+    },
+    {
+      "path": "libX11-xcb.so.1",
+      "size": 17169,
+      "sha256": "414c640e3dcb562a71db27929427ba1cb16f3b66f73e0e705765e6b909b9a18e",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [],
+        "soname": "libX11-xcb.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "71f865a3d5e3848cd4e162cb04d166fc23f8426f",
+        "package": null
+      }
+    },
+    {
+      "path": "libX11.so.6",
+      "size": 1377289,
+      "sha256": "2445cb5860e03c56a8caa042425b4c2718f289e989470dfa4fe512b0069bd60b",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libxcb.so.1"
+        ],
+        "soname": "libX11.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "5d79553532d809e153e0d832d2d18dec9cbb33ea",
+        "package": null
+      }
+    },
+    {
+      "path": "libXau.so.6",
+      "size": 18401,
+      "sha256": "af248503feb62ea1db05f0e638c67255cb9b4b9561bfaaffa85c900f6e3a16c6",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libXau.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "dd2187da6e329a56d08449d5a478e0ec3114a840",
+        "package": null
+      }
+    },
+    {
+      "path": "libXcursor.so.1",
+      "size": 52657,
+      "sha256": "af6a30a56b4098b3f93049408397e49abe79fb2c6ad6012466745ff212cd45fe",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libXfixes.so.3",
+          "libXrender.so.1",
+          "libc.so.6"
+        ],
+        "soname": "libXcursor.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "ab34e09fbe201b3c49900d0b9e758010772fa258",
+        "package": null
+      }
+    },
+    {
+      "path": "libXdmcp.so.6",
+      "size": 30577,
+      "sha256": "0fff07728134492d4f1ee815445d03ec4e42a724abf71b58f6588455f30c89e7",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libXdmcp.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "bf3bc27fa953cec8448c458dadcbcb93b03b2e4d",
+        "package": null
+      }
+    },
+    {
+      "path": "libXext.so.6",
+      "size": 87049,
+      "sha256": "06fa25e47ea35ae124e63fedbf99c4f1ba91fc32313fcfe2d51c1cb196c7ac33",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libXext.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "edf0212bc0cbf06ebf864c54eb0a9f85c4b63b0b",
+        "package": null
+      }
+    },
+    {
+      "path": "libXfixes.so.3",
+      "size": 30929,
+      "sha256": "ef368af0618f81494028a55e8ffc56b337e7bbaebab4bf963ab2ab821dce3a27",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libXfixes.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "0bd0882dff0e856816929cf10058c7030c977587",
+        "package": null
+      }
+    },
+    {
+      "path": "libXi.so.6",
+      "size": 81361,
+      "sha256": "f24f26b556af05e8efc8d7d6ec4ba02e115d7009c1dd0a512f6cb8b0ac6e295d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libXext.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libXi.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "44bbac9630f7d0e6a5c3657cbae9820953d6591f",
+        "package": null
+      }
+    },
+    {
+      "path": "libXrandr.so.2",
+      "size": 52209,
+      "sha256": "30c7f1c285fdf58c6935de2e9f5ffa62f0bea7c27800b52b442ae9bbc0e34e7d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libXext.so.6",
+          "libXrender.so.1",
+          "libc.so.6"
+        ],
+        "soname": "libXrandr.so.2",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "6abdbd37066ef8e1a3b87653d65a681245f74c77",
+        "package": null
+      }
+    },
+    {
+      "path": "libXrender.so.1",
+      "size": 51745,
+      "sha256": "4f9599b7aa1d34b4fa3cc54d4df6855df59c324eafda527d986b15ce0325c7eb",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libXrender.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "0b32d48e074aa701d2892351282fcee9aa0f4b46",
+        "package": null
+      }
+    },
+    {
+      "path": "libXss.so.1",
+      "size": 17745,
+      "sha256": "d03d17db09a7d632f85b6a393ed44845c6a6ea813e3626a6fbcf847431d0b425",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11.so.6",
+          "libXext.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libXss.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "098a47c608ce20341664d76ccc9cac273c4bacbc",
+        "package": null
+      }
+    },
+    {
+      "path": "libasound.so.2",
+      "size": 1240913,
+      "sha256": "b2d03221c154ea19b3852e57860cb4b8370314bfe08091d2669213a5087b2a01",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libasound.so.2",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "7d9fb25225ad788d6d9bbdc2dda84a71b61462b1",
+        "package": null
+      }
+    },
+    {
+      "path": "libasyncns.so.0",
+      "size": 26113,
+      "sha256": "18d26c92ce942dbe2d47ea85f1651f9519afbfaee8a9e669e0e676f8fa2d031a",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libasyncns.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "da60cd6b5db2759a12c7d8d2417a5eef4aa8c319",
+        "package": null
+      }
+    },
+    {
+      "path": "libatomic.so.1",
+      "size": 36577,
+      "sha256": "355232b6df4b99db4cf0a4c1f8e119f6c04d58501e4fde33cb27e43187be9a12",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libatomic.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "55c9c5ee36fac53329fd24b02ab56d59c0c04d2c",
+        "package": {
+          "type": "deb",
+          "os": "debian",
+          "name": "gcc-14",
+          "version": "14.2.0-19",
+          "architecture": "amd64"
+        }
+      }
+    },
+    {
+      "path": "libbrotlicommon.so.1",
+      "size": 144433,
+      "sha256": "8857d99f9bd0dda66692763f6b77caf25c470e4974aa3c53f8e1c81477656a15",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libbrotlicommon.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "d0e7741ff29fbd34b816968f9a81a8e8ff0148c9",
+        "package": null
+      }
+    },
+    {
+      "path": "libbrotlidec.so.1",
+      "size": 54833,
+      "sha256": "77013de8abbf7d0dd91f633989893defb1af87c03da89afc04c991b08a8cbe4f",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libbrotlicommon.so.1",
+          "libc.so.6"
+        ],
+        "soname": "libbrotlidec.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "ef8a49705d9a38da75aabeb57297da34bd4220c9",
+        "package": null
+      }
+    },
+    {
+      "path": "libbz2.so.1.0",
+      "size": 79561,
+      "sha256": "9f98e761f84267dc62aa8c7a65a974b0d498fe0721bac54a0746e56cb140f81d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libbz2.so.1.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "d8644a50f895eb58ba6c98b0134360fe8e888563",
+        "package": null
+      }
+    },
+    {
+      "path": "libc.so.6",
+      "size": 2059441,
+      "sha256": "ff0f8b91ecb254d9cc0fd079f98b0cbe24a80bdd01d5cc6478b67bd61bad6b8e",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2"
+        ],
+        "soname": "libc.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": "/lib64/ld-linux-x86-64.so.2",
+        "build_id": "00775696e1aa5bebb30adbcf4d53f1c21b607fc0",
+        "package": null
+      }
+    },
+    {
+      "path": "libcap.so.2",
+      "size": 47288,
+      "sha256": "c3d3d82106c257d95ea4a4b097c6dcba9eff752eb6faf4c8223df0adc003563b",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libcap.so.2",
+        "runpath": null,
+        "interpreter": "/lib64/ld-linux-x86-64.so.2",
+        "build_id": "38b8130d4b45e351f0dcf042a5a47188ae70157c",
+        "package": null
+      }
+    },
+    {
+      "path": "libcrypto.so.3",
+      "size": 6679153,
+      "sha256": "9b2bc78c8ef1f55312f891ab6b6a0d1c31e93e6019093c27b5e3cbe56101c8e4",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libz.so.1",
+          "libzstd.so.1"
+        ],
+        "soname": "libcrypto.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "07a8321bad67632b52b47ad026125c79b7ebaab4",
+        "package": null
+      }
+    },
+    {
+      "path": "libdbus-1.so.3",
+      "size": 374193,
+      "sha256": "1537453c8e3e702887c7f90f6e3fd1fc32250ef48abe330613936a55976c6140",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libsystemd.so.0"
+        ],
+        "soname": "libdbus-1.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "2c0f7740ddadac7cff5c4dfe304fbf95c7d5935c",
+        "package": null
+      }
+    },
+    {
+      "path": "libdecor-0.so.0",
+      "size": 48449,
+      "sha256": "da2120297dc6518e7001a80349c1e0680487e62015740f87232a386af7041d81",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libwayland-client.so.0"
+        ],
+        "soname": "libdecor-0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "302e8dc7f8fbe2445ae606e133ccfce97206de5f",
+        "package": null
+      }
+    },
+    {
+      "path": "libdeflate.so.0",
+      "size": 91673,
+      "sha256": "3746bbad3837c27a96270ddda3daf543931b42f1f6c4f4e4e86e8bc5e61831b0",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libdeflate.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "3a76fb69997f5b80f3375f5d483a0eafdf1f3a27",
+        "package": null
+      }
+    },
+    {
+      "path": "libdrm.so.2",
+      "size": 101073,
+      "sha256": "a751fd7c085a8e8edbe97016baed0349b79856f76f0fb7dc58117fe7f7785c0b",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libdrm.so.2",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "1971f5be8091582f20cc013c2998a2702445af7c",
+        "package": null
+      }
+    },
+    {
+      "path": "libexpat.so.1",
+      "size": 183409,
+      "sha256": "f30f1d27c4f9a455303d5ea3bce506c5e8e7915b52afc840302435a22c24e082",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libexpat.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "ab4623d8b45205fcf4b00aa4763e23853fed2659",
+        "package": null
+      }
+    },
+    {
+      "path": "libffi.so.8",
+      "size": 51321,
+      "sha256": "78cd03ef2ac0459c15b170982d58c7d27129e5545d31a00a7e667707b552a5be",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libffi.so.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "fe140638f4a9b1dc519b2343ea30d7f0a4f130fe",
+        "package": null
+      }
+    },
+    {
+      "path": "libffi.so.8.1.4",
+      "size": 51321,
+      "sha256": "78cd03ef2ac0459c15b170982d58c7d27129e5545d31a00a7e667707b552a5be",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libffi.so.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "fe140638f4a9b1dc519b2343ea30d7f0a4f130fe",
+        "package": null
+      }
+    },
+    {
+      "path": "libfreetype.so.6",
+      "size": 855793,
+      "sha256": "bbbb4c034640ba561a64bbbbd09a49074aaccbcaa3bf64d38988cf493f3c696c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libbrotlidec.so.1",
+          "libbz2.so.1.0",
+          "libc.so.6",
+          "libpng16.so.16",
+          "libz.so.1"
+        ],
+        "soname": "libfreetype.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "44a4423ddd9f6e5eee1be84a12ce3010df8485f1",
+        "package": null
+      }
+    },
+    {
+      "path": "libgbm.so.1",
+      "size": 22665,
+      "sha256": "8ef681d6c750841cfdfff6a5b37b359b3ca796d53508d6b1537781fe77ab8ea5",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libdrm.so.2",
+          "libexpat.so.1",
+          "libm.so.6"
+        ],
+        "soname": "libgbm.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "92541e0d7061d205f281ebad8e7de98a5c57f8f1",
+        "package": null
+      }
+    },
+    {
+      "path": "libgcc_s.so.1",
+      "size": 189801,
+      "sha256": "ec7f06f5b8be6aa4b49646a4af9ebc85a4db7b0e44d349311e0a5cdf08b0e820",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6"
+        ],
+        "soname": "libgcc_s.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "12eddb764a9c4e3c9ad99b3e645cbd206521af07",
+        "package": {
+          "type": "deb",
+          "os": "debian",
+          "name": "gcc-14",
+          "version": "14.2.0-19",
+          "architecture": "amd64"
+        }
+      }
+    },
+    {
+      "path": "libglib-2.0.so.0",
+      "size": 1461385,
+      "sha256": "bf03cc7536d84abbd8936d07943683b1bb47df7749054f15d66174c475dbdbf2",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libatomic.so.1",
+          "libc.so.6",
+          "libm.so.6",
+          "libpcre2-8.so.0"
+        ],
+        "soname": "libglib-2.0.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "acc4975e5b9899f58c05ae3823d42ab26a5ac903",
+        "package": null
+      }
+    },
+    {
+      "path": "libgraphite2.so.3",
+      "size": 170721,
+      "sha256": "1bb9fd55cd9aff7fd4fd4ee919f1ca139a1c686b1d94d9c8093e3ef0342757af",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libgraphite2.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "62962850a2554bd0936aeb4e805d8de63be2c90f",
+        "package": null
+      }
+    },
+    {
+      "path": "libharfbuzz.so.0",
+      "size": 1333497,
+      "sha256": "e1c68c311437ad64988f1bd63e419b0e84f220cd3b4d26bc4c9a62b6a2f069d1",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libfreetype.so.6",
+          "libglib-2.0.so.0",
+          "libgraphite2.so.3",
+          "libm.so.6"
+        ],
+        "soname": "libharfbuzz.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "3d0b81e515e3236fe31a0b4fe0933c79b39642c9",
+        "package": null
+      }
+    },
+    {
+      "path": "libjbig.so.0",
+      "size": 71393,
+      "sha256": "d0f32705c3db7dfaa1165516be0cdb05b45df854b08092ec182de2271c9c0794",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libjbig.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "855007a2495f78ebc94f192faa01dd74d1847df1",
+        "package": null
+      }
+    },
+    {
+      "path": "libjpeg.so.62",
+      "size": 622929,
+      "sha256": "47b1ab555a2d20ef2ea347e1a54482e87c1b0686e562743de0e0ed81e0d0df74",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6"
+        ],
+        "soname": "libjpeg.so.62",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "28e3506b7306d5f550c818b9eb1f458115256af2",
+        "package": null
+      }
+    },
+    {
+      "path": "liblzma.so.5",
+      "size": 205497,
+      "sha256": "4ce3df3611f83d620a7e957d4b6229cba89c2f008daaac1331ddff186b4ec530",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "liblzma.so.5",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "e9b921162f50aab4d299e30fcd9b97725a7463b0",
+        "package": null
+      }
+    },
+    {
+      "path": "libm.so.6",
+      "size": 1000041,
+      "sha256": "1f8941aff315e37b5387b690aaaadefa2332de52d690f3753ed954a3807c11c8",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6"
+        ],
+        "soname": "libm.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "dee2265f9a960ddab1033e01c011c1b2a16d2114",
+        "package": null
+      }
+    },
+    {
+      "path": "libmp3lame.so.0",
+      "size": 315241,
+      "sha256": "17a547fc15bf4c0c9da97521d7e2f2f08e3c55207587199a410ab7449407ca68",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libmp3lame.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "97fa494345729d399e8eb72985059f7b86b31106",
+        "package": null
+      }
+    },
+    {
+      "path": "libmpg123.so.0",
+      "size": 390145,
+      "sha256": "7afa02941b469df9f8c3dcf76ed43c6e602ac0eb9f43eacc8df01ec486a7391c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libmpg123.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "c54ec31a37b1f1447686affa666a714627b92ce0",
+        "package": null
+      }
+    },
+    {
+      "path": "libncursesw.so",
+      "size": 32,
+      "sha256": "63375000b86f3c7bdf5983e761fb0323f3d12b1bde5629ecc7f88d2579a0c8b2",
+      "provenance": "legacy-recovered; original distribution package not recorded"
+    },
+    {
+      "path": "libncursesw.so.6",
+      "size": 235520,
+      "sha256": "ea1e3fea29b3d3f35e240f626e5e783885d1d17f7915e7840f2a1542058c154c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libtinfo.so.6"
+        ],
+        "soname": "libncursesw.so.6",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "6e841b7a244c34ee3a925eabc978106722d1e295",
+        "package": null
+      }
+    },
+    {
+      "path": "libncursesw.so.6.5",
+      "size": 235520,
+      "sha256": "ea1e3fea29b3d3f35e240f626e5e783885d1d17f7915e7840f2a1542058c154c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libtinfo.so.6"
+        ],
+        "soname": "libncursesw.so.6",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "6e841b7a244c34ee3a925eabc978106722d1e295",
+        "package": null
+      }
+    },
+    {
+      "path": "libnettle.so.8",
+      "size": 346216,
+      "sha256": "34ac695c167a593d3587bd88592d33d53e5dc4035984f84446100962f57376fd",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libnettle.so.8",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "d2b54dceb72e68039814fd0940dded29077d3356",
+        "package": null
+      }
+    },
+    {
+      "path": "libogg.so.0",
+      "size": 43577,
+      "sha256": "86cd998c369f56d36cadf2c4ad8466b84debf5da9eba4c41f47e04e6fa9849f5",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libogg.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "5cfeb1b993d359fa97af6141f3e1d11dd656c025",
+        "package": null
+      }
+    },
+    {
+      "path": "libopus.so.0",
+      "size": 3555425,
+      "sha256": "884f0a0df3fcd0415235c306dba9c8cc600b2cecf049870f9b27a88adf3f64af",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libopus.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "eac017d95346716325e343830e59439e3d37d1ac",
+        "package": null
+      }
+    },
+    {
+      "path": "libopusfile.so.0",
+      "size": 60105,
+      "sha256": "6ce94d3099f324ecb4fab896bfd9692244517090baa7f606bec567dcf1205ae8",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6",
+          "libogg.so.0",
+          "libopus.so.0"
+        ],
+        "soname": "libopusfile.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "77a09107680951e24f18a99ddf4951072cd3be34",
+        "package": null
+      }
+    },
+    {
+      "path": "libpcap.so.1",
+      "size": 324025,
+      "sha256": "52e8b0dbf1918ecaa943da918998495731847f68b24c6be06c58ff9e8a614826",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libdbus-1.so.3"
+        ],
+        "soname": "libpcap.so.0.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "dc995de56d8eec72230b00e0d876af418cf61e71",
+        "package": null
+      }
+    },
+    {
+      "path": "libpcap.so.2",
+      "size": 324025,
+      "sha256": "52e8b0dbf1918ecaa943da918998495731847f68b24c6be06c58ff9e8a614826",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libdbus-1.so.3"
+        ],
+        "soname": "libpcap.so.0.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "dc995de56d8eec72230b00e0d876af418cf61e71",
+        "package": null
+      }
+    },
+    {
+      "path": "libpcre2-8.so.0",
+      "size": 716401,
+      "sha256": "973bec44a1e980fa185ede97d05bafc84a79f2ca76b940cd66115dc7773431e8",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libpcre2-8.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "8b4352e82f106d161e6ec3ffc2543eca59bef6b9",
+        "package": null
+      }
+    },
+    {
+      "path": "libpng16.so.16",
+      "size": 237705,
+      "sha256": "206febbb3446ea1bcf04586e6025a60b9461791358b7551e9ef535dab975fa00",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6",
+          "libz.so.1"
+        ],
+        "soname": "libpng16.so.16",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "c0e82f7bebeb5db6249efc605caad4e1daf74816",
+        "package": null
+      }
+    },
+    {
+      "path": "libpulse.so.0",
+      "size": 343088,
+      "sha256": "153d8ee91fc4e362ee6f06f441d7cc8217ce0da14c18e708302f673703e8b826",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libdbus-1.so.3",
+          "libm.so.6",
+          "libpulsecommon-17.0.so"
+        ],
+        "soname": "libpulse.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "f38b7a5bb4b54e6559d34617f5357849093c9d6c",
+        "package": null
+      }
+    },
+    {
+      "path": "libpulsecommon-17.0.so",
+      "size": 582433,
+      "sha256": "5c843d011318d97d4faa17db8a8523bdfef88650c89ae4f7ce0880f4f845399c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libX11-xcb.so.1",
+          "libX11.so.6",
+          "libasyncns.so.0",
+          "libc.so.6",
+          "libdbus-1.so.3",
+          "libm.so.6",
+          "libsndfile.so.1",
+          "libsystemd.so.0",
+          "libxcb.so.1"
+        ],
+        "soname": "libpulsecommon-17.0.so",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "4761b48ee2a3392ac57e0477627072ca5211a2b4",
+        "package": null
+      }
+    },
+    {
+      "path": "libreadline.so",
+      "size": 385857,
+      "sha256": "80f6508c8f4149cb187600d47e697ad4268290a12941f42ed1edf5fef6f37aec",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libtinfo.so.6"
+        ],
+        "soname": "libreadline.so.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "e252dbf078dbf1e53270553d0ab325f4405f0d5e",
+        "package": null
+      }
+    },
+    {
+      "path": "libreadline.so.8",
+      "size": 385857,
+      "sha256": "80f6508c8f4149cb187600d47e697ad4268290a12941f42ed1edf5fef6f37aec",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libtinfo.so.6"
+        ],
+        "soname": "libreadline.so.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "e252dbf078dbf1e53270553d0ab325f4405f0d5e",
+        "package": null
+      }
+    },
+    {
+      "path": "libreadline.so.8.2",
+      "size": 385857,
+      "sha256": "80f6508c8f4149cb187600d47e697ad4268290a12941f42ed1edf5fef6f37aec",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libtinfo.so.6"
+        ],
+        "soname": "libreadline.so.8",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "e252dbf078dbf1e53270553d0ab325f4405f0d5e",
+        "package": null
+      }
+    },
+    {
+      "path": "libsamplerate.so.0",
+      "size": 1500545,
+      "sha256": "b9bf2298b49eff821b6a09c2e650edf2c856495a62affea315c46f37def4d132",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libsamplerate.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "40d0b67cdd9b0fc47c362bda013c14ab6bb0c323",
+        "package": null
+      }
+    },
+    {
+      "path": "libselinux.so.1",
+      "size": 202984,
+      "sha256": "5cb5293b4e7590463b94f7b23152d54807a6a2ccaf8cac9e343908c6692c086c",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libpcre2-8.so.0"
+        ],
+        "soname": "libselinux.so.1",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "c2e0a63be815d80d581a82e1ef0c94a5abc57b7c",
+        "package": null
+      }
+    },
+    {
+      "path": "libsharpyuv.so.0",
+      "size": 30305,
+      "sha256": "d7edfc680c973af61ebfc2b34bfd97d384ef9217954926c933590b31bacb109d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libsharpyuv.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "c3a9f8bd25f40c67d559ea7691f32041599066a7",
+        "package": null
+      }
+    },
+    {
+      "path": "libsndfile.so.1",
+      "size": 579537,
+      "sha256": "915712e8c615f3dd9a7da6b36342e53648296073dcd395e8f487ceec65ed71ce",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libFLAC.so.14",
+          "libc.so.6",
+          "libm.so.6",
+          "libmp3lame.so.0",
+          "libmpg123.so.0",
+          "libogg.so.0",
+          "libopus.so.0",
+          "libvorbis.so.0",
+          "libvorbisenc.so.2"
+        ],
+        "soname": "libsndfile.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "cf2bd2a7ba02cc16d89f3a0a014cb9993c178a89",
+        "package": null
+      }
+    },
+    {
+      "path": "libsqlite3.so.0",
+      "size": 1620401,
+      "sha256": "0b5f3d727abcf91bf53895019455e1a8fda8556c090546c93f632a326220beb5",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libsqlite3.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "0257c8b92fb2538837d7d811e903786b47b9b0f3",
+        "package": null
+      }
+    },
+    {
+      "path": "libssl.so.3",
+      "size": 1132569,
+      "sha256": "5cbb1d09f4d6fd596ad363f8ad77e18072eb9c538f3c23dd01036cba25160669",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libcrypto.so.3"
+        ],
+        "soname": "libssl.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "a0d77cb273378dec1d74a115ac1c9e40306e675d",
+        "package": null
+      }
+    },
+    {
+      "path": "libstdc++.so.6",
+      "size": 2843921,
+      "sha256": "4885b523088f01e2f4531fc82e80cb1810cf36cf4f6b464bd3daea349fbddbab",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libgcc_s.so.1",
+          "libm.so.6"
+        ],
+        "soname": "libstdc++.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "133b71e0013695cc7832680a74edb51008c4fc4c",
+        "package": {
+          "type": "deb",
+          "os": "debian",
+          "name": "gcc-14",
+          "version": "14.2.0-19",
+          "architecture": "amd64"
+        }
+      }
+    },
+    {
+      "path": "libsystemd.so.0",
+      "size": 1166577,
+      "sha256": "553a1c549978ac51adf53ca91ef7fb2bf2fc7c95844432ed49ffd96016c9185e",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libcap.so.2",
+          "libm.so.6"
+        ],
+        "soname": "libsystemd.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "c654a68d49ca6c32bc3e823f097a220ecfde6b14",
+        "package": {
+          "type": "deb",
+          "os": "Debian",
+          "name": "systemd",
+          "version": "257.7-1",
+          "architecture": "amd64",
+          "debugInfoUrl": "https://debuginfod.debian.net"
+        }
+      }
+    },
+    {
+      "path": "libtiff.so.6",
+      "size": 614593,
+      "sha256": "5027e62ac13b550f6c561159c875512ebec147b6404e00b6ef302e5379114eb9",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libLerc.so.4",
+          "libc.so.6",
+          "libdeflate.so.0",
+          "libjbig.so.0",
+          "libjpeg.so.62",
+          "liblzma.so.5",
+          "libm.so.6",
+          "libwebp.so.7",
+          "libz.so.1",
+          "libzstd.so.1"
+        ],
+        "soname": "libtiff.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "c66c1dafd24ecb72dd535818f50f635cdc132fb2",
+        "package": null
+      }
+    },
+    {
+      "path": "libtinfo.so.6",
+      "size": 228601,
+      "sha256": "11fbade1417f5016008d39cfd4be898c997b9b551d0d6502c466ffb1a8c72b59",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libtinfo.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "a59321fff1e2ecb242d2cb1b0b2a30ca26fd55c1",
+        "package": null
+      }
+    },
+    {
+      "path": "libtinfo.so.6.5",
+      "size": 228601,
+      "sha256": "11fbade1417f5016008d39cfd4be898c997b9b551d0d6502c466ffb1a8c72b59",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libtinfo.so.6",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "a59321fff1e2ecb242d2cb1b0b2a30ca26fd55c1",
+        "package": null
+      }
+    },
+    {
+      "path": "libudev.so.1",
+      "size": 280936,
+      "sha256": "6bef34587089dca40952d765e3cbed965a469e0549aa0da2fbac2ecba9ee1728",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "libcap.so.2"
+        ],
+        "soname": "libudev.so.1",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "1f96b14b576f25e89cc1b0ee8bd12b4a2e34ed85",
+        "package": {
+          "type": "deb",
+          "os": "Debian",
+          "name": "systemd",
+          "version": "257.7-1",
+          "architecture": "amd64",
+          "debugInfoUrl": "https://debuginfod.debian.net"
+        }
+      }
+    },
+    {
+      "path": "libunwind.so.8",
+      "size": 72088,
+      "sha256": "2da9fe641c4824df74830606e6e6b6642ed9fb530ed7a67c4aff54afa08dfa45",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "ld-linux-x86-64.so.2",
+          "libc.so.6",
+          "liblzma.so.5"
+        ],
+        "soname": "libunwind.so.8",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "c7ddbdf1b05ac0d98b1f8fdd329a342a0762f4f9",
+        "package": null
+      }
+    },
+    {
+      "path": "libvorbis.so.0",
+      "size": 192689,
+      "sha256": "65e1711a052c7d9d42ee36e5690da6f7b9b3f5f434bab21c14288868bc22482f",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6",
+          "libogg.so.0"
+        ],
+        "soname": "libvorbis.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "fdbf6a3820ffaabdb6014695241b5bfeffdf7563",
+        "package": null
+      }
+    },
+    {
+      "path": "libvorbisenc.so.2",
+      "size": 697681,
+      "sha256": "5ab4094e69e31c852106dc73f4882258dafc722a5dcbc6baa9e59352d7f7c134",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libvorbis.so.0"
+        ],
+        "soname": "libvorbisenc.so.2",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "f6203cbb2d0edda5385f2d9934b049a3968c31c4",
+        "package": null
+      }
+    },
+    {
+      "path": "libvorbisfile.so.3",
+      "size": 43393,
+      "sha256": "94d8e5aa11022874fc84abdd8fed5bd8cc2a58baac1019027b8e17250951577b",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libogg.so.0",
+          "libvorbis.so.0"
+        ],
+        "soname": "libvorbisfile.so.3",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "8f4d681a095a923c2a9c8090c77b879602720154",
+        "package": null
+      }
+    },
+    {
+      "path": "libwayland-client.so.0",
+      "size": 81729,
+      "sha256": "ee8327eca61bc9fe7fe455f32c27db458fdab141ba71f5c5038f2451ef365d39",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libffi.so.8"
+        ],
+        "soname": "libwayland-client.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "8ea5016742ee065f4475e275de9c984be621513c",
+        "package": null
+      }
+    },
+    {
+      "path": "libwayland-cursor.so.0",
+      "size": 39425,
+      "sha256": "4459518cb6860fef6505482209553641e1c5bf440bbd11b4ae55ce5e7d69089e",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libwayland-client.so.0"
+        ],
+        "soname": "libwayland-cursor.so.0",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "cb05ce6c79c93062235515c57fda9133bda3271e",
+        "package": null
+      }
+    },
+    {
+      "path": "libwayland-egl.so.1",
+      "size": 17489,
+      "sha256": "59e908c306b78fb47c257863bdbc4afae40a26071fd07d1fbd099c99abb8a581",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libwayland-egl.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "a9aafdc462c395f2e12690a8e4f5b5f6fd139d3a",
+        "package": null
+      }
+    },
+    {
+      "path": "libwebp.so.7",
+      "size": 531841,
+      "sha256": "09de6d730aafe3f5b666c6c3eed908fe37567d101d49780ed025caeb6c9f0541",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6",
+          "libsharpyuv.so.0"
+        ],
+        "soname": "libwebp.so.7",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "4f916078401de92f38cd34e375399dff267202d1",
+        "package": null
+      }
+    },
+    {
+      "path": "libwebpdemux.so.2",
+      "size": 26145,
+      "sha256": "85624906d690d617d23b6118d31f42d8496b9fc0d658c3d7cd333210628a7e8a",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libwebp.so.7"
+        ],
+        "soname": "libwebpdemux.so.2",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "938ee790d52e84fdb4b3d31481d7886ea431963d",
+        "package": null
+      }
+    },
+    {
+      "path": "libxcb.so.1",
+      "size": 195913,
+      "sha256": "351692d1ccbf7eca1fae4d083b0b233d1f0227e97dd8693cd103366e508dba8d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libXau.so.6",
+          "libXdmcp.so.6",
+          "libc.so.6"
+        ],
+        "soname": "libxcb.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "3b561e90927dc8405c71fb7788994eac92cee4cb",
+        "package": null
+      }
+    },
+    {
+      "path": "libxcvt.so.0",
+      "size": 14256,
+      "sha256": "1834222e4f1cef355e5114f6fead2961e9c6534d980427d23e305d2a4e5621cc",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libxcvt.so.0",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "22a2aa5a1c8cfa76ea971042c9417af187b3de8f",
+        "package": null
+      }
+    },
+    {
+      "path": "libxkbcommon.so.0",
+      "size": 301760,
+      "sha256": "9f26c41577e0e036cbf42352e85b13db6bce953fb730555b4fc7de5362dc93bb",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libxkbcommon.so.0",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "cba8f6cde436556730ca34874d72a76024052643",
+        "package": null
+      }
+    },
+    {
+      "path": "libxmp.so.4",
+      "size": 641024,
+      "sha256": "cb0d8b9681cfade70de120d4358a4a366932af8bdc259a4c6e95c8b653bbd88d",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6",
+          "libm.so.6"
+        ],
+        "soname": "libxmp.so.4",
+        "runpath": null,
+        "interpreter": null,
+        "build_id": "287a39be14ef09989adfb8c79e6914ed9b53bfee",
+        "package": null
+      }
+    },
+    {
+      "path": "libz.so.1",
+      "size": 130001,
+      "sha256": "5af77dc3c8f5cb19851df4bf39c8c06cdea5e07d6a42b6415c04918f5856e366",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libz.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "b6e5d9c258e911b2e478f8dedf22400e53225509",
+        "package": null
+      }
+    },
+    {
+      "path": "libz.so.1.3.1",
+      "size": 130001,
+      "sha256": "5af77dc3c8f5cb19851df4bf39c8c06cdea5e07d6a42b6415c04918f5856e366",
+      "provenance": "legacy-recovered; original distribution package not recorded",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libz.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "b6e5d9c258e911b2e478f8dedf22400e53225509",
+        "package": null
+      }
+    },
+    {
+      "path": "libzstd.so.1",
+      "size": 834393,
+      "sha256": "403da3429a8938f3b3d44149350123852ce3bcd0003a26cad025d00dfd1e5074",
+      "provenance": "legacy-recovered with embedded distribution package note",
+      "elf": {
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libc.so.6"
+        ],
+        "soname": "libzstd.so.1",
+        "runpath": "/the one/catalogue/python",
+        "interpreter": null,
+        "build_id": "73c89d37c4dbbb32cfb6ee91309754ba556cb9e2",
+        "package": {
+          "type": "deb",
+          "os": "Debian",
+          "name": "libzstd",
+          "version": "1.5.7+dfsg-1",
+          "architecture": "amd64",
+          "debugInfoUrl": "https://debuginfod.debian.net"
+        }
+      }
+    }
+  ],
+  "closure": {
+    "provided_filenames": [
+      "ld-linux-x86-64.so.2",
+      "libFLAC.so.14",
+      "libLerc.so.4",
+      "libSDL2-2.0.so.0",
+      "libSDL2_image-2.0.so.0",
+      "libSDL2_mixer-2.0.so.0",
+      "libSDL2_ttf-2.0.so.0",
+      "libX11-xcb.so.1",
+      "libX11.so.6",
+      "libXau.so.6",
+      "libXcursor.so.1",
+      "libXdmcp.so.6",
+      "libXext.so.6",
+      "libXfixes.so.3",
+      "libXi.so.6",
+      "libXrandr.so.2",
+      "libXrender.so.1",
+      "libXss.so.1",
+      "libasound.so.2",
+      "libasyncns.so.0",
+      "libatomic.so.1",
+      "libbrotlicommon.so.1",
+      "libbrotlidec.so.1",
+      "libbz2.so.1.0",
+      "libc.so.6",
+      "libcap.so.2",
+      "libcrypto.so.3",
+      "libdbus-1.so.3",
+      "libdecor-0.so.0",
+      "libdeflate.so.0",
+      "libdrm.so.2",
+      "libexpat.so.1",
+      "libffi.so.8",
+      "libffi.so.8.1.4",
+      "libfreetype.so.6",
+      "libgbm.so.1",
+      "libgcc_s.so.1",
+      "libglib-2.0.so.0",
+      "libgraphite2.so.3",
+      "libharfbuzz.so.0",
+      "libjbig.so.0",
+      "libjpeg.so.62",
+      "liblzma.so.5",
+      "libm.so.6",
+      "libmp3lame.so.0",
+      "libmpg123.so.0",
+      "libncursesw.so",
+      "libncursesw.so.6",
+      "libncursesw.so.6.5",
+      "libnettle.so.8",
+      "libogg.so.0",
+      "libopus.so.0",
+      "libopusfile.so.0",
+      "libpcap.so.1",
+      "libpcap.so.2",
+      "libpcre2-8.so.0",
+      "libpng16.so.16",
+      "libpulse.so.0",
+      "libpulsecommon-17.0.so",
+      "libreadline.so",
+      "libreadline.so.8",
+      "libreadline.so.8.2",
+      "libsamplerate.so.0",
+      "libselinux.so.1",
+      "libsharpyuv.so.0",
+      "libsndfile.so.1",
+      "libsqlite3.so.0",
+      "libssl.so.3",
+      "libstdc++.so.6",
+      "libsystemd.so.0",
+      "libtiff.so.6",
+      "libtinfo.so.6",
+      "libtinfo.so.6.5",
+      "libudev.so.1",
+      "libunwind.so.8",
+      "libvorbis.so.0",
+      "libvorbisenc.so.2",
+      "libvorbisfile.so.3",
+      "libwayland-client.so.0",
+      "libwayland-cursor.so.0",
+      "libwayland-egl.so.1",
+      "libwebp.so.7",
+      "libwebpdemux.so.2",
+      "libxcb.so.1",
+      "libxcvt.so.0",
+      "libxkbcommon.so.0",
+      "libxmp.so.4",
+      "libz.so.1",
+      "libz.so.1.3.1",
+      "libzstd.so.1"
+    ],
+    "needed_edges": 237,
+    "unresolved": [],
+    "supported_python_consumers": 59,
+    "supported_python_filenames": [
+      "ld-linux-x86-64.so.2",
+      "libbz2.so.1.0",
+      "libc.so.6",
+      "libcrypto.so.3",
+      "libffi.so.8",
+      "liblzma.so.5",
+      "libm.so.6",
+      "libncursesw.so.6",
+      "libreadline.so.8",
+      "libsqlite3.so.0",
+      "libssl.so.3",
+      "libtinfo.so.6",
+      "libz.so.1",
+      "libzstd.so.1"
+    ],
+    "supported_python_bytes": 14867956
+  },
+  "known_unknowns": [
+    "distribution package and version for most files",
+    "original pre-patchelf hashes for non-glibc libraries",
+    "the commands that added 49 files not named by copylibs.sh"
+  ]
+}

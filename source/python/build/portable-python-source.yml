@@ -1,0 +1,35 @@
+folders:
+  build: /tmp/t1os-python-source/build
+  destdir: "{build}"
+  dist: /tmp/t1os-python-source/dist
+  logs: "{build}/logs"
+  ppp-marker: /ppp-marker/{version}
+  sources: /tmp/t1os-python-source/cache
+
+ext: gz
+
+cpython-url: https://www.python.org/ftp/python/${version}/Python-${version}.tar.xz
+cpython-src-suffix: tar.xz
+cpython-modules: readline
+
+readline-version: "8.2.13"
+readline-url: https://ftp.gnu.org/gnu/readline/readline-${version}.tar.gz
+
+ncurses-version: "6.5"
+ncurses-url: https://ftp.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz
+
+cpython-configure:
+  - --enable-optimizations
+  - --with-lto
+  - --with-ensurepip=upgrade
+  - --with-system-ffi
+  - --disable-test-modules
+  - --with-dbmliborder=gdbm:bdb:ndbm
+
+env:
+  LC_ALL: C.UTF-8
+  TZ: UTC
+  SOURCE_DATE_EPOCH: "1752986362"
+  PYTHONHASHSEED: "0"
+  LIBREADLINE_CFLAGS: "-I/tmp/t1os-python-source/build/deps/include"
+  LIBREADLINE_LIBS: "-L/tmp/t1os-python-source/build/deps/lib -Wl,-Bstatic -lreadline -lncursesw -Wl,-Bdynamic"

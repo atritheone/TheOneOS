@@ -1,0 +1,4 @@
+The media diagnostic fixtures are generated deterministically by build.py.
+
+sample audio video.avi contains 64x36 uncompressed video at 10 fps and stereo 48 kHz PCM audio.
+sample video only.avi contains the same video stream without audio.

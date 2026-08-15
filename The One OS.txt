@@ -1,0 +1,22 @@
+
+
+## todo
+
+
+add native rar compression and extraction.
+
+fix shutdown and restart hangs.
+
+add expanse.
+
+add environment variables to settings.
+
+lock the identity folder.
+
+create brick executable language - bpr.
+
+full python with pip and venv.
+
+create t1os updater.
+
+open source anti-virus.

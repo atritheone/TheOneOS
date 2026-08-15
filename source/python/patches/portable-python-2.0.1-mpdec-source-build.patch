@@ -1,0 +1,14 @@
+--- a/portable_python/external/xcpython.py
++++ b/portable_python/external/xcpython.py
+@@ -488,7 +488,10 @@ class Mpdec(ModuleBuilder):
+     Prevent falling back to bundled libmpdec (deprecated and scheduled for removal in Python 3.16)
+     """
+ 
+-    m_debian = "!libmpdec-dev"
++    # A selected mpdec module is built from the configured, hash-locked source.
++    # Requiring a host libmpdec-dev package here incorrectly rejects that path
++    # before ModuleBuilder._do_linux_compile() can run.
++    m_debian = None
+     m_telltale = "{include}/mpdecimal.h"
+ 
+     xenv_CFLAGS = "-fPIC"

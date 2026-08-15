@@ -1,0 +1,1809 @@
+diff --git a/src/ntfsck.c b/src/ntfsck.c
+index a6712bdfb1c12c28f529c2d747396b3f9d7dc4f2..4cf13b4b9fb5301e395de5c13dc395425d7f5188 100644
+--- a/src/ntfsck.c
++++ b/src/ntfsck.c
+@@ -24,11 +24,15 @@
+ #ifdef HAVE_FCNTL_H
+ #include <fcntl.h>
+ #endif
++#ifdef HAVE_UNISTD_H
++#include <unistd.h>
++#endif
+ 
+ #include <layout.h>
+ #include <bitmap.h>
+ #include <endians.h>
+ #include <bootsect.h>
++#include <logfile.h>
+ #include <misc.h>
+ #include <getopt.h>
+ 
+@@ -39,15 +43,11 @@
+ #include "lcnalloc.h"
+ #include "fsck.h"
+ 
+-#define RETURN_FS_NO_ERRORS (0)
+-#define RETURN_FS_ERRORS_CORRECTED (1)
+-#define RETURN_SYSTEM_NEEDS_REBOOT (2)
+-#define RETURN_FS_ERRORS_LEFT_UNCORRECTED (4)
+-#define RETURN_OPERATIONAL_ERROR (8)
+-#define RETURN_USAGE_OR_SYNTAX_ERROR (16)
+-#define RETURN_CANCELLED_BY_USER (32)
+-#define RETURN_FS_NOT_SUPPORT (64)	/* Not defined in fsck man page */
+-#define RETURN_SHARED_LIBRARY_ERROR (128)
++#define T1OS_EXIT_CLEAN		0
++#define T1OS_EXIT_UNSAFE	2
++#define T1OS_EXIT_IO		3
++#define T1OS_EXIT_WRONG_ROOT	4
++#define T1OS_EXIT_INTERNAL	5
+ 
+ #define ROOTHEALTH_VERSION "0.2.0"
+ 
+@@ -116,6 +116,7 @@
+ static struct {
+ 	int verbose;
+ 	ntfs_mount_flags flags;
++	BOOL check;
+ 	BOOL require_t1os_root;
+ 	const char *report_path;
+ } option;
+@@ -158,6 +159,11 @@ u64 orphan_cnt;
+ 
+ static BOOL t1os_identity_checked;
+ static BOOL t1os_identity_valid;
++static BOOL t1os_backup_boot_checked;
++static BOOL t1os_backup_boot_valid;
++static BOOL t1os_logfile_checked;
++static BOOL t1os_logfile_clean;
++static BOOL t1os_dirty_checked;
+ /**
+  * usage
+  */
+@@ -166,21 +172,16 @@ static void usage(int error)
+ {
+ 	ntfs_log_info("%s v%s\n\n"
+ 		"Usage: %s [options] device\n"
+-		"-a, --repair-auto	auto-repair. no questions\n"
+-		"-p,			auto-repair. no questions\n"
+-		"-C,			just check volume dirty\n"
+-		"-n, --repair-no		just check the consistency and no fix\n"
++		"-c, --check		check without modifying the volume (required)\n"
++		"-T, --require-t1os-root	require the T1OS root identity\n"
++		"-J, --report PATH	write a JSON result report\n"
+ 		"-q, --quiet		No progress bar\n"
+-		"-r, --repair		Repair interactively\n"
+-		"-y, --repair-yes		all yes about all question\n"
+ 		"-v, --verbose		verbose\n"
+ 		"-V, --version		version\n\n"
+-		"NOTE: -a/-p, -C, -n, -r, -y options are mutually exclusive with each other options\n\n"
+-		"For example: %s /dev/sda1\n"
+-		"For example: %s -C /dev/sda1\n"
+-		"For example: %s -a /dev/sda1\n\n",
+-		NTFS_PROGS, VERSION, NTFS_PROGS, NTFS_PROGS, NTFS_PROGS, NTFS_PROGS);
+-	exit(error ? RETURN_USAGE_OR_SYNTAX_ERROR : 0);
++		"For example: %s --check --require-t1os-root "
++		"--report /run/roothealth.json /dev/sda1\n\n",
++		NTFS_PROGS, ROOTHEALTH_VERSION, NTFS_PROGS, NTFS_PROGS);
++	exit(error ? T1OS_EXIT_INTERNAL : T1OS_EXIT_CLEAN);
+ }
+ 
+ /**
+@@ -195,15 +196,13 @@ static void version(void)
+ }
+ 
+ static const struct option opts[] = {
+-	{"repair-auto",		no_argument,		NULL,	'a' },
+-	{"repair-no",		no_argument,		NULL,	'n' },
+-	{"repair",		no_argument,		NULL,	'r' },
+-	{"repair-yes",		no_argument,		NULL,	'y' },
++	{"check",		no_argument,		NULL,	'c' },
+ 	{"quiet",		no_argument,		NULL,	'q' },
+ 	{"require-t1os-root",	no_argument,		NULL,	'T' },
+ 	{"report",		required_argument,	NULL,	'J' },
+ 	{"verbose",		no_argument,		NULL,	'v' },
+ 	{"version",		no_argument,		NULL,	'V' },
++	{"help",		no_argument,		NULL,	'h' },
+ 	{NULL,			0,			NULL,	 0  }
+ };
+ 
+@@ -227,7 +226,7 @@ static int ntfsck_check_attr_list(ntfs_inode *ni);
+ static inline BOOL ntfsck_opened_ni_vol(s64 mft_num);
+ static ntfs_inode *ntfsck_get_opened_ni_vol(ntfs_volume *vol, s64 mft_num);
+ static int ntfsck_check_inode_non_resident(ntfs_inode *ni, int set_bit);
+-static void ntfsck_check_mft_records(ntfs_volume *vol);
++static int ntfsck_check_mft_records(ntfs_volume *vol);
+ static void ntfsck_check_mft_record_unused(ntfs_volume *vol, s64 mft_num);
+ static void ntfsck_delete_orphaned_mft(ntfs_volume *vol, u64 mft_no);
+ static int ntfsck_update_runlist(ntfs_attr *na, s64 new_size, ntfs_attr_search_ctx *actx);
+@@ -270,6 +269,17 @@ struct t1os_required_path {
+ 	BOOL directory;
+ };
+ 
++static int t1os_lookup_status(void)
++{
++	if (errno == ENOENT)
++		return STATUS_NOT_FOUND;
++	if (errno == ENOMEM)
++		return -ENOMEM;
++	if (errno == EIO || errno == ENXIO || errno == ENODEV)
++		return -EIO;
++	return -EINVAL;
++}
++
+ static int t1os_check_required_path(ntfs_volume *vol,
+ 		const struct t1os_required_path *required)
+ {
+@@ -280,16 +290,18 @@ static int t1os_check_required_path(ntfs_volume *vol,
+ 	if (!ni) {
+ 		ntfs_log_error("Required T1OS path is missing or unreadable: %s\n",
+ 				required->path);
+-		return STATUS_ERROR;
++		return t1os_lookup_status();
+ 	}
+ 	is_directory = !!(ni->mrec->flags & MFT_RECORD_IS_DIRECTORY);
+ 	if (is_directory != required->directory) {
+ 		ntfs_log_error("Required T1OS path has the wrong type: %s\n",
+ 				required->path);
+-		ntfsck_close_inode(ni);
+-		return STATUS_ERROR;
++		if (ntfsck_close_inode(ni))
++			return -EIO;
++		return STATUS_NOT_FOUND;
+ 	}
+-	ntfsck_close_inode(ni);
++	if (ntfsck_close_inode(ni))
++		return -EIO;
+ 	return STATUS_OK;
+ }
+ 
+@@ -301,13 +313,14 @@ static int t1os_check_forbidden_path(ntfs_volume *vol, const char *path)
+ 	ni = ntfs_pathname_to_inode(vol, NULL, path);
+ 	if (ni) {
+ 		ntfs_log_error("Forbidden Linux root path is present: %s\n", path);
+-		ntfsck_close_inode(ni);
+-		return STATUS_ERROR;
++		if (ntfsck_close_inode(ni))
++			return -EIO;
++		return STATUS_NOT_FOUND;
+ 	}
+ 	if (errno != ENOENT) {
+ 		ntfs_log_error("Could not prove that forbidden root path is absent: %s\n",
+ 				path);
+-		return STATUS_ERROR;
++		return t1os_lookup_status();
+ 	}
+ 	return STATUS_OK;
+ }
+@@ -328,50 +341,162 @@ static int t1os_check_root_identity(ntfs_volume *vol)
+ 		"proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
+ 	};
+ 	size_t i;
++	int status;
+ 
+ 	t1os_identity_checked = TRUE;
+-	for (i = 0; i < sizeof(required) / sizeof(required[0]); i++)
+-		if (t1os_check_required_path(vol, &required[i]))
+-			return STATUS_ERROR;
+-	for (i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++)
+-		if (t1os_check_forbidden_path(vol, forbidden[i]))
+-			return STATUS_ERROR;
++	for (i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
++		status = t1os_check_required_path(vol, &required[i]);
++		if (status)
++			return status;
++	}
++	for (i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++) {
++		status = t1os_check_forbidden_path(vol, forbidden[i]);
++		if (status)
++			return status;
++	}
+ 	t1os_identity_valid = TRUE;
+ 	ntfs_log_info("Verified the raw T1OS root identity.\n");
+ 	return STATUS_OK;
+ }
+ 
+-static void t1os_write_report(int ret, BOOL dirty)
++static int t1os_status_to_exit(int status)
++{
++	if (status == -ENOMEM)
++		return T1OS_EXIT_INTERNAL;
++	if (status == -EIO)
++		return T1OS_EXIT_IO;
++	return T1OS_EXIT_UNSAFE;
++}
++
++static int t1os_failure_status(int status)
++{
++	if (status == -ENOMEM || errno == ENOMEM)
++		return -ENOMEM;
++	if (status == -EIO || errno == EIO || errno == ENXIO || errno == ENODEV)
++		return -EIO;
++	return status == STATUS_OK ? STATUS_ERROR : status;
++}
++
++static int t1os_merge_status(int current, int candidate)
++{
++	if (current == -ENOMEM || candidate == -ENOMEM)
++		return -ENOMEM;
++	if (current == -EIO || candidate == -EIO)
++		return -EIO;
++	return current == STATUS_OK ? candidate : current;
++}
++
++static int t1os_check_logfile_state(ntfs_volume *vol)
++{
++	ntfs_inode *ni;
++	ntfs_attr *na;
++	RESTART_PAGE_HEADER *rp = NULL;
++	int ret = STATUS_ERROR;
++	int saved_errno;
++
++	t1os_logfile_checked = TRUE;
++	errno = 0;
++	ni = ntfs_inode_open(vol, FILE_LogFile);
++	if (!ni) {
++		if (!errno)
++			errno = EIO;
++		return -errno;
++	}
++	na = ntfs_attr_open(ni, AT_DATA, AT_UNNAMED, 0);
++	if (!na) {
++		if (!errno)
++			errno = EIO;
++		ret = -errno;
++		goto out;
++	}
++	errno = 0;
++	if (!ntfs_check_logfile(na, &rp)) {
++		if (errno == ENOMEM)
++			ret = -ENOMEM;
++		else if (errno == EIO)
++			ret = -EIO;
++		else
++			ret = STATUS_ERROR;
++		goto close_attr;
++	}
++	t1os_logfile_clean = ntfs_is_logfile_clean(na, rp);
++	ret = t1os_logfile_clean ? STATUS_OK : STATUS_NOT_FOUND;
++
++close_attr:
++	free(rp);
++	ntfs_attr_close(na);
++out:
++	saved_errno = errno;
++	if (ntfs_inode_close(ni) && ret == STATUS_OK) {
++		ret = -EIO;
++		saved_errno = EIO;
++	}
++	errno = saved_errno;
++	return ret;
++}
++
++static const char *t1os_json_bool(BOOL checked, BOOL value)
++{
++	if (!checked)
++		return "null";
++	return value ? "true" : "false";
++}
++
++static int t1os_write_report(int ret, BOOL dirty)
+ {
+ 	FILE *report;
+ 	const char *result;
++	int report_fd;
++	int report_errno = 0;
++	int failed = 0;
+ 
+ 	if (!option.report_path)
+-		return;
+-	if (ret == RETURN_FS_NO_ERRORS)
++		return STATUS_OK;
++	if (ret == T1OS_EXIT_CLEAN)
+ 		result = "clean";
+-	else if (ret == RETURN_FS_ERRORS_CORRECTED)
+-		result = "repaired";
+-	else if (ret == RETURN_FS_ERRORS_LEFT_UNCORRECTED)
+-		result = "errors";
++	else if (ret == T1OS_EXIT_UNSAFE)
++		result = "unsafe";
++	else if (ret == T1OS_EXIT_IO)
++		result = "io-error";
++	else if (ret == T1OS_EXIT_WRONG_ROOT)
++		result = "wrong-root";
+ 	else
+-		result = "operational-error";
+-	report = fopen(option.report_path, "w");
+-	if (!report) {
++		result = "internal-error";
++	report_fd = open(option.report_path,
++		O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
++	if (report_fd < 0) {
+ 		ntfs_log_perror("Could not create T1OS NTFS report");
+-		return;
++		return STATUS_ERROR;
+ 	}
+-	fprintf(report,
++	report = fdopen(report_fd, "w");
++	if (!report) {
++		report_errno = errno ? errno : EIO;
++
++		close(report_fd);
++		if (unlink(option.report_path))
++			ntfs_log_perror("Could not remove incomplete T1OS NTFS report");
++		errno = report_errno;
++		ntfs_log_perror("Could not open T1OS NTFS report stream");
++		return STATUS_ERROR;
++	}
++	errno = 0;
++	if (fprintf(report,
+ 		"{\n"
+-		"  \"format\": 1,\n"
++		"  \"format\": 2,\n"
+ 		"  \"checker\": \"roothealth\",\n"
+ 		"  \"checker_version\": \"%s\",\n"
+ 		"  \"engine\": \"ntfsprogs-plus\",\n"
+ 		"  \"engine_version\": \"%s\",\n"
+ 		"  \"mode\": \"check-only\",\n"
++		"  \"read_only\": true,\n"
+ 		"  \"t1os_identity_required\": %s,\n"
+ 		"  \"t1os_identity_checked\": %s,\n"
+ 		"  \"t1os_identity_valid\": %s,\n"
++		"  \"backup_boot_checked\": %s,\n"
++		"  \"backup_boot_valid\": %s,\n"
++		"  \"logfile_checked\": %s,\n"
++		"  \"logfile_clean\": %s,\n"
++		"  \"dirty_checked\": %s,\n"
+ 		"  \"dirty\": %s,\n"
+ 		"  \"errors\": %d,\n"
+ 		"  \"fixes\": %d,\n"
+@@ -382,10 +507,41 @@ static void t1os_write_report(int ret, BOOL dirty)
+ 		ROOTHEALTH_VERSION, VERSION,
+ 		option.require_t1os_root ? "true" : "false",
+ 		t1os_identity_checked ? "true" : "false",
+-		t1os_identity_valid ? "true" : "false",
+-		dirty ? "true" : "false", fsck_errors, fsck_fixes, result, ret);
+-	if (fclose(report))
++		t1os_json_bool(t1os_identity_checked, t1os_identity_valid),
++		t1os_backup_boot_checked ? "true" : "false",
++		t1os_json_bool(t1os_backup_boot_checked, t1os_backup_boot_valid),
++		t1os_logfile_checked ? "true" : "false",
++		t1os_json_bool(t1os_logfile_checked, t1os_logfile_clean),
++		t1os_dirty_checked ? "true" : "false",
++		t1os_json_bool(t1os_dirty_checked, dirty),
++		fsck_errors, fsck_fixes, result, ret) < 0) {
++		failed = 1;
++		report_errno = errno ? errno : EIO;
++	}
++	errno = 0;
++	if (fflush(report)) {
++		failed = 1;
++		if (!report_errno)
++			report_errno = errno ? errno : EIO;
++	}
++	if (ferror(report)) {
++		failed = 1;
++		if (!report_errno)
++			report_errno = errno ? errno : EIO;
++	}
++	errno = 0;
++	if (fclose(report)) {
++		failed = 1;
++		if (!report_errno)
++			report_errno = errno ? errno : EIO;
++	}
++	if (failed) {
++		if (unlink(option.report_path))
++			ntfs_log_perror("Could not remove incomplete T1OS NTFS report");
++		errno = report_errno ? report_errno : EIO;
+ 		ntfs_log_perror("Could not finish T1OS NTFS report");
++	}
++	return failed ? STATUS_ERROR : STATUS_OK;
+ }
+ 
+ static int ntfsck_close_inode_in_dir(ntfs_inode *ni, ntfs_inode *dir_ni)
+@@ -1353,7 +1509,7 @@ static int ntfsck_check_if_extent_mft_record(ntfs_volume *vol, s64 mft_num)
+ 	if (ntfs_attr_pread(vol->mft_na, pos, count, mrec_temp_buf) != count) {
+ 		ntfs_log_perror("Couldn't read $MFT record %lld",
+ 				(long long)mft_num);
+-		return STATUS_ERROR;
++		return -EIO;
+ 	}
+ 
+ 	base_mft = MREF_LE(mrec_temp_buf->base_mft_record);
+@@ -1398,57 +1554,49 @@ static void ntfsck_check_mft_record_unused(ntfs_volume *vol, s64 mft_num)
+ 	}
+ }
+ 
+-static void ntfsck_verify_mft_record(ntfs_volume *vol, s64 mft_num)
++static int ntfsck_verify_mft_record(ntfs_volume *vol, s64 mft_num)
+ {
+ 	ntfs_inode *ni = NULL;
+ 	struct orphan_mft *of;
+ 	int is_used;
+ 	ntfs_attr_search_ctx *ctx = NULL;
+-	problem_context_t pctx = {0, };
+-
+-	pctx.inum = mft_num;
+-
+ 	is_used = check_mftrec_in_use(vol, mft_num, 0);
+ 	if (is_used < 0) {
+ 		ntfs_log_error("Error getting bit value for record %"PRId64".\n",
+ 				mft_num);
+-		return;
++		return -EIO;
+ 	} else if (!is_used) {
+ 		if (mft_num < FILE_Extend) {
+-			ntfs_log_error("Record(%"PRId64") unused. Fixing or fail about system files.\n",
++			ntfs_log_error("Required record(%"PRId64") is unused.\n",
+ 					mft_num);
+-			return;
++			return STATUS_ERROR;
+ 		}
+-		return;
++		return STATUS_OK;
+ 	}
+ 
+ 	ni = ntfsck_open_inode(vol, mft_num);
+ 	if (!ni) {
++		int extent_status;
++
+ 		/* check this mft is extend mft or not */
+-		if (!ntfsck_check_if_extent_mft_record(vol, mft_num)) {
++		extent_status = ntfsck_check_if_extent_mft_record(vol, mft_num);
++		if (!extent_status) {
+ 			/* extent mft */
+-			return;
++			return STATUS_OK;
+ 		}
++		if (extent_status == -EIO)
++			return -EIO;
+ 
+-		if (ntfs_fix_problem(vol, PR_ORPHANED_MFT_OPEN_FAILURE, &pctx)) {
+-			if (ntfs_bitmap_clear_bit(vol->mftbmp_na, mft_num)) {
+-				ntfs_log_error("ntfs_bitmap_clear_bit failed, errno : %d\n",
+-						errno);
+-				return;
+-			}
+-			ntfsck_check_mft_record_unused(vol, mft_num);
+-			ntfs_fsck_mftbmp_clear(vol, mft_num);
+-			check_mftrec_in_use(vol, mft_num, 1);
+-			clear_mft_cnt++;
+-		}
+-		return;
++		ntfs_log_error("Could not validate orphan candidate record %"PRId64".\n",
++				mft_num);
++		return STATUS_ERROR;
+ 	}
+ 
+ 	ctx = ntfs_attr_get_search_ctx(ni, NULL);
+ 	if (!ctx) {
+ 		ntfs_log_error("Failed to allocate attribute context\n");
+ 		ntfsck_close_inode(ni);
+-		return;
++		return errno == ENOMEM ? -ENOMEM : STATUS_ERROR;
+ 	}
+ 
+ 	if (ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0,
+@@ -1465,6 +1613,8 @@ static void ntfsck_verify_mft_record(ntfs_volume *vol, s64 mft_num)
+ 		if (ntfs_inode_attach_all_extents(ni))
+ 			goto err_check_inode;
+ 	}
++	if (ntfsck_check_inode_non_resident(ni, 1))
++		goto err_check_inode;
+ 
+ 	if (ctx) {
+ 		ntfs_attr_put_search_ctx(ctx);
+@@ -1485,7 +1635,8 @@ static void ntfsck_verify_mft_record(ntfs_volume *vol, s64 mft_num)
+ 	of = (struct orphan_mft *)calloc(1, sizeof(struct orphan_mft));
+ 	if (!of) {
+ 		ntfs_log_error("orphan_mft malloc failed");
+-		return;
++		ntfsck_close_inode(ni);
++		return -ENOMEM;
+ 	}
+ 
+ 	of->mft_no = mft_num;
+@@ -1493,20 +1644,15 @@ static void ntfsck_verify_mft_record(ntfs_volume *vol, s64 mft_num)
+ 	orphan_cnt++;
+ 
+ 	ntfs_log_debug("close inode (%"PRIu64")\n", ni->mft_no);
+-	ntfsck_close_inode(ni);
+-	return;
++	if (ntfsck_close_inode(ni))
++		return -EIO;
++	return STATUS_OK;
+ 
+ err_check_inode:
+ 	ntfs_attr_put_search_ctx(ctx);
+ 	ntfsck_close_inode(ni);
+ 
+-	if (ntfs_fix_problem(vol, PR_ORPHANED_MFT_CHECK_FAILURE, &pctx))
+-		ntfsck_check_mft_record_unused(vol, mft_num);
+-
+-	ntfs_fsck_mftbmp_clear(vol, mft_num);
+-	check_mftrec_in_use(vol, mft_num, 1);
+-	clear_mft_cnt++;
+-	return;
++	return STATUS_ERROR;
+ }
+ 
+ #if DEBUG
+@@ -3396,17 +3542,11 @@ static int ntfsck_set_index_bitmap(ntfs_inode *ni, ntfs_index_context *ictx,
+ static int ntfsck_check_index_bitmap(ntfs_inode *ni, ntfs_attr *bm_na)
+ {
+ 	s64 ibm_size = 0;
+-	s64 wcnt = 0;
+ 	u8 *ni_ibm = NULL;	/* for index bitmap reading from disk: $BITMAP */
+-	ntfs_volume *vol;
+-	problem_context_t pctx = {0, };
+ 
+ 	if (!ni || !ni->fsck_ibm)
+ 		return STATUS_ERROR;
+-
+-	vol = ni->vol;
+-
+-	ntfs_init_problem_ctx(&pctx, ni, bm_na, NULL, NULL, ni->mrec, NULL, NULL);
++	(void)bm_na;
+ 
+ 	/* read index bitmap from disk */
+ 	ni_ibm = ntfs_attr_readall(ni, AT_BITMAP, NTFS_INDEX_I30, 4, &ibm_size);
+@@ -3421,14 +3561,6 @@ static int ntfsck_check_index_bitmap(ntfs_inode *ni, ntfs_attr *bm_na)
+ 		 * it could allocate cluster in ntfs_attr_pwrite() */
+ 		ntfs_log_error("\nBitmap changed during check_inodes\n");
+ 		fsck_err_found();
+-		if (ntfs_fix_problem(vol, PR_IDX_BITMAP_SIZE_MISMATCH, &pctx)) {
+-			wcnt = ntfs_attr_pwrite(bm_na, 0, ni->fsck_ibm_size, ni->fsck_ibm);
+-			if (wcnt == ni->fsck_ibm_size)
+-				fsck_err_fixed();
+-			else
+-				ntfs_log_error("Can't write $BITMAP(%"PRId64") "
+-						"of inode(%"PRIu64")\n", wcnt, ni->mft_no);
+-		}
+ 		goto out;
+ 	}
+ 
+@@ -3449,14 +3581,6 @@ static int ntfsck_check_index_bitmap(ntfs_inode *ni, ntfs_attr *bm_na)
+ 		}
+ #endif
+ 		fsck_err_found();
+-		if (ntfs_fix_problem(vol, PR_IDX_BITMAP_MISMATCH, &pctx)) {
+-			wcnt = ntfs_attr_pwrite(bm_na, 0, ibm_size, ni->fsck_ibm);
+-			if (wcnt == ibm_size)
+-				fsck_err_fixed();
+-			else
+-				ntfs_log_error("Can't write $BITMAP(%"PRId64") "
+-						"of inode(%"PRIu64")\n", wcnt, ni->mft_no);
+-		}
+ 	}
+ 
+ out:
+@@ -3465,7 +3589,7 @@ out:
+ 	return STATUS_OK;
+ }
+ 
+-static void ntfsck_validate_index_blocks(ntfs_volume *vol,
++static int ntfsck_validate_index_blocks(ntfs_volume *vol,
+ 		ntfs_index_context *ictx)
+ {
+ 	ntfs_attr *bmp_na = NULL;
+@@ -3481,33 +3605,36 @@ static void ntfsck_validate_index_blocks(ntfs_volume *vol,
+ 	u32 vcn_per_ib;
+ 	VCN max_vcn;
+ 	int ret = STATUS_OK;
+-	problem_context_t pctx = {0, };
+ 
+ 	ictx->ia_na = ntfs_attr_open(ni, AT_INDEX_ALLOCATION,
+ 			ictx->name, ictx->name_len);
+ 	if (!ictx->ia_na)
+-		return;
++		return errno == ENOENT ? STATUS_OK : STATUS_ERROR;
+ 
+ 	bmp_na = ntfs_attr_open(ictx->ni, AT_BITMAP, ictx->name, ictx->name_len);
+ 	if (!bmp_na) {
+ 		ntfs_log_error("Failed to open bitmap\n");
++		ret = STATUS_ERROR;
+ 		goto out;
+ 	}
+ 
+ 	bmp_buf = malloc(bmp_na->data_size);
+ 	if (!bmp_buf) {
+ 		ntfs_log_error("Failed to allocate bitmap buffer\n");
++		ret = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+ 	if (ntfs_attr_pread(bmp_na, 0, bmp_na->data_size, bmp_buf) != bmp_na->data_size) {
+ 		ntfs_log_perror("Failed to read $BITMAP");
++		ret = -EIO;
+ 		goto out;
+ 	}
+ 
+ 	ir_buf = malloc(le32_to_cpu(ir->index.index_length));
+ 	if (!ir_buf) {
+ 		ntfs_log_error("Failed to allocate ir buffer\n");
++		ret = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+@@ -3561,6 +3688,7 @@ static void ntfsck_validate_index_blocks(ntfs_volume *vol,
+ 	ia_buf = ntfs_malloc(ictx->block_size);
+ 	if (!ia_buf) {
+ 		ntfs_log_error("Failed to allocate ia buffer\n");
++		ret = -ENOMEM;
+ 		goto out;
+ 	}
+ 
+@@ -3587,7 +3715,8 @@ static void ntfsck_validate_index_blocks(ntfs_volume *vol,
+ 					ictx->block_size, ia_buf) != 1) {
+ 			ntfs_log_error("Failed to read index blocks of inode(%"PRIu64"), %d",
+ 					ictx->ni->mft_no, errno);
+-			goto initialize_index;
++			ret = -EIO;
++			goto out;
+ 		}
+ 
+ 		if (ntfs_index_block_inconsistent(vol, ictx->ia_na,
+@@ -3671,28 +3800,11 @@ out:
+ 		ictx->ia_na = NULL;
+ 	}
+ 
+-	return;
++	return ret;
+ 
+ initialize_index:
+-
+-	ntfs_init_problem_ctx(&pctx, ni, NULL, NULL, NULL, ni->mrec, NULL, NULL);
+ 	fsck_err_found();
+-	if (!ntfs_fix_problem(vol, PR_DIR_IDX_INITIALIZE, &pctx))
+-		goto out;
+-
+-	if (ni->mft_no == FILE_root)
+-		ret = ntfsck_initiaiize_root_index(ni, ictx);
+-	else
+-		ret = ntfsck_initialize_index_attr(ni);
+-
+-	if (ret)
+-		ntfs_log_perror("Failed to initialize index attributes of inode(%"PRIu64")\n",
+-				ni->mft_no);
+-	else
+-		fsck_err_fixed();
+-
+-	ntfs_log_info("inode(%"PRIu64") index is initialized\n", ni->mft_no);
+-
++	ret = STATUS_ERROR;
+ 	goto out;
+ }
+ 
+@@ -3835,40 +3947,67 @@ err_out:
+ 	free(ucs_name);
+ }
+ 
+-static ntfs_inode *ntfsck_check_root_inode(ntfs_volume *vol)
++static ntfs_inode *ntfsck_check_root_inode(ntfs_volume *vol, int *status)
+ {
+ 	ntfs_inode *ni;
++	int ret;
+ 
++	ret = STATUS_ERROR;
++	errno = 0;
+ 	ni = ntfsck_open_inode(vol, FILE_root);
+ 	if (!ni) {
+ 		ntfs_log_error("Couldn't open the root directory.\n");
++		ret = t1os_failure_status(STATUS_ERROR);
+ 		goto err_out;
+ 	}
+ 
+ 	if (ni->attr_list) {
+-		if (ntfsck_check_attr_list(ni))
++		errno = 0;
++		ret = ntfsck_check_attr_list(ni);
++		if (ret) {
++			ret = t1os_failure_status(ret);
+ 			goto err_out;
++		}
+ 
+-		if (ntfs_inode_attach_all_extents(ni))
++		errno = 0;
++		ret = ntfs_inode_attach_all_extents(ni);
++		if (ret) {
++			ret = t1os_failure_status(STATUS_ERROR);
+ 			goto err_out;
++		}
+ 	}
+ 
+-	if (ntfsck_check_inode_non_resident(ni, 1)) {
++	errno = 0;
++	ret = ntfsck_check_inode_non_resident(ni, 1);
++	if (ret) {
+ 		ntfs_log_error("Failed to check non resident attribute of root directory.\n");
+-		exit(STATUS_ERROR);
++		ret = t1os_failure_status(ret);
++		goto err_out;
+ 	}
+ 
+-	if (ntfsck_check_directory(ni)) {
++	errno = 0;
++	ret = ntfsck_check_directory(ni);
++	if (ret) {
+ 		ntfs_log_error("Failed to check root directory.\n");
+-		exit(STATUS_ERROR);
++		ret = t1os_failure_status(ret);
++		goto err_out;
+ 	}
+ 
+-	ntfsck_set_mft_record_bitmap(ni, FALSE);
++	errno = 0;
++	ret = ntfsck_set_mft_record_bitmap(ni, FALSE);
++	if (ret) {
++		ret = t1os_failure_status(ret);
++		goto err_out;
++	}
++	if (status)
++		*status = STATUS_OK;
+ 	return ni;
+ 
+ err_out:
+-	if (ni)
+-		ntfsck_close_inode(ni);
++	if (ni && ntfsck_close_inode(ni))
++		ret = t1os_merge_status(ret, -EIO);
++	if (status)
++		*status = ret;
+ 	return NULL;
+ }
+ 
+@@ -3881,12 +4020,13 @@ static int ntfsck_scan_index_entries_btree(ntfs_volume *vol)
+ 	ntfs_attr_search_ctx *ctx = NULL;
+ 	ntfs_index_context *ictx = NULL;
+ 	ntfs_attr *bm_na = NULL;
+-	int ret;
++	int ret = STATUS_OK;
++	int result = STATUS_OK;
+ 
+ 	dir = (struct dir *)calloc(1, sizeof(struct dir));
+ 	if (!dir) {
+ 		ntfs_log_error("Failed to allocate for subdir.\n");
+-		return -1;
++		return -ENOMEM;
+ 	}
+ 
+ 	dir_ni = ntfsck_open_inode(vol, FILE_root);
+@@ -3904,6 +4044,7 @@ static int ntfsck_scan_index_entries_btree(ntfs_volume *vol)
+ 
+ 	while (!ntfs_list_empty(&ntfs_dirs_list)) {
+ 
++		ret = STATUS_OK;
+ 		dir = ntfs_list_entry(ntfs_dirs_list.next, struct dir, list);
+ 		dir_ni = ntfsck_open_inode(vol, dir->mft_no);
+ 		if (!dir_ni) {
+@@ -3953,7 +4094,9 @@ static int ntfsck_scan_index_entries_btree(ntfs_volume *vol)
+ 		else
+ 			ictx->vcn_size_bits = NTFS_BLOCK_SIZE_BITS;
+ 
+-		ntfsck_validate_index_blocks(vol, ictx);
++		ret = ntfsck_validate_index_blocks(vol, ictx);
++		if (ret)
++			goto err_continue;
+ 
+ 		/*
+ 		 * Re-lookup index root attribute.
+@@ -3999,6 +4142,7 @@ static int ntfsck_scan_index_entries_btree(ntfs_volume *vol)
+ 				dir_ni->fsck_ibm = ntfs_calloc(bm_na->data_size);
+ 				if (!dir_ni->fsck_ibm) {
+ 					ntfs_log_perror("Failed to allocate fsck_ibm memory\n");
++					ret = -ENOMEM;
+ 					goto err_continue;
+ 				}
+ 				dir_ni->fsck_ibm_size = bm_na->data_size;
+@@ -4051,9 +4195,14 @@ check_index:
+ 			}
+ 
+ 			/* check bitmap */
+-			if (bm_na && ictx->ib)
+-				ntfsck_set_index_bitmap(dir_ni, ictx, bm_na);
++			if (bm_na && ictx->ib &&
++					ntfsck_set_index_bitmap(dir_ni, ictx, bm_na)) {
++				ret = errno == ENOMEM ? -ENOMEM : STATUS_ERROR;
++				goto err_continue;
++			}
+ 		}
++		if (ret < 0)
++			goto err_continue;
+ 
+ next_dir:
+ 		/* compare index allocation bitmap between disk & fsck */
+@@ -4061,8 +4210,26 @@ next_dir:
+ 			if (ntfsck_check_index_bitmap(dir_ni, bm_na))
+ 				goto err_continue;
+ 		}
++		goto cleanup_dir;
+ 
+ err_continue:
++		if (ret == STATUS_OK) {
++			if (errno == ENOMEM)
++				ret = -ENOMEM;
++			else if (errno == EIO)
++				ret = -EIO;
++			else
++				ret = STATUS_ERROR;
++		}
++		if (ret == -ENOMEM)
++			result = -ENOMEM;
++		else if (ret == -EIO && result != -ENOMEM)
++			result = -EIO;
++		else if (result == STATUS_OK)
++			result = STATUS_ERROR;
++		fsck_err_found();
++
++cleanup_dir:
+ 		if (bm_na) {
+ 			ntfs_attr_close(bm_na);
+ 			bm_na = NULL;
+@@ -4079,7 +4246,8 @@ err_continue:
+ 			dir_ni->fsck_ibm_size = 0;
+ 		}
+ 
+-		ntfsck_close_inode(dir_ni);
++		if (dir_ni && ntfsck_close_inode(dir_ni) && result == STATUS_OK)
++			result = STATUS_ERROR;
+ 		ntfs_list_del(&dir->list);
+ 		free(dir);
+ 	}
+@@ -4091,7 +4259,7 @@ err_continue:
+ 	else
+ 		total_cnt -= checked_cnt;
+ 
+-	return 0;
++	return result;
+ }
+ 
+ static int ntfsck_scan_index_entries(ntfs_volume *vol)
+@@ -4106,9 +4274,10 @@ static int ntfsck_scan_index_entries(ntfs_volume *vol)
+ 	return ret;
+ }
+ 
+-static void ntfsck_check_mft_records(ntfs_volume *vol)
++static int ntfsck_check_mft_records(ntfs_volume *vol)
+ {
+ 	s64 mft_num, nr_mft_records;
++	int ret = STATUS_OK;
+ 
+ 	fsck_start_step("Scan orphaned MFTs candidiates...");
+ 
+@@ -4123,11 +4292,24 @@ static void ntfsck_check_mft_records(ntfs_volume *vol)
+ 	 * Force to read first bitmap block to invalidate static cache
+ 	 * array buffer.
+ 	 */
+-	check_mftrec_in_use(vol, FILE_first_user, 1);
++	if (check_mftrec_in_use(vol, FILE_first_user, 1) < 0)
++		return -EIO;
+ 	for (mft_num = FILE_MFT; mft_num < nr_mft_records; mft_num++) {
++		int status;
++
+ 		if (ntfs_fsck_mftbmp_get(vol, mft_num))
+ 			continue;
+-		ntfsck_verify_mft_record(vol, mft_num);
++		errno = 0;
++		status = ntfsck_verify_mft_record(vol, mft_num);
++		if (status) {
++			fsck_err_found();
++			if (status == -ENOMEM)
++				ret = -ENOMEM;
++			else if (status == -EIO && ret != -ENOMEM)
++				ret = -EIO;
++			else if (ret == STATUS_OK)
++				ret = STATUS_ERROR;
++		}
+ 		progress_update(&prog, mft_num + 1);
+ 	}
+ 
+@@ -4135,6 +4317,7 @@ static void ntfsck_check_mft_records(ntfs_volume *vol)
+ 		ntfs_log_info("Clear MFT bitmap count:%"PRId64"\n", clear_mft_cnt);
+ 
+ 	fsck_end_step();
++	return ret;
+ }
+ 
+ static int ntfsck_reset_dirty(ntfs_volume *vol)
+@@ -4221,6 +4404,7 @@ static int ntfsck_validate_system_file(ntfs_inode *ni)
+ {
+ 	ntfs_volume *vol = ni->vol;
+ 	problem_context_t pctx = {0, };
++	int status;
+ 
+ 	pctx.ni = ni;
+ 
+@@ -4235,7 +4419,10 @@ static int ntfsck_validate_system_file(ntfs_inode *ni)
+ 	case FILE_UpCase:
+ 	case FILE_Extend:
+ 		/* TODO: check sub-directory */
+-		ntfsck_check_inode_non_resident(ni, 1);
++		errno = 0;
++		status = ntfsck_check_inode_non_resident(ni, 1);
++		if (status)
++			return t1os_failure_status(status);
+ 		break;
+ 	case FILE_Bitmap:
+ 		s64 max_lcnbmp_size;
+@@ -4304,29 +4491,30 @@ static int ntfsck_check_system_files(ntfs_volume *vol)
+ 	s64 mft_num;
+ 	int ret = STATUS_ERROR;
+ 	int is_used;
+-	BOOL trivial;	/* represent system file is trivial or not */
+ 
+ 	fsck_start_step("Check system files...");
+ 
+ 	progress_init(&prog, 0, FILE_first_user, 1, pb_flags);
+ 
+-	root_ni = ntfsck_check_root_inode(vol);
++	root_ni = ntfsck_check_root_inode(vol, &ret);
+ 	if (!root_ni) {
+ 		ntfs_log_error("Couldn't open the root directory.\n");
+ 		return ret;
+ 	}
+ 
++	errno = 0;
+ 	root_ctx = ntfs_attr_get_search_ctx(root_ni, NULL);
+-	if (!root_ctx)
++	if (!root_ctx) {
++		ret = t1os_failure_status(STATUS_ERROR);
+ 		goto close_inode;
++	}
+ 
++	errno = 0;
+ 	ictx = ntfs_index_ctx_get(root_ni, NTFS_INDEX_I30, 4);
+-	if (!ictx)
++	if (!ictx) {
++		ret = t1os_failure_status(STATUS_ERROR);
+ 		goto put_attr_ctx;
+-
+-	/* check lost found here */
+-	ntfsck_check_lost_found(vol, root_ni, ictx);
+-	ntfs_index_ctx_reinit(ictx);
++	}
+ 
+ 	progress_update(&prog, 1);
+ 
+@@ -4336,12 +4524,11 @@ static int ntfsck_check_system_files(ntfs_volume *vol)
+ 	 * entries.
+ 	 */
+ 	for (mft_num = FILE_MFT; mft_num < FILE_first_user; mft_num++) {
++		ret = STATUS_OK;
+ 		progress_update(&prog, mft_num + 2);
+ 		if (vol->major_ver < 3 && mft_num == FILE_Extend)
+ 			continue;
+ 
+-		trivial = FALSE;
+-
+ 		sys_ni = ntfsck_get_opened_ni_vol(vol, mft_num);
+ 		if (!sys_ni) {
+ 			if (mft_num == FILE_root)
+@@ -4357,45 +4544,67 @@ static int ntfsck_check_system_files(ntfs_volume *vol)
+ 						mft_num);
+ 				continue;
+ 			}
+-			trivial = TRUE;
+ 		}
+ 
+ 		is_used = utils_mftrec_in_use(vol, mft_num);
+ 		if (is_used < 0) {
+ 			ntfs_log_error("Can't read system file(%"PRIu64") bitmap\n",
+ 					mft_num);
+-			ntfsck_close_inode(sys_ni);
++			ret = -EIO;
++			if (ntfsck_close_inode(sys_ni))
++				ret = t1os_merge_status(ret, -EIO);
+ 			goto check_trivial;
+ 		}
+ 
+-		ntfs_inode_attach_all_extents(sys_ni);
+-		ntfsck_set_mft_record_bitmap(sys_ni, FALSE);
++		errno = 0;
++		if (ntfs_inode_attach_all_extents(sys_ni)) {
++			ntfs_log_error("Failed to attach extents for system file(%"PRId64")\n",
++					mft_num);
++			ret = t1os_failure_status(STATUS_ERROR);
++			goto check_trivial;
++		}
++		errno = 0;
++		if (ntfsck_set_mft_record_bitmap(sys_ni, FALSE)) {
++			ntfs_log_error("Failed to account for system file(%"PRId64")\n",
++					mft_num);
++			ret = t1os_failure_status(STATUS_ERROR);
++			goto check_trivial;
++		}
+ 
+ 		/* do not check any more about reserved inode */
+ 		if (mft_num >= FILE_reserved12) {
+-			ntfsck_close_inode(sys_ni);
++			if (ntfsck_close_inode(sys_ni)) {
++				ret = -EIO;
++				goto put_index_ctx;
++			}
+ 			continue;
+ 		}
+ 
+ 		/* Validate mft entry of system file */
++		errno = 0;
+ 		ret = ntfsck_validate_system_file(sys_ni);
+ 		if (ret)
+ 			goto check_trivial;
+ 
++		errno = 0;
+ 		sys_ctx = ntfs_attr_get_search_ctx(sys_ni, NULL);
+ 		if (!sys_ctx) {
+-			ntfsck_close_inode(sys_ni);
+-			ret = STATUS_ERROR;
++			ret = t1os_failure_status(STATUS_ERROR);
++			if (ntfsck_close_inode(sys_ni))
++				ret = t1os_merge_status(ret, -EIO);
+ 			goto put_index_ctx;
+ 		}
+ 
++		errno = 0;
+ 		ret = ntfs_attr_lookup(AT_FILE_NAME, AT_UNNAMED, 0,
+ 				CASE_SENSITIVE, 0, NULL, 0, sys_ctx);
+ 		if (ret) {
++			ret = t1os_failure_status(STATUS_ERROR);
+ 			ntfs_log_error("Failed to lookup file name attribute of %"PRId64" system file\n",
+ 					mft_num);
+ 			ntfs_attr_put_search_ctx(sys_ctx);
+-			ntfsck_close_inode(sys_ni);
++			if (ntfsck_close_inode(sys_ni))
++				ret = t1os_merge_status(ret, -EIO);
+ 			goto check_trivial;
+ 		}
+ 
+@@ -4407,15 +4616,18 @@ static int ntfsck_check_system_files(ntfs_volume *vol)
+ 		 * the index entries for system files is in the $INDEX_ROOT
+ 		 * of the $Root mft entry using ntfs_index_lookup().
+ 		 */
++		errno = 0;
+ 		ret = ntfs_index_lookup(fn,
+ 				le32_to_cpu(sys_ctx->attr->value_length), ictx);
+ 		if (ret) {
++			ret = t1os_failure_status(STATUS_ERROR);
+ 			/* TODO: add index filename to root?? not return error */
+ 
+ 			ntfs_log_error("There's no system file entry"
+ 					"(%"PRId64") in root\n", mft_num);
+ 			ntfs_attr_put_search_ctx(sys_ctx);
+-			ntfsck_close_inode(sys_ni);
++			if (ntfsck_close_inode(sys_ni))
++				ret = t1os_merge_status(ret, -EIO);
+ 			goto check_trivial;
+ 		}
+ 		ntfs_attr_put_search_ctx(sys_ctx);
+@@ -4426,16 +4638,16 @@ static int ntfsck_check_system_files(ntfs_volume *vol)
+ 		if (ntfsck_opened_ni_vol(mft_num) == TRUE)
+ 			continue;
+ 
+-		ntfsck_close_inode(sys_ni);
++		if (ntfsck_close_inode(sys_ni)) {
++			ret = -EIO;
++			goto put_index_ctx;
++		}
+ 		continue;
+ 
+ check_trivial:
+-		if (trivial == FALSE) {
++		if (ret != -EIO && ret != -ENOMEM)
+ 			ret = STATUS_ERROR;
+-			goto put_index_ctx;
+-		} else {
+-			continue;
+-		}
++		goto put_index_ctx;
+ 	}
+ 
+ 	ret = STATUS_OK;
+@@ -4445,7 +4657,8 @@ put_index_ctx:
+ put_attr_ctx:
+ 	ntfs_attr_put_search_ctx(root_ctx);
+ close_inode:
+-	ntfsck_close_inode(root_ni);
++	if (ntfsck_close_inode(root_ni))
++		ret = t1os_merge_status(ret, -EIO);
+ 
+ 	fsck_end_step();
+ 	return ret;
+@@ -4456,13 +4669,9 @@ typedef u8 *(*get_bmp_func)(ntfs_volume *, s64);
+ static int ntfsck_apply_bitmap(ntfs_volume *vol, ntfs_attr *na, get_bmp_func func, int wtype)
+ {
+ 	s64 count, pos, total, remain;
+-	s64 rcnt, wcnt;
++	s64 rcnt;
+ 	u8 *disk_bm;
+ 	u8 *fsck_bm;
+-	unsigned long i;
+-	unsigned long *dbml;
+-	unsigned long *fbml;
+-	problem_context_t pctx = {0, };
+ 
+ 	if (na != vol->lcnbmp_na && na != vol->mftbmp_na)
+ 		return STATUS_ERROR;
+@@ -4479,67 +4688,34 @@ static int ntfsck_apply_bitmap(ntfs_volume *vol, ntfs_attr *na, get_bmp_func fun
+ 	if (total < count)
+ 		count = total;
+ 
+-	ntfs_init_problem_ctx(&pctx, na->ni, na, NULL, NULL, na->ni->mrec, NULL, NULL);
+-	/* apply btimap(fsck OR lcnbmp) to disk */
++	(void)wtype;
++	/* Compare the checker bitmap to disk without modifying either one. */
+ 	while (1) {
+ 		/* read bitmap from disk */
+ 		memset(disk_bm, 0, NTFS_BUF_SIZE);
+ 		rcnt = ntfs_attr_pread(na, pos, count, disk_bm);
+ 		if (rcnt == STATUS_ERROR) {
+ 			ntfs_log_error("Couldn't get $Bitmap $DATA");
+-			break;
++			free(disk_bm);
++			return -EIO;
+ 		}
+ 
+ 		if (rcnt != count) {
+ 			ntfs_log_error("Couldn't get $Bitmap, read count error\n");
+-			break;
++			free(disk_bm);
++			return -EIO;
+ 		}
+ 
+ 		fsck_bm = func(vol, pos);
++		if (!fsck_bm) {
++			free(disk_bm);
++			return -ENOMEM;
++		}
+ 
+ 		if (!memcmp(fsck_bm, disk_bm, count))
+ 			goto next;
+ 
+-		/* ondisk lcnbmp OR fsck lcnbmp */
+-		for (i = 0; i < (count / sizeof(unsigned long)); i++) {
+-			dbml = (unsigned long *)disk_bm + i;
+-			fbml = (unsigned long *)fsck_bm + i;
+-			if (*dbml != *fbml) {
+-#ifdef DEBUG
+-				ntfs_log_info("%s bitmap(%d):\n",
+-						na->type == 0xb0 ? "MFT" : "LCN", wtype);
+-				ntfs_log_info("1:difference pos(%"PRIu64":%lu:%"PRIu64
+-						"): %0lx:%0lx\n", pos, i,
+-						(pos + (i * sizeof(unsigned long))) << 3, *dbml, *fbml);
+-#endif
+-				*dbml |= *fbml;
+-#ifdef DEBUG
+-				ntfs_log_info("2:difference pos(%"PRIu64":%lu:%"PRIu64
+-						"): %0lx:%0lx\n\n", pos, i,
+-						(pos + (i * sizeof(unsigned long))) << 3, *dbml, *fbml);
+-#endif
+-			}
+-		}
+-
+-		if (wtype == FSCK_BMP_FINAL)
+-			fsck_err_found();
+-
+-		if (ntfs_fix_problem(vol, PR_CLUSTER_BITMAP_MISMATCH, &pctx)) {
+-			if (wtype == FSCK_BMP_INITIAL)
+-				wcnt = ntfs_attr_pwrite(na, pos, count, disk_bm);
+-			else if (wtype == FSCK_BMP_FINAL) {
+-				wcnt = ntfs_attr_pwrite(na, pos, count, fsck_bm);
+-				fsck_err_fixed();
+-			}
+-
+-			if (wcnt != count) {
+-				ntfs_log_error("Cluster bitmap write failed, "
+-						"pos:%"PRId64 "count:%"PRId64", writtne:%"PRId64"\n",
+-						pos, count, wcnt);
+-				free(disk_bm);
+-				return STATUS_ERROR;
+-			}
+-		}
++		fsck_err_found();
+ 
+ next:
+ 		pos += count;
+@@ -4558,84 +4734,57 @@ next:
+ static int ntfsck_check_orphaned_mft(ntfs_volume *vol)
+ {
+ 	struct orphan_mft *entry = NULL;
+-	ntfs_inode *root_ni;
+-	u64 cnt = 1;
+-	problem_context_t pctx = {0, };
++	int ret = STATUS_OK;
++	int status;
+ 
+ 	fsck_start_step("Check orphaned mft...");
+-
+-	ntfsck_apply_bitmap(vol, vol->lcnbmp_na,
+-			ntfs_fsck_find_lcnbmp_block, FSCK_BMP_INITIAL);
+-	ntfsck_apply_bitmap(vol, vol->mftbmp_na,
+-			ntfs_fsck_find_mftbmp_block, FSCK_BMP_INITIAL);
+-
+-	progress_init(&prog, 0, orphan_cnt + 1, 1000, pb_flags);
+-
+-	/* check lost found directory */
+-	if (!vol->lost_found) {
+-		root_ni = ntfsck_open_inode(vol, FILE_root);
+-		if (!root_ni) {
+-			ntfs_log_error("Failed to open root inode\n");
+-			return STATUS_ERROR;
+-		}
+-		ntfsck_create_lost_found(vol, root_ni);
+-		ntfsck_close_inode(root_ni);
+-	}
+-	progress_update(&prog, cnt);
++	progress_init(&prog, 0, orphan_cnt, 1000, pb_flags);
+ 
+ 	/* check orphaned mft */
+ 	while (!ntfs_list_empty(&oc_list_head)) {
+ 		entry = ntfs_list_entry(oc_list_head.next, struct orphan_mft, oc_list);
+-
+-		cnt++;
+-
+-		pctx.inum = entry->mft_no;
++		ntfs_log_error("Orphaned MFT record found: %"PRIu64"\n",
++				entry->mft_no);
+ 		fsck_err_found();
+-		if (ntfs_fix_problem(vol, PR_ORPHANED_MFT_REPAIR, &pctx)) {
+-			if (ntfsck_add_index_entry_orphaned_file(vol, entry)) {
+-				/*
+-				 * error returned.
+-				 * inode is already freed and closed in that function,
+-				 */
+-				ntfs_log_error("failed to add entry(%"PRIu64
+-						") orphaned file\n",
+-						entry->mft_no);
+-				return STATUS_ERROR;
+-			}
+-			fsck_err_fixed();
+-			progress_update(&prog, cnt);
+-		} else {
+-			ntfs_list_del(&entry->oc_list);
+-			free(entry);
+-		}
++		ntfs_list_del(&entry->oc_list);
++		free(entry);
+ 	}
+ 
+-	ntfsck_apply_bitmap(vol, vol->lcnbmp_na,
++	status = ntfsck_apply_bitmap(vol, vol->lcnbmp_na,
+ 			ntfs_fsck_find_lcnbmp_block, FSCK_BMP_FINAL);
+-	ntfsck_apply_bitmap(vol, vol->mftbmp_na,
++	if (status)
++		ret = status;
++	status = ntfsck_apply_bitmap(vol, vol->mftbmp_na,
+ 			ntfs_fsck_find_mftbmp_block, FSCK_BMP_FINAL);
++	if (status == -ENOMEM || (status && ret == STATUS_OK))
++		ret = status;
+ 
+ 	fsck_end_step();
+-	return STATUS_OK;
++	return ret;
+ }
+ 
+-static int _ntfsck_check_backup_boot(ntfs_volume *vol, s64 sector, u8 *buf)
++static int _ntfsck_check_backup_boot(ntfs_volume *vol, s64 sector,
++		const u8 *primary_buf, u8 *backup_buf)
+ {
+ 	s64 backup_boot_pos;
+ 	u8 spc_bits;	/* sector per cluster bits */
+ 
+ 	spc_bits = vol->cluster_size_bits - vol->sector_size_bits;
+ 	backup_boot_pos = sector << vol->sector_size_bits;
+-	if (ntfs_pread(vol->dev, backup_boot_pos, vol->sector_size, buf) !=
++	if (ntfs_pread(vol->dev, backup_boot_pos, vol->sector_size, backup_buf) !=
+ 			vol->sector_size) {
+ 		ntfs_log_error("Failed to read backup boot sector on %s.\n",
+ 				(sector == vol->nr_sectors) ?
+ 				"last sector" : "middle sector");
+-		return STATUS_ERROR;
++		return -EIO;
+ 	}
+ 
+-	if (ntfs_boot_sector_is_ntfs((NTFS_BOOT_SECTOR *)buf) == FALSE)
+-		return STATUS_ERROR;
++	if (ntfs_boot_sector_is_ntfs((NTFS_BOOT_SECTOR *)backup_buf) == FALSE)
++		return -EINVAL;
++	if (memcmp(primary_buf, backup_buf, vol->sector_size)) {
++		ntfs_log_error("The backup boot sector does not match the primary.\n");
++		return -EINVAL;
++	}
+ 
+ 	ntfs_fsck_set_lcnbmp_range(vol, sector >> spc_bits, 1, 1);
+ 	return STATUS_OK;
+@@ -4646,32 +4795,55 @@ static int ntfsck_check_backup_boot(ntfs_volume *vol)
+ {
+ 	s64 bb_sector;	/* number of backup boot sector */
+ 	u8 spc_bits;	/* sector per cluster bits */
+-	u8 *bb_buf;
++	u8 *primary_buf;
++	u8 *backup_buf;
++	int first_ret;
++	int second_ret;
+ 
+ 	spc_bits = vol->cluster_size_bits - vol->sector_size_bits;
+-	bb_buf = ntfs_malloc(vol->sector_size);
+-	if (!bb_buf)
++	primary_buf = ntfs_malloc(vol->sector_size);
++	backup_buf = ntfs_malloc(vol->sector_size);
++	if (!primary_buf || !backup_buf) {
++		free(primary_buf);
++		free(backup_buf);
+ 		return -ENOMEM;
++	}
++	if (ntfs_pread(vol->dev, 0, vol->sector_size, primary_buf) !=
++			vol->sector_size) {
++		ntfs_log_error("Failed to read the primary boot sector.\n");
++		free(primary_buf);
++		free(backup_buf);
++		return -EIO;
++	}
+ 
+ 	/* check backup boot sector located in last sector (normal) */
+ 	bb_sector = vol->nr_sectors;
+-	if (!_ntfsck_check_backup_boot(vol, bb_sector, bb_buf)) {
+-		free(bb_buf);
++	first_ret = _ntfsck_check_backup_boot(vol, bb_sector,
++			primary_buf, backup_buf);
++	if (!first_ret) {
++		free(primary_buf);
++		free(backup_buf);
+ 		return STATUS_OK;
+ 	}
+ 	/* check backup boot at last sector failed */
+ 
+ 	/* check backup boot sector located in the middle of cluster (some cases) */
+ 	bb_sector = (vol->nr_clusters / 2) << spc_bits;
+-	if (!_ntfsck_check_backup_boot(vol, bb_sector, bb_buf)) {
++	second_ret = _ntfsck_check_backup_boot(vol, bb_sector,
++			primary_buf, backup_buf);
++	if (!second_ret) {
+ 		ntfs_log_verbose("Found backup boot sector in the middle of the volume"
+ 				"(pos:%"PRId64").\n", bb_sector >> spc_bits);
+-		free(bb_buf);
++		free(primary_buf);
++		free(backup_buf);
+ 		return STATUS_OK;
+ 	}
+ 
+-	free(bb_buf);
+-	return STATUS_ERROR;
++	free(primary_buf);
++	free(backup_buf);
++	if (first_ret == -EIO || second_ret == -EIO)
++		return -EIO;
++	return -EINVAL;
+ }
+ 
+ static int ntfsck_scan_mft_record(ntfs_volume *vol, s64 mft_num)
+@@ -4683,18 +4855,30 @@ static int ntfsck_scan_mft_record(ntfs_volume *vol, s64 mft_num)
+ 	if (is_used < 0) {
+ 		ntfs_log_error("Error getting bit value for record %"PRId64".\n",
+ 				mft_num);
+-		return STATUS_ERROR;
++		return -EIO;
+ 	} else if (!is_used) {
+ 		if (mft_num < FILE_Extend) {
+-			ntfs_log_error("Record(%"PRId64") unused. Fixing or fail about system files.\n",
++			ntfs_log_error("Required record(%"PRId64") is unused.\n",
+ 					mft_num);
++			return STATUS_ERROR;
+ 		}
+-		return STATUS_ERROR;
++		return STATUS_NOT_FOUND;
+ 	}
+ 
+ 	ni = ntfsck_open_inode(vol, mft_num);
+-	if (!ni)
++	if (!ni) {
++		int extent_status;
++
++		/* Attribute-list extent records are not standalone inodes. */
++		extent_status = mrec_temp_buf ?
++				ntfsck_check_if_extent_mft_record(vol, mft_num) :
++				STATUS_ERROR;
++		if (!extent_status)
++			return STATUS_NOT_FOUND;
++		if (extent_status == -EIO)
++			return -EIO;
+ 		return STATUS_ERROR;
++	}
+ 
+ 	total_valid_mft++;
+ 
+@@ -4706,30 +4890,22 @@ static int ntfsck_scan_mft_record(ntfs_volume *vol, s64 mft_num)
+ 			goto err_check_inode;
+ 	}
+ 
+-	/*
+-	 * TODO:
+-	 * now, set cluster bitmap on every runlists of attributes in inode,
+-	 * it's heavy operation. so it's better to use fsck cluster bitmap
+-	 * and applying it to disk in this function
+-	 */
+-	ntfsck_update_lcn_bitmap(ni);
+-	ntfsck_close_inode(ni);
++	if (ntfsck_close_inode(ni))
++		return -EIO;
+ 	return STATUS_OK;
+ 
+ err_check_inode:
+ 	ntfs_log_trace("Delete orphaned candidate inode(%"PRIu64")\n", ni->mft_no);
+ 	ntfsck_close_inode(ni);
+ 
+-	ntfsck_check_mft_record_unused(vol, mft_num);
+-	ntfs_fsck_mftbmp_clear(vol, mft_num);
+-	check_mftrec_in_use(vol, mft_num, 1);
+ 	return STATUS_ERROR;
+ }
+ 
+-static void ntfsck_scan_mft_records(ntfs_volume *vol)
++static int ntfsck_scan_mft_records(ntfs_volume *vol)
+ {
+ 	s64 mft_num, nr_mft_records;
+ 	problem_context_t pctx = {0, };
++	int ret = STATUS_OK;
+ 
+ 	fsck_start_step("Scan mft entries in volume...");
+ 
+@@ -4747,12 +4923,26 @@ static void ntfsck_scan_mft_records(ntfs_volume *vol)
+ 	 * array buffer.
+ 	 */
+ 	for (mft_num = FILE_MFT; mft_num < nr_mft_records; mft_num++) {
+-		if (!ntfsck_scan_mft_record(vol, mft_num))
++		int status;
++
++		errno = 0;
++		status = ntfsck_scan_mft_record(vol, mft_num);
++		if (status == STATUS_OK)
+ 			total_cnt++;
++		else if (status != STATUS_NOT_FOUND) {
++			fsck_err_found();
++			if (status == -ENOMEM)
++				ret = -ENOMEM;
++			else if (status == -EIO && ret != -ENOMEM)
++				ret = -EIO;
++			else if (ret == STATUS_OK)
++				ret = STATUS_ERROR;
++		}
+ 		progress_update(&prog, mft_num + 1);
+ 	}
+ 
+ 	fsck_end_step();
++	return ret;
+ }
+ 
+ /**
+@@ -4764,9 +4954,10 @@ int main(int argc, char **argv)
+ {
+ 	ntfs_volume *vol = NULL;
+ 	const char *path = NULL;
+-	int c, errors = 0, ret;
++	int c, errors = 0, ret = T1OS_EXIT_INTERNAL;
++	int status;
+ 	unsigned long mnt_flags;
+-	BOOL check_dirty_only = FALSE, dirty = FALSE;
++	BOOL dirty = FALSE;
+ 
+ 	ntfs_log_set_handler(ntfs_log_handler_outerr);
+ 
+@@ -4774,53 +4965,20 @@ int main(int argc, char **argv)
+ 	ntfs_log_clear_levels(NTFS_LOG_LEVEL_TRACE|NTFS_LOG_LEVEL_ENTER|NTFS_LOG_LEVEL_LEAVE);
+ 	pb_flags = NTFS_PROGBAR;
+ 	option.verbose = 0;
++	option.check = FALSE;
+ 	option.require_t1os_root = FALSE;
+ 	option.report_path = NULL;
+ 	opterr = 0;
+ 	option.flags = NTFS_MNT_FSCK | NTFS_MNT_IGNORE_HIBERFILE |
+-		NTFS_MNT_FS_NO_REPAIR | NTFS_MNT_RDONLY;
++		NTFS_MNT_FS_NO_REPAIR | NTFS_MNT_RDONLY | NTFS_MNT_FORENSIC;
+ 
+-	while ((c = getopt_long(argc, argv, "aCnpqryhvVTJ:", opts, NULL)) != EOF) {
++	while ((c = getopt_long(argc, argv, "cqTJ:vhV", opts, NULL)) != EOF) {
+ 		switch (c) {
+-		case 'a':
+-		case 'p':
+-			if (option.flags & (NTFS_MNT_FS_NO_REPAIR |
+-						NTFS_MNT_FS_ASK_REPAIR |
+-						NTFS_MNT_FS_YES_REPAIR) ||
+-					check_dirty_only == TRUE) {
+-conflict_option:
+-				ntfs_log_error("\n%s: "
+-						"Only one of the optinos -a/-p, -C, -n, -r or -y may be specified.\n",
+-						NTFS_PROGS);
+-
+-				exit(RETURN_USAGE_OR_SYNTAX_ERROR);
+-			}
+-
+-			option.flags |= NTFS_MNT_FS_AUTO_REPAIR;
+-			break;
+-		case 'C':	/* exclusive with others */
+-			if (option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+-						NTFS_MNT_FS_ASK_REPAIR |
+-						NTFS_MNT_FS_YES_REPAIR)) {
+-				goto conflict_option;
+-			}
+-
+-			option.flags &= ~NTFS_MNT_FSCK;
+-			option.flags |= NTFS_MNT_FS_NO_REPAIR;
+-			check_dirty_only = TRUE;
+-			break;
+-		case 'n':
+-			if (option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+-						NTFS_MNT_FS_ASK_REPAIR |
+-						NTFS_MNT_FS_YES_REPAIR) ||
+-					check_dirty_only == TRUE) {
+-				goto conflict_option;
+-			}
+-
+-			option.flags |= NTFS_MNT_FS_NO_REPAIR | NTFS_MNT_RDONLY;
++		case 'c':
++			option.check = TRUE;
+ 			break;
+ 		case 'q':
+-			pb_flags |= ~NTFS_PROGBAR;
++			pb_flags &= ~NTFS_PROGBAR;
+ 			break;
+ 		case 'T':
+ 			option.require_t1os_root = TRUE;
+@@ -4828,26 +4986,6 @@ conflict_option:
+ 		case 'J':
+ 			option.report_path = optarg;
+ 			break;
+-		case 'r':
+-			if (option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+-						NTFS_MNT_FS_NO_REPAIR |
+-						NTFS_MNT_FS_YES_REPAIR) ||
+-					check_dirty_only == TRUE) {
+-				goto conflict_option;
+-			}
+-
+-			option.flags |= NTFS_MNT_FS_ASK_REPAIR;
+-			break;
+-		case 'y':
+-			if (option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+-						NTFS_MNT_FS_NO_REPAIR |
+-						NTFS_MNT_FS_ASK_REPAIR) ||
+-					check_dirty_only == TRUE) {
+-				goto conflict_option;
+-			}
+-
+-			option.flags |= NTFS_MNT_FS_YES_REPAIR;
+-			break;
+ 		case 'h':
+ 			usage(0);
+ 		case '?':
+@@ -4866,137 +5004,151 @@ conflict_option:
+ 		}
+ 	}
+ 
+-	/* If not set fsck repair option, set default fsck flags to ASK mode. */
+-	if (!(option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+-					NTFS_MNT_FS_NO_REPAIR |
+-					NTFS_MNT_FS_ASK_REPAIR |
+-					NTFS_MNT_FS_YES_REPAIR))) {
+-		option.flags |= NTFS_MNT_FS_ASK_REPAIR;
+-	}
+-
+-	if (optind != argc - 1)
++	if (!option.check || optind != argc - 1)
+ 		usage(1);
+ 	path = argv[optind];
+ 
+-	if (!ntfs_check_if_mounted(path, &mnt_flags)) {
+-		if ((mnt_flags & NTFS_MF_MOUNTED)) {
+-			if (!(mnt_flags & NTFS_MF_READONLY)) {
+-				ntfs_log_error("Refusing to operate on read-write mounted device %s.\n",
+-						path);
+-				exit(1);
+-			}
+-
+-			if (option.flags != (NTFS_MNT_FS_NO_REPAIR | NTFS_MNT_RDONLY)) {
+-				ntfs_log_error("Refusing to change filesystem on read mounted device %s.\n",
+-						path);
+-				exit(1);
+-			}
+-		}
+-	} else
++	if (ntfs_check_if_mounted(path, &mnt_flags)) {
+ 		ntfs_log_perror("Failed to determine whether %s is mounted",
+ 				path);
++		ret = T1OS_EXIT_IO;
++		goto err_out;
++	}
++	if (mnt_flags & NTFS_MF_MOUNTED) {
++		ntfs_log_error("Refusing to check mounted device %s.\n", path);
++		ret = T1OS_EXIT_IO;
++		goto err_out;
++	}
+ 
+ 	vol = ntfs_fsck_mount(path, option.flags);
+ 	if (!vol) {
+-		/*
+-		 * Defined the error code RETURN_FS_NOT_SUPPORT(64),
+-		 * but not use now, just return RETURN_OPERATIONAL_ERROR
+-		 * like ext4 filesystem.
+-		 */
+-		if (errno == EOPNOTSUPP) {
+-			ntfs_log_error("The superblock does not describe a valid NTFS.\n");
+-			exit(RETURN_OPERATIONAL_ERROR);
+-		}
+-
+-		if (check_dirty_only == TRUE) {
+-			ntfs_log_info("Check volume: Volume mount failed, Consider volume is dirty.\n");
+-			exit(RETURN_FS_ERRORS_LEFT_UNCORRECTED);
+-		} else {
+-			ntfs_log_error("ntfsck mount failed, errno : %d\n", errno);
+-			fsck_err_found();
+-		}
+-
++		ntfs_log_error("Could not open a valid NTFS volume, errno: %d\n",
++				errno);
++		ret = T1OS_EXIT_IO;
+ 		goto err_out;
+ 	}
+-
+-	/* Just return the volume dirty flags when '-C' option is specified. */
+-	if (check_dirty_only == TRUE) {
+-		if (vol->flags & VOLUME_IS_DIRTY) {
+-			ntfs_log_info("Check volume: Volume is dirty.\n");
+-			exit(RETURN_FS_ERRORS_LEFT_UNCORRECTED);
+-		} else {
+-			ntfs_log_warning("Check volume: Volume is clean.\n");
+-			exit(RETURN_FS_NO_ERRORS);
+-		}
++	if (!NVolReadOnly(vol) || !NVolFsNoRepair(vol)) {
++		ntfs_log_error("Internal error: check-only mount is not read-only.\n");
++		ret = T1OS_EXIT_INTERNAL;
++		goto err_out;
+ 	}
+ 
++	ret = T1OS_EXIT_CLEAN;
++	t1os_dirty_checked = TRUE;
+ 	dirty = !!(vol->flags & VOLUME_IS_DIRTY);
+-	if (option.require_t1os_root && t1os_check_root_identity(vol)) {
++
++	t1os_backup_boot_checked = TRUE;
++	errno = 0;
++	status = ntfsck_check_backup_boot(vol);
++	if (status) {
+ 		fsck_err_found();
+-		ntfs_log_error("The candidate volume is not a valid T1OS root.\n");
++		ret = t1os_status_to_exit(status);
+ 		goto err_out;
+ 	}
++	t1os_backup_boot_valid = TRUE;
+ 
+-	ntfsck_check_backup_boot(vol);
+-
+-	/* pass 1 */
+-	ntfsck_scan_mft_records(vol);
++	status = t1os_check_logfile_state(vol);
++	if (status) {
++		fsck_err_found();
++		ret = t1os_status_to_exit(status);
++		if (ret != T1OS_EXIT_UNSAFE)
++			goto err_out;
++	}
+ 
+-	/* pass 2 */
+-	if (ntfsck_check_system_files(vol))
++	mrec_temp_buf = ntfs_malloc(vol->sector_size);
++	if (!mrec_temp_buf) {
++		ntfs_log_perror("Couldn't allocate mrec_temp_buf buffer");
++		ret = T1OS_EXIT_INTERNAL;
+ 		goto err_out;
++	}
+ 
+-	if (ntfsck_replay_log(vol))
++	/* pass 1 */
++	errno = 0;
++	status = ntfsck_scan_mft_records(vol);
++	if (status) {
++		ret = t1os_status_to_exit(status);
+ 		goto err_out;
++	}
+ 
+-	mrec_temp_buf = ntfs_malloc(vol->sector_size);
+-	if (!mrec_temp_buf) {
+-		ntfs_log_perror("Couldn't allocate mrec_temp_buf buffer");
++	/* pass 2 */
++	errno = 0;
++	status = ntfsck_check_system_files(vol);
++	if (status) {
++		fsck_err_found();
++		ret = t1os_status_to_exit(status);
+ 		goto err_out;
+ 	}
+ 
+ 	/* pass 3 */
+-	if (ntfsck_scan_index_entries(vol)) {
++	errno = 0;
++	status = ntfsck_scan_index_entries(vol);
++	if (status) {
+ 		ntfs_log_error("Stop processing fsck due to critical problems\n");
++		ret = t1os_status_to_exit(status);
+ 		goto err_out;
+ 	}
+ 
+ 	/* pass 4 */
+-	/* apply mft bitmap & cluster bitmap to disk */
+-	ntfsck_check_mft_records(vol);
++	errno = 0;
++	status = ntfsck_check_mft_records(vol);
++	if (status) {
++		ret = t1os_status_to_exit(status);
++		goto err_out;
++	}
+ 
+ 	/* pass 5 */
+-	ntfsck_check_orphaned_mft(vol);
++	errno = 0;
++	status = ntfsck_check_orphaned_mft(vol);
++	if (status) {
++		ret = t1os_status_to_exit(status);
++		goto err_out;
++	}
+ 
+-	free(mrec_temp_buf);
++	/* Namespace identity is meaningful only after every health pass succeeds. */
++	if (option.require_t1os_root && ret == T1OS_EXIT_CLEAN && !dirty &&
++			!fsck_errors && !fsck_fixes) {
++		errno = 0;
++		status = t1os_check_root_identity(vol);
++		if (status) {
++			if (status == STATUS_NOT_FOUND && !fsck_errors && !fsck_fixes) {
++				ntfs_log_error("The candidate volume is not a valid T1OS root.\n");
++				ret = T1OS_EXIT_WRONG_ROOT;
++			} else {
++				ntfs_log_error("Could not safely verify the T1OS root identity.\n");
++				ret = t1os_status_to_exit(status);
++			}
++			goto err_out;
++		}
++	}
+ 
+ err_out:
+-	if (vol && dirty && NVolFsNoRepair(vol)) {
++	if (mrec_temp_buf) {
++		free(mrec_temp_buf);
++		mrec_temp_buf = NULL;
++	}
++	if (vol && dirty) {
+ 		ntfs_log_error("The NTFS volume is dirty and requires journal recovery.\n");
+ 		fsck_err_found();
+ 	}
+ 
+ 	errors = fsck_errors - fsck_fixes;
+-	if (errors) {
++	if (fsck_fixes) {
++		ntfs_log_error("Internal error: a check-only pass recorded repairs.\n");
++		ret = T1OS_EXIT_INTERNAL;
++	} else if (ret == T1OS_EXIT_CLEAN && errors) {
+ 		ntfs_log_info("%d errors left (errors:%d, fixed:%d)\n",
+ 				errors, fsck_errors, fsck_fixes);
+-		ret = RETURN_FS_ERRORS_LEFT_UNCORRECTED;
+-	} else {
++		ret = T1OS_EXIT_UNSAFE;
++	} else if (ret == T1OS_EXIT_CLEAN) {
+ 		ntfs_log_info("Clean, No errors found or left (errors:%d, fixed:%d)\n",
+ 				fsck_errors, fsck_fixes);
+-		if (fsck_fixes)
+-			ret = RETURN_FS_ERRORS_CORRECTED;
+-		else
+-			ret = RETURN_FS_NO_ERRORS;
+ 	}
+ 
+-	if (!errors && vol && !NVolFsNoRepair(vol))
+-		ntfsck_reset_dirty(vol);
+-
+-	t1os_write_report(ret, dirty);
+-
+ 	if (vol)
+ 		ntfs_fsck_umount(vol);
+ 
++	if (t1os_write_report(ret, dirty))
++		ret = T1OS_EXIT_INTERNAL;
++
+ 	return ret;
+ }

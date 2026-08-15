@@ -1,0 +1,44 @@
+{
+  "format": "roothealth-ntfscp-runtime",
+  "format_version": 1,
+  "binary_sha256": "018bbc424a433b567410152686f145e42a3adf201f257dbc93fc763cdd971bb8",
+  "elf": {
+    "class": "ELF64",
+    "data": "little-endian",
+    "type": "DYN",
+    "machine": "x86-64",
+    "interpreter": "/lib64/ld-linux-x86-64.so.2",
+    "needed": [
+      "libc.so.6"
+    ],
+    "rpath": null,
+    "runpath": null,
+    "pie": true,
+    "gnu_stack_executable": false,
+    "gnu_relro": true,
+    "bind_now": true,
+    "build_id_sha1": "eba7825ef74cac6e2bb51a14fb5b7e523c0ad67f",
+    "linux_abi": "3.2.0",
+    "gnu_property_x86": [
+      "IBT",
+      "SHSTK",
+      "x86-64-baseline"
+    ]
+  },
+  "symbol_versions": {
+    "provider": "GLIBC",
+    "required": [
+      "2.2.5",
+      "2.3",
+      "2.3.4",
+      "2.4",
+      "2.7",
+      "2.14",
+      "2.17",
+      "2.33",
+      "2.34",
+      "2.38"
+    ],
+    "maximum": "2.38"
+  }
+}

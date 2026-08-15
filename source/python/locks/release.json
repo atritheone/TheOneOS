@@ -1,0 +1,168 @@
+{
+  "format": 1,
+  "component": "python-release",
+  "release": "3.14.7-t1os.62",
+  "immutable": true,
+  "rebuild_policy": "change the release identifier before replacing this lock",
+  "python_version": "3.14.7",
+  "python_abi": "cp314",
+  "build_definitions": [
+    {
+      "path": "development/promote python 3.14 runtime.py",
+      "size": 30775,
+      "sha256": "42ff3a8e5d9143483a1baa8a6ae28cdbf86aceaca2f1897fa2ff48dee0f1021e"
+    },
+    {
+      "path": "development/package python 3.14 candidate.py",
+      "size": 28259,
+      "sha256": "fdb8a760183a05b2def3ef5b9053284314318ebc64389cc86eb355e3696dabf6"
+    },
+    {
+      "path": "scripts/build python runtime.ps1",
+      "size": 1822,
+      "sha256": "d62efcc1313b9587b9360a7cc494cf476a68922505c0acb74e5e4d1875135341"
+    },
+    {
+      "path": "scripts/build python 3.14 candidate.ps1",
+      "size": 1088,
+      "sha256": "de8407285687932cd679f55492acaabe4ebd18fafab19b83ef0daef6e250c415"
+    },
+    {
+      "path": "scripts/package python 3.14 candidate.ps1",
+      "size": 984,
+      "sha256": "3cce51570307656c92fb0f044eb79093ba9c59da132543f6e9288ae2a283a542"
+    },
+    {
+      "path": "resource/entry/init/init hardware.sh",
+      "size": 68781,
+      "sha256": "c0c681105a49b24a40306e3e46918b4f7cb1f5dc811ef1cbd908b7e6a16ac1c4"
+    },
+    {
+      "path": "resource/entry/init/angel recovery.sh",
+      "size": 22424,
+      "sha256": "1a344bce2fcf03a7b6bb41332adbf38967bebb6974dc3ddd7e88912217443df0"
+    },
+    {
+      "path": "resource/entry/kernel/t1os_lsm.c",
+      "size": 105535,
+      "sha256": "cef856d2ad26e95722d25cc09b6c173b5f4b0c8257b03fc895b769d0b2dd80c2"
+    },
+    {
+      "path": "scripts/build hardware initramfs.ps1",
+      "size": 30981,
+      "sha256": "4cbc68ae0777d2b4d9e688dd8e7f743d6bcce34d3a6350b0d5459ce634db966e"
+    },
+    {
+      "path": "scripts/test hardware build.ps1",
+      "size": 170182,
+      "sha256": "6b0a71ba37ccf8fa112fa7970dc6805a5fca09a18f848125cc5e8664dcc13c73"
+    },
+    {
+      "path": "scripts/test python runtime.ps1",
+      "size": 3950,
+      "sha256": "e435b4dfc6d346134e0826d49d6827aea88c06efc6d6cb6f8e313ed273c613a2"
+    },
+    {
+      "path": "scripts/validate profiled python entrypoints.py",
+      "size": 11871,
+      "sha256": "d48951ec6abd626373d3be2d241d3ed486b1f66fc6df3aa3fb8d35ff1d8672f3"
+    },
+    {
+      "path": "scripts/validate profiled python entrypoints.ps1",
+      "size": 1006,
+      "sha256": "7bcba7181ad659da33aad6ff9628ca10efe9c50f71fd1238e197598bdc11992d"
+    },
+    {
+      "path": "source/python/tests/test_python_packages.py",
+      "size": 10508,
+      "sha256": "bb21e07024760b3688fb0e5fabd48dbc6d41c930b3619325f63ecea9f5b1dfb8"
+    },
+    {
+      "path": "source/python/packages/python-command.c",
+      "size": 1230,
+      "sha256": "27713529a25fd2f5163bc5eaf3738c80f8697c622c604867a39036730d229f7f"
+    },
+    {
+      "path": "source/python/build/runtime.json",
+      "size": 5799,
+      "sha256": "07d61c36c3245a55ea616439d283e0cb75f9583f503b465bcd366ad49c85ad28"
+    },
+    {
+      "path": "source/python/locks/python-3.14.7-candidate.json",
+      "size": 10046,
+      "sha256": "3e60bc3e7b7ce4b289be3047ffee41124238670a3591ccdc482c2cf098c4e1be"
+    }
+  ],
+  "outputs": {
+    "software_tree": {
+      "algorithm": "t1os-install-tree-sha256-v2",
+      "directories": 191,
+      "files": 1717,
+      "bytes": 155353863,
+      "sha256": "7c91b7b74fb29ffb754aacdda7b9fd7aa497c61083e573201927c80fa35a7ede"
+    },
+    "catalogue_tree": {
+      "algorithm": "t1os-install-tree-sha256-v2",
+      "directories": 1,
+      "files": 90,
+      "bytes": 45877810,
+      "sha256": "b1a0a17582d5e8df88489c63386f0d9b252a4d91b2476065097dddc01e83fd2f"
+    },
+    "python_sha256": "cf48ee4d640394b17b081cbcdef2024e19560cc06592cc175cda29aac853c840",
+    "manifest_sha256": "31fa8c539d4f1a788d30f3e793caacf69ff12f1b7b05976e4975794d059bd036"
+  },
+  "protected_external_roots": [
+    {
+      "name": "image_catalogue",
+      "source": "source/catalogue/image",
+      "destination": "/the one/catalogue/image",
+      "exclude_generated_bytecode": false,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 7,
+        "files": 237,
+        "bytes": 21597004,
+        "sha256": "e77e5e3e1f7639566583bcb00c9e782e6a91be2131d31b104ad82f1c03bf2726"
+      }
+    },
+    {
+      "name": "build_software",
+      "source": "source/build software",
+      "destination": "/the one/build",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 34,
+        "files": 50,
+        "bytes": 7378083,
+        "sha256": "972ebc290beb3199a44dafe095766429c3ca600dcd3bd1c2aa81aa73664e7367"
+      }
+    },
+    {
+      "name": "boot",
+      "source": "source/boot",
+      "destination": "/boot",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 2,
+        "files": 1,
+        "bytes": 50926,
+        "sha256": "1b68deec8a8e22c8320c14acca82eae0b55e6e51e22f8b0f4cfd619362073d41"
+      }
+    },
+    {
+      "name": "virtualbox_software",
+      "source": "source/software/virtualbox",
+      "destination": "/the one/software/virtualbox",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 1,
+        "files": 5,
+        "bytes": 1498608,
+        "sha256": "13a17e8cb37d783e313ad92e3bd742cd0fa9488e0546945793ffab81c2612cda"
+      }
+    }
+  ]
+}

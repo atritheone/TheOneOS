@@ -1,0 +1,147 @@
+{
+  "schema": "roothealth-complete-census-op2-authority-checkpoint-v1",
+  "status": "PROPOSED_FAIL_CLOSED",
+  "production_release": false,
+  "baseline": {
+    "commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+    "archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5"
+  },
+  "assets": {
+    "patch": {
+      "path": "complete-census-op2-authority-proposed-fail-closed.patch",
+      "sha256": "fa6ece28d41e62421e94bf2e7db38f4c4594c3667f7be6030f4692212e35c106",
+      "files": 116,
+      "apply": "git apply --check --whitespace=error-all, then git apply --whitespace=error-all, against the exact baseline archive",
+      "fuzz": 0,
+      "added_line_whitespace_errors": 0
+    },
+    "source_manifest": {
+      "path": "complete-census-op2-authority-proposed-fail-closed.sha256",
+      "sha256": "cd967d8fe1bf28bc1bb4f95a6e54d1e02bf89f7f8972171336561439c44ce946",
+      "entries": 116,
+      "clean_apply_verification": "sha256sum -c: PASS 116/116"
+    }
+  },
+  "build": {
+    "configure_cppflags": "-D_GNU_SOURCE -D_FORTIFY_SOURCE=3",
+    "configure_cflags": "-O2 -g0 -fstack-protector-strong -fPIE",
+    "configure_ldflags": "-Wl,-z,relro,-z,now,-pie",
+    "full_target": "src/roothealth-repair-core",
+    "full_target_link": "PASS",
+    "full_target_sha256": "d162251beb948c6fd88ac6015774f6fed0eb503651420e17fe8edf0a984e4515"
+  },
+  "source_role_audit": {
+    "gate": "check-repair-policy-implementation.py",
+    "linked_translation_units_in_checkpoint_manifest": 26,
+    "diagnostic_adapters": 13,
+    "typed_wal_adapters": 9,
+    "problem_decisions": 98,
+    "aggregate_decisions": 14,
+    "implemented_problems": 3,
+    "implemented_aggregates": 3,
+    "implemented_action_bindings": 6,
+    "implemented_fact_bindings": 70,
+    "raw_ask_repair_calls": 0,
+    "uncontained_hazard_calls": 0,
+    "result": "PASS"
+  },
+  "wal_verifier_registry": {
+    "wal_c_sha256": "16a1a1bd3317a3ac955d4062c3c21b1b8830909de9c85512b241f4bf4b9e7c3c",
+    "wal_h_sha256": "8dd4e279dd02fa1fb55c55a4b82942dadd3646fb0e49fe6da03ee54021bda7f9",
+    "checker": "check-wal-action-verifier-registry.py",
+    "strict": "PASS",
+    "gcc_fanalyzer": "PASS",
+    "asan_ubsan": "PASS",
+    "behavioral_cases": "PASS 9/9",
+    "registered_builtin_group": [23, 24, 25],
+    "native_id5_id6_registered": false,
+    "unknown_or_unregistered": "whole-transaction refusal"
+  },
+  "native_replay_proposal": {
+    "source_bound_status": "SUPERSEDED_BY_CURRENT_AUTHORITY_SPINE",
+    "source_bound_gate_result": "EXPECTED_FAIL_CLOSED",
+    "reason": "the older v1.1/v2 proposal hashes predate the dynamic-run, immutable-census, semantic-writer and WAL-registry changes in this checkpoint",
+    "native_id5_id6_registered": false,
+    "next_gate": "rebind and rerun the native qualification only after all eight production authority producers and the ID5/ID6 recovery verifier stabilize"
+  },
+  "bootstrap_run_capacity": {
+    "fixed_128_run_limit_removed": true,
+    "overlap_algorithm": "dynamic collection plus LCN sort plus linear validation",
+    "valid_fixture_runs": 129,
+    "valid_result": 0,
+    "oom_result": 5,
+    "planned_operations": 0,
+    "large_reversed_interval_test": 262144,
+    "large_interval_seconds_observed": 0.013059,
+    "overlap_negative": "REFUSED",
+    "asan_ubsan": "PASS",
+    "gcc_fanalyzer": "PASS",
+    "source_writes": 0
+  },
+  "release_read_only_census": {
+    "image_sha256": "0596099c95d7d177e95f71852ea1eb644c90f51ca5cee2f52bb9115dc724e2fa",
+    "mft_slots": 23112,
+    "publisher_binary_sha256": "cd27630ff801a05843e2da977590ff7573c13da6b40d5d3989fb55b27457a397",
+    "partial": true,
+    "coverage_complete": false,
+    "fixed_checks": 17,
+    "fixed_checks_result": "SKIPPED",
+    "skipped": 21,
+    "planning_preimage_parity": "byte-identical",
+    "old_current_separated": true,
+    "mft_differences_in_virtual_old_view": 1,
+    "coverage_hash": "515f34c068c5e2a2cd23002166ade562b805a57223ced23eb3e1425ca58bb8ec",
+    "census_hash": "a6cbcb78abb4f898bf34020678fda44cf309a989a52651f3663f0427de87f3ea",
+    "old_view_hash": "e3f00cf6b0c70bd8550ba36750a5c5b693424c0fbd889519089857479ec38e64",
+    "raw_hash": "18ad65b84df6e78f758d1af68a1ccb4e5e21d64cf43ebd5cac8551cb959ef02f",
+    "namespace_hash": "b73df92137934a52f0af6f847b29f18bceb520177057d2c5136c882a94a91997",
+    "index_hash": "482478cebd593cc8d780e944ed8f9ca8f7d5b94e575543aeb22649cba6c2265c",
+    "mft_bitmap_hash": "e8631532df6360a893921f0e399368121dec7abeda3025da92c12522294c7182",
+    "cluster_bitmap_hash": "3c8bdb81e3e0a3ad03659318f12a0d5bc5a5ffeeadf234780c46120095233e4c",
+    "fixed_partial_hash": "c41e9254c8803483b21477d1032fd2fbd161f40dc061baff83c48ae52dbe65f1",
+    "source_writes": 0
+  },
+  "multi_op2_authority": {
+    "opaque_targets": 2,
+    "records": [16, 17],
+    "exact_stale_preimages": ["zero", "BAAD", "bad-USA", "random"],
+    "recovery_reruns": ["raw MFT", "MFT bitmap", "namespace", "I30"],
+    "rederive_equal": true,
+    "ordinary_references_examined": 290,
+    "t1os_references_examined": 500,
+    "release_references_examined": 326495,
+    "source_writes": 0
+  },
+  "production_authority_components": {
+    "required": 8,
+    "available_real_producers": [
+      "native open-attribute",
+      "native target",
+      "native control",
+      "WAL exclusions"
+    ],
+    "missing_real_producers": [
+      "Reparse references",
+      "ObjId references",
+      "recovery namespace references",
+      "USN/fixed-system references"
+    ],
+    "id5_id6_commit_authority": "CLOSED"
+  },
+  "partial_provider_sections": [
+    "metadata indexes",
+    "$Secure",
+    "$Reparse",
+    "compressed metadata",
+    "fixed-system validation"
+  ],
+  "known_release_blockers": [
+    "complete RHCOV3 publisher is not yet available",
+    "recovery-namespace and USN/fixed-system component producers are absent",
+    "Reparse and ObjId component producers are absent from this checkpoint",
+    "native ID5/ID6 verifier group is deliberately unregistered",
+    "action families beyond registered IDs 23-25 remain commit-closed",
+    "official 2026.7.7 linked-libntfs hardening rebase is not part of this checkpoint",
+    "production one-binary format-3/self-exec orchestration is not part of this checkpoint"
+  ]
+}

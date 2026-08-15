@@ -1,0 +1,122 @@
+{
+  "format": "roothealth-journal-integration-qualification",
+  "format_version": 1,
+  "state": "PROPOSED_FAIL_CLOSED",
+  "qualified_at_utc": "2026-08-09T05:22:00Z",
+  "scope": {
+    "production_usb_build_executed": false,
+    "production_scripts_modified_in_place": false,
+    "init_or_boot_modified": false,
+    "repairs_enabled": false,
+    "existing_files_changed_by_patch": 7,
+    "fixture_helpers_added_by_patch": 1
+  },
+  "source_binding": {
+    "baseline_manifest_sha256": "38ae39492f112cca3f6691a76e6cbde4ff636425f31ef9962ac0faa0c7645f8a",
+    "proposed_manifest_sha256": "4576062244a8d9a5cfd57f384b8951054fd37f27c64da5fdad47759abee28829",
+    "patch_sha256": "7228862e5d958c40636fc5567a75d581ca39e8b4ddb4259c007e7a312e8bddbc",
+    "patch_files": 8,
+    "clean_apply_identical": true
+  },
+  "selected_test_tool": {
+    "tool": "ntfscp",
+    "binary_sha256": "d15a0c60451153c1a1d2c2d033be2262b1bd4df42a915947d02492c6f2eb5b57",
+    "binary_bytes": 344784,
+    "upstream_commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+    "upstream_archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5",
+    "provenance_manifest_sha256": "a0b4a0e352a73d8ad0dde6cb6d7f80f775c3408326b292a7fa64597fc9d1672e",
+    "state": "proposed-test-only",
+    "production_release_gate_rejects": true
+  },
+  "static_tests": {
+    "powershell_ast_files": 7,
+    "bash_here_strings": 5,
+    "python_standalone_units": 2,
+    "python_inline_units": 30,
+    "python_total_units": 32,
+    "bytecode_disabled": true,
+    "git_apply_whitespace_errors": 0
+  },
+  "disposable_fixture_suite": {
+    "exit_code": 0,
+    "elapsed_seconds": 35.9,
+    "plain_block_positive": 1,
+    "dm_crypt_block_positive": 1,
+    "regular_building_file_positive": 1,
+    "structurally_valid_reports": 5,
+    "raw_corruption_rejections": 17,
+    "block_ancestry_gpt_retarget_rejections": 11,
+    "regular_provisioner_rejections": 4,
+    "provenance_release_rejections": 1,
+    "total_fail_closed_rejections": 33,
+    "public_regular_provisioner_rejected_block_device": true,
+    "resize_profiles": [
+      "initial",
+      "shrink",
+      "expand"
+    ],
+    "final_journal_runs": {
+      "initial": 1,
+      "shrink": 1,
+      "expand": 1
+    },
+    "journal_clusters": 32768,
+    "whole_image_hash_preserved_by_read_only_validation": true,
+    "task_generated_pycache_entries": 0
+  },
+  "synthetic_bundle_manifest_test": {
+    "exit_code": 0,
+    "positive": 1,
+    "negative": 2,
+    "rejected_pre_resize_state": true,
+    "rejected_ambiguous_ownership": true
+  },
+  "clean_applied_package_verifier": {
+    "exit_code": 0,
+    "elapsed_seconds": 44.9,
+    "synthetic_enabled": true,
+    "root_fixture_enabled": true,
+    "source_hash_match": true,
+    "production_tree_unchanged": true
+  },
+  "negative_matrix": [
+    "proposed ntfscp at release gate",
+    "public provision-flags on block device",
+    "primary/backup GPT disagreement",
+    "wrong backing inode",
+    "wrong GPT partition",
+    "symlinked .building image",
+    "non-mapper target symlink",
+    "mounted plain target",
+    "extra holder",
+    "post-open backing-path retarget",
+    "non-crypt single-slave dm",
+    "wrong dm-crypt mapper name",
+    "mounted dm-crypt target",
+    "non-.building regular image",
+    "symlinked regular image",
+    "already-final regular image",
+    "one torn header",
+    "both torn headers",
+    "misbound volume serial",
+    "UUID disagreement",
+    "nonzero EMPTY entry area",
+    "nonempty transaction kind",
+    "invalid entry capacity",
+    "missing STANDARD_INFORMATION protected flag",
+    "missing base FILE_NAME protected flag",
+    "missing $Extend::$I30 protected flag",
+    "all protected flags missing",
+    "journal cluster bitmap false-free",
+    "journal MFT bitmap false-free",
+    "duplicate namespace name",
+    "duplicate ordinary-file cluster owner",
+    "protected metadata overlap",
+    "journal run self-overlap"
+  ],
+  "remaining_release_blockers": [
+    "publish a release-qualified pinned-d4 ntfscp build/link/qualification provenance package",
+    "independent review and integration of the mechanical patch",
+    "run the production USB image and bundle pipelines only after the tool gate is qualified"
+  ]
+}

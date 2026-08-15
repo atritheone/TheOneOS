@@ -1,0 +1,444 @@
+diff --git a/include/index.h b/include/index.h
+index a876b25..dd62253 100644
+--- a/include/index.h
++++ b/include/index.h
+@@ -144,6 +144,7 @@ extern int ntfs_index_block_inconsistent(ntfs_volume *vol, ntfs_attr *ia_na,
+ extern int ntfs_index_entry_inconsistent(ntfs_volume *vol, INDEX_ENTRY *ie,
+ 		COLLATION_RULES collation_rule, u64 inum,
+ 		ntfs_index_context *ictx);
++extern int ntfs_ie_stream_inconsistent(const INDEX_HEADER *ih, u64 inum);
+ extern int ntfs_index_lookup(const void *key, const int key_len,
+ 		ntfs_index_context *ictx) __attribute_warn_unused_result__;
+ 
+diff --git a/libntfs/attrib.c b/libntfs/attrib.c
+index 605e78d..c55a872 100644
+--- a/libntfs/attrib.c
++++ b/libntfs/attrib.c
+@@ -3697,6 +3697,10 @@ int ntfs_attr_inconsistent(ntfs_volume *vol, ATTR_RECORD *a,
+ 				if (a->non_resident
+ 						|| (le32_to_cpu(a->value_length)
+ 							< offsetof(INDEX_ROOT, index.reserved))
++						|| (le32_to_cpu(ir->index_block_size)
++							< NTFS_BLOCK_SIZE)
++						|| (le32_to_cpu(ir->index_block_size)
++							& (le32_to_cpu(ir->index_block_size) - 1))
+ 						|| (le32_to_cpu(ir->index.entries_offset)
+ 							< sizeof(INDEX_HEADER))
+ 						|| (le32_to_cpu(ir->index.index_length) & 7)
+@@ -3717,6 +3721,10 @@ int ntfs_attr_inconsistent(ntfs_volume *vol, ATTR_RECORD *a,
+ 					errno = EIO;
+ 					ret = -1;
+ 				}
++				else if (ntfs_ie_stream_inconsistent(&ir->index, inum)) {
++					errno = EIO;
++					ret = -1;
++				}
+ 
+ 				/* Is it needed? */
+ 				if (!ret && le32_to_cpu(ir->index_block_size) !=
+diff --git a/libntfs/compress.c b/libntfs/compress.c
+index 1d667c4..49ddd9c 100644
+--- a/libntfs/compress.c
++++ b/libntfs/compress.c
+@@ -479,40 +479,41 @@ static int ntfs_decompress(u8 *dest, const u32 dest_size,
+ 	/* Variables for tag and token parsing. */
+ 	u8 tag;			/* Current tag. */
+ 	int token;		/* Loop counter for the eight tokens in tag. */
++	u16 hdr;		/* Current sub-block header. */
++	u32 sb_size;		/* Encoded sub-block size including its header. */
+ 
+ 	ntfs_log_trace("Entering, cb_size = 0x%x.\n", (unsigned)cb_size);
+ do_next_sb:
+ 	ntfs_log_debug("Beginning sub-block at offset = %d in the cb.\n",
+ 			(int)(cb - cb_start));
+ 	/*
+-	 * Have we reached the end of the compression block or the end of the
+-	 * decompressed data?  The latter can happen for example if the current
+-	 * position in the compression block is one byte before its end so the
+-	 * first two checks do not detect it.
++	 * Test output completion before reading the next two-byte header.  A
++	 * compressed pointer one byte before cb_end is legal when all requested
++	 * output has already been produced.
+ 	 */
+-	if (cb == cb_end || !le16_to_cpup((le16*)cb) || dest == dest_end) {
+-		if (dest_end > dest)
+-			memset(dest, 0, dest_end - dest);
+-		ntfs_log_debug("Completed. Returning success (0).\n");
+-		return 0;
+-	}
++	if (cb == cb_end || dest == dest_end)
++		goto complete;
++	if ((size_t)(cb_end - cb) < sizeof(hdr))
++		goto return_overflow;
++	hdr = le16_to_cpup((le16*)cb);
++	if (!hdr)
++		goto complete;
+ 	/* Setup offset for the current sub-block destination. */
+ 	dest_sb_start = dest;
+-	dest_sb_end = dest + NTFS_SB_SIZE;
+-	/* Check that we are still within allowed boundaries. */
+-	if (dest_sb_end > dest_end)
++	if ((size_t)(dest_end - dest) < NTFS_SB_SIZE)
+ 		goto return_overflow;
++	dest_sb_end = dest + NTFS_SB_SIZE;
+ 	/* Does the minimum size of a compressed sb overflow valid range? */
+-	if (cb + 6 > cb_end)
++	if ((size_t)(cb_end - cb) < 6)
+ 		goto return_overflow;
+ 	/* Setup the current sub-block source pointers and validate range. */
+ 	cb_sb_start = cb;
+-	cb_sb_end = cb_sb_start + (le16_to_cpup((le16*)cb) & NTFS_SB_SIZE_MASK)
+-		+ 3;
+-	if (cb_sb_end > cb_end)
++	sb_size = (hdr & NTFS_SB_SIZE_MASK) + 3;
++	if ((size_t)(cb_end - cb_sb_start) < sb_size)
+ 		goto return_overflow;
++	cb_sb_end = cb_sb_start + sb_size;
+ 	/* Now, we are ready to process the current sub-block (sb). */
+-	if (!(le16_to_cpup((le16*)cb) & NTFS_SB_IS_COMPRESSED)) {
++	if (!(hdr & NTFS_SB_IS_COMPRESSED)) {
+ 		ntfs_log_debug("Found uncompressed sub-block.\n");
+ 		/* This sb is not compressed, just copy it into destination. */
+ 		/* Advance source position to first data byte. */
+@@ -532,22 +533,16 @@ do_next_sb:
+ 	/* Forward to the first tag in the sub-block. */
+ 	cb += 2;
+ do_next_tag:
+-	if (cb == cb_sb_end) {
+-		/* Check if the decompressed sub-block was not full-length. */
+-		if (dest < dest_sb_end) {
+-			int nr_bytes = dest_sb_end - dest;
+-
+-			ntfs_log_debug("Filling incomplete sub-block with zeroes.\n");
+-			/* Zero remainder and update destination position. */
+-			memset(dest, 0, nr_bytes);
+-			dest += nr_bytes;
+-		}
+-		/* We have finished the current sub-block. */
+-		goto do_next_sb;
+-	}
+ 	/* Check we are still in range. */
+ 	if (cb > cb_sb_end || dest > dest_sb_end)
+ 		goto return_overflow;
++	/*
++	 * Finish when either compressed input is exhausted or the 4 KiB
++	 * output slot is full.  If output fills first, the rest of this encoded
++	 * sub-block must be skipped rather than interpreted as another tag.
++	 */
++	if (cb == cb_sb_end || dest == dest_sb_end)
++		goto finish_compressed_sb;
+ 	/* Get the next tag and advance to first token. */
+ 	tag = *cb++;
+ 	/* Parse the eight tokens described by the tag. */
+@@ -557,8 +552,10 @@ do_next_tag:
+ 		u8 *dest_back_addr;
+ 
+ 		/* Check if we are done / still in range. */
+-		if (cb >= cb_sb_end || dest > dest_sb_end)
+-			break;
++		if (cb > cb_sb_end || dest > dest_sb_end)
++			goto return_overflow;
++		if (cb == cb_sb_end || dest == dest_sb_end)
++			goto finish_compressed_sb;
+ 		/* Determine token type and parse appropriately.*/
+ 		if ((tag & NTFS_TOKEN_MASK) == NTFS_SYMBOL_TOKEN) {
+ 			/*
+@@ -575,6 +572,9 @@ do_next_tag:
+ 		 */
+ 		if (dest == dest_sb_start)
+ 			goto return_overflow;
++		/* A phrase token needs two input bytes, not merely one. */
++		if ((size_t)(cb_sb_end - cb) < sizeof(pt))
++			goto return_overflow;
+ 		/*
+ 		 * Determine the number of bytes to go back (p) and the number
+ 		 * of bytes to copy (l). We use an optimized algorithm in which
+@@ -598,7 +598,7 @@ do_next_tag:
+ 		/* Now calculate the length of the byte sequence. */
+ 		length = (pt & (0xfff >> lg)) + 3;
+ 		/* Verify destination is in range. */
+-		if (dest + length > dest_sb_end)
++		if ((size_t)(dest_sb_end - dest) < length)
+ 			goto return_overflow;
+ 		/* The number of non-overlapping bytes. */
+ 		max_non_overlap = dest - dest_back_addr;
+@@ -626,6 +626,23 @@ do_next_tag:
+ 	}
+ 	/* No tokens left in the current tag. Continue with the next tag. */
+ 	goto do_next_tag;
++finish_compressed_sb:
++	/* Check if the decompressed sub-block was not full-length. */
++	if (dest < dest_sb_end) {
++		size_t nr_bytes = dest_sb_end - dest;
++
++		ntfs_log_debug("Filling incomplete sub-block with zeroes.\n");
++		memset(dest, 0, nr_bytes);
++		dest += nr_bytes;
++	}
++	/* Skip any encoded bytes left after the output slot filled. */
++	cb = cb_sb_end;
++	goto do_next_sb;
++complete:
++	if (dest_end > dest)
++		memset(dest, 0, dest_end - dest);
++	ntfs_log_debug("Completed. Returning success (0).\n");
++	return 0;
+ return_overflow:
+ 	errno = EOVERFLOW;
+ 	ntfs_log_perror("Failed to decompress file");
+diff --git a/libntfs/index.c b/libntfs/index.c
+index 3ddedb4..c5477ae 100644
+--- a/libntfs/index.c
++++ b/libntfs/index.c
+@@ -537,6 +537,9 @@ int ntfs_index_block_inconsistent(ntfs_volume *vol, ntfs_attr *ia_na,
+ 		return -1;
+ 	}
+ 
++	if (ntfs_ie_stream_inconsistent(ih, inum))
++		return -1;
++
+ 	if (fixed && ntfs_ask_repair(vol)) {
+ 		u8 vcn_size_bits;
+ 
+@@ -637,16 +640,23 @@ int ntfs_index_entry_inconsistent(ntfs_volume *vol, INDEX_ENTRY *ie,
+ 	}
+ 
+ 	if (ie->ie_flags & INDEX_ENTRY_NODE) {
+-		if (((le16_to_cpu(ie->key_length) + offsetof(INDEX_ENTRY, key) + 7) & ~7) !=
+-				(le16_to_cpu(ie->length) - 8)) {
+-			/* TODO: need to fix it */
++		u16 entry_length = le16_to_cpu(ie->length);
++		size_t aligned_key_end =
++			(le16_to_cpu(ie->key_length) +
++			offsetof(INDEX_ENTRY, key) + 7) & ~(size_t)7;
++
++		if (entry_length < sizeof(VCN) ||
++				aligned_key_end > entry_length - sizeof(VCN)) {
+ 			ntfs_log_error("there is no vcn space in index node\n");
+ 			return -1;
+ 		}
+ 	}
+ 
+-	if (((le16_to_cpu(ie->key_length) + offsetof(INDEX_ENTRY, key) + 7) & ~7) ==
+-			(le16_to_cpu(ie->length) - 8)) {
++	if (collation_rule == COLLATION_FILE_NAME &&
++			le16_to_cpu(ie->length) >= sizeof(VCN) &&
++			((le16_to_cpu(ie->key_length) +
++			offsetof(INDEX_ENTRY, key) + 7) & ~(size_t)7) ==
++			le16_to_cpu(ie->length) - sizeof(VCN)) {
+ 		if (!(ie->ie_flags & INDEX_ENTRY_NODE)) {
+ 			fsck_err_found();
+ 			if (ntfs_fix_problem(vol, PR_IE_FLAG_SUB_NODE_CORRUPTED, &pctx)) {
+@@ -693,6 +703,46 @@ int ntfs_index_entry_inconsistent(ntfs_volume *vol, INDEX_ENTRY *ie,
+ 	return (ret);
+ }
+ 
++/*
++ * Validate an entire on-disk index-entry stream before any caller walks it.
++ * Header bounds are checked by ntfs_attr_inconsistent() for INDEX_ROOT and
++ * ntfs_index_block_inconsistent() for INDX blocks.  This pass makes sure that
++ * every entry header and body fits, every length is sane and aligned, and the
++ * terminating entry ends the stream exactly.
++ */
++int ntfs_ie_stream_inconsistent(const INDEX_HEADER *ih, u64 inum)
++{
++	const u8 *ies_start = (const u8 *)ih +
++		le32_to_cpu(ih->entries_offset);
++	const u8 *ies_end = (const u8 *)ih + le32_to_cpu(ih->index_length);
++	const u8 *ie;
++
++	ntfs_log_trace("Entering\n");
++
++	for (ie = ies_start; ie < ies_end; ) {
++		u32 len;
++		const INDEX_ENTRY *ent = (const INDEX_ENTRY *)ie;
++
++		if ((size_t)(ies_end - ie) < sizeof(INDEX_ENTRY_HEADER))
++			goto err;
++		len = le16_to_cpu(ent->length);
++		if (len < sizeof(INDEX_ENTRY_HEADER) || (len & 7))
++			goto err;
++		if ((size_t)(ies_end - ie) < len)
++			goto err;
++		if (ent->ie_flags & INDEX_ENTRY_END) {
++			if (ie + len != ies_end)
++				goto err;
++			return 0;
++		}
++		ie += len;
++	}
++err:
++	ntfs_log_error("Corrupt index entry stream in inode %lld\n",
++			(long long)inum);
++	return -1;
++}
++
+ /**
+  * Find a key in the index block.
+  *
+@@ -1251,6 +1301,7 @@ out:
+ 
+ static INDEX_BLOCK *ntfs_ir_to_ib(INDEX_ROOT *ir, VCN ib_vcn)
+ {
++	u32 ib_size;
+ 	INDEX_BLOCK *ib;
+ 	INDEX_ENTRY *ie_last;
+ 	char *ies_start, *ies_end;
+@@ -1258,7 +1309,8 @@ static INDEX_BLOCK *ntfs_ir_to_ib(INDEX_ROOT *ir, VCN ib_vcn)
+ 
+ 	ntfs_log_trace("Entering\n");
+ 
+-	ib = ntfs_ib_alloc(ib_vcn, le32_to_cpu(ir->index_block_size), LEAF_NODE);
++	ib_size = le32_to_cpu(ir->index_block_size);
++	ib = ntfs_ib_alloc(ib_vcn, ib_size, LEAF_NODE);
+ 	if (!ib)
+ 		return NULL;
+ 
+@@ -1270,6 +1322,16 @@ static INDEX_BLOCK *ntfs_ir_to_ib(INDEX_ROOT *ir, VCN ib_vcn)
+ 	 * as well, which can never have any data.
+ 	 */
+ 	i = (char *)ie_last - ies_start + le16_to_cpu(ie_last->length);
++	if (i < 0 || (u64)offsetof(INDEX_BLOCK, index) +
++			le32_to_cpu(ib->index.entries_offset) + (u32)i > ib_size) {
++		ntfs_log_error("Last entry in index root overflows the index "
++				"block size: %d (index block size: %lu)\n",
++				i, (unsigned long)ib_size);
++		free(ib);
++		errno = EIO;
++		return NULL;
++	}
++
+ 	memcpy(ntfs_ie_get_first(&ib->index), ies_start, i);
+ 
+ 	ib->index.ih_flags = ir->index.ih_flags;
+@@ -1305,6 +1367,7 @@ static int ntfs_ib_copy_tail(ntfs_index_context *icx, INDEX_BLOCK *src,
+ 	u8 *ies_end;
+ 	INDEX_ENTRY *ie_head;		/* first entry after the median */
+ 	int tail_size, ret;
++	u32 dst_allocated, dst_entries, dst_capacity;
+ 	INDEX_BLOCK *dst;
+ 
+ 	ntfs_log_trace("Entering\n");
+@@ -1318,6 +1381,26 @@ static int ntfs_ib_copy_tail(ntfs_index_context *icx, INDEX_BLOCK *src,
+ 
+ 	ies_end = (u8 *)ntfs_ie_get_end(&src->index);
+ 	tail_size = ies_end - (u8 *)ie_head;
++	dst_allocated = le32_to_cpu(dst->index.allocated_size);
++	dst_entries = le32_to_cpu(dst->index.entries_offset);
++	dst_capacity = dst_entries <= dst_allocated ?
++			dst_allocated - dst_entries : 0;
++
++	/*
++	 * A corrupt source entries_offset can be smaller than the canonical
++	 * offset set by ntfs_ib_alloc().  In that case the source tail can be
++	 * larger than the fresh destination's usable entry area.  Also reject a
++	 * negative difference before memcpy() converts it to a huge size_t.
++	 */
++	if (tail_size < 0 || dst_entries > dst_allocated ||
++			(u32)tail_size > dst_capacity) {
++		ntfs_log_error("Invalid tail_size %d (destination capacity %u) "
++				"in ntfs_ib_copy_tail\n", tail_size, dst_capacity);
++		free(dst);
++		errno = EIO;
++		return STATUS_ERROR;
++	}
++
+ 	memcpy(ntfs_ie_get_first(&dst->index), ie_head, tail_size);
+ 
+ 	dst->index.index_length = cpu_to_le32(tail_size +
+@@ -2282,9 +2365,9 @@ INDEX_ENTRY *ntfs_index_walk_down(INDEX_ENTRY *ie,
+ 
+ 			/* down from non-zero level */
+ 			if (ictx->pindex >= MAX_PARENT_VCN - 1) {
+-				ntfs_log_error("Index tree depth exceeds the supported maximum (%d).\n",
++				errno = EOPNOTSUPP;
++				ntfs_log_perror("Index is over %d levels deep",
+ 						MAX_PARENT_VCN);
+-				errno = EIO;
+ 				return NULL;
+ 			}
+ 
+diff --git a/libntfs/runlist.c b/libntfs/runlist.c
+index 6663051..cdf35cb 100644
+--- a/libntfs/runlist.c
++++ b/libntfs/runlist.c
+@@ -765,6 +765,22 @@ runlist_element *ntfs_runlists_merge(runlist_element *drl,
+ 	return rl;
+ }
+ 
++/*
++ * Decode a little-endian signed mapping-pair field without shifting a
++ * negative signed value.  Mapping-pair fields are at most 64 bits wide.
++ */
++static int ntfs_mapping_pair_sign_extend(const u8 *buf, u8 size, s64 *value)
++{
++	sle64 encoded;
++
++	if (!buf || !value || !size || size > sizeof(encoded))
++		return -1;
++	memset(&encoded, buf[size - 1] & 0x80 ? 0xff : 0, sizeof(encoded));
++	memcpy(&encoded, buf, size);
++	*value = sle64_to_cpu(encoded);
++	return 0;
++}
++
+ /**
+  * ntfs_mapping_pairs_decompress_i - convert mapping pairs array to runlist
+  * @vol:	ntfs volume on which the attribute resides
+@@ -878,10 +894,11 @@ runlist_element *ntfs_mapping_pairs_decompress_i(const ntfs_volume *vol,
+ 		 */
+ 		b = *buf & 0xf;
+ 		if (b) {
+-			if (buf + b > attr_end)
++			if (b > sizeof(deltaxcn) ||
++					(size_t)(attr_end - buf) <= b)
++				goto io_error;
++			if (ntfs_mapping_pair_sign_extend(buf + 1, b, &deltaxcn))
+ 				goto io_error;
+-			for (deltaxcn = (s8)buf[b--]; b; b--)
+-				deltaxcn = (deltaxcn << 8) + buf[b];
+ 		} else { /* The length entry is compulsory. */
+ 			ntfs_log_error("Missing length entry in mapping pairs array.\n");
+ 			deltaxcn = (s64)-1;
+@@ -900,7 +917,10 @@ runlist_element *ntfs_mapping_pairs_decompress_i(const ntfs_volume *vol,
+ 		 */
+ 		rl[rlpos].length = deltaxcn;
+ 		/* Increment the current vcn by the current run length. */
+-		vcn += deltaxcn;
++		if (__builtin_add_overflow(vcn, deltaxcn, &vcn)) {
++			ntfs_log_error("VCN overflow in mapping pairs array.\n");
++			goto err_out;
++		}
+ 		/*
+ 		 * There might be no lcn change at all, as is the case for
+ 		 * sparse clusters on NTFS 3.0+, in which case we set the lcn
+@@ -917,11 +937,13 @@ runlist_element *ntfs_mapping_pairs_decompress_i(const ntfs_volume *vol,
+ 				goto err_out;
+ 			}
+ 
+-			b = b2 + ((*buf >> 4) & 0xf);
+-			if (buf + b > attr_end)
++			b = (*buf >> 4) & 0xf;
++			if (b > sizeof(deltaxcn) ||
++					(size_t)(attr_end - buf) <= (size_t)b2 + b)
++				goto io_error;
++			if (ntfs_mapping_pair_sign_extend(buf + b2 + 1, b,
++					&deltaxcn))
+ 				goto io_error;
+-			for (deltaxcn = (s8)buf[b--]; b > b2; b--)
+-				deltaxcn = (deltaxcn << 8) + buf[b];
+ 
+ 			/*
+ 			 * normally if deltaxcn is zero, it is corrupted.
+@@ -939,7 +961,10 @@ runlist_element *ntfs_mapping_pairs_decompress_i(const ntfs_volume *vol,
+ 			}
+ 
+ 			/* Change the current lcn to it's new value. */
+-			lcn += deltaxcn;
++			if (__builtin_add_overflow(lcn, deltaxcn, &lcn)) {
++				ntfs_log_error("LCN overflow in mapping pairs array.\n");
++				goto err_out;
++			}
+ #ifdef DEBUG
+ 			/*
+ 			 * On NTFS 1.2-, apparently can have lcn == -1 to

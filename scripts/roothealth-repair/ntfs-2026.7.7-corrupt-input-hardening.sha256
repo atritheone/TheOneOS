@@ -1,0 +1,4 @@
+84e5015f8600257e3a077d627a28c03d2c23dd0acd4b7f0bf44e6cc98056a93d  ntfs-2026.7.7-corrupt-input-hardening.patch
+f7264991674d0c5ac6bddda65536a9c624fb1ed8f0368b85d2e1b99ebf089f6f  ntfs-2026.7.7-corrupt-input-selftest.c
+79e2e47bcdf972d72532c6afb55511fefa2a1aae99281bf36177126754200230  check-ntfs-2026.7.7-corrupt-input-hardening.py
+cc5081b9fd0694b9f270fd38c456a5320a62e412aaf857efd9bbcc75de70dc0b  ntfs-2026.7.7-corrupt-input-hardening-qualification.json

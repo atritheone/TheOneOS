@@ -1,0 +1,195 @@
+{
+  "format": 1,
+  "component": "python",
+  "release": "3.14.7-t1os.62",
+  "python_version": "3.14.7",
+  "python_abi": "cp314",
+  "architecture": "x86_64",
+  "source_mode": "verified-source-build",
+  "runtime_path": "/the one/software/python",
+  "catalogue_path": "/the one/catalogue/python",
+  "stable_entrypoint": "/the one/software/python/bin/python",
+  "versioned_entrypoint": "/the one/software/python/bin/python3.14",
+  "compatibility_entrypoint": "/the one/software/python/bin/python3.13",
+  "interpreter": "/the one/catalogue/python/ld-linux-x86-64.so.2",
+  "runpath": "/the one/catalogue/python",
+  "ssl": {
+    "default_ca_file": "/the one/settings/network/cacerts.pem"
+  },
+  "profiled_python_entrypoints": {
+    "format": 1,
+    "owner": 0,
+    "group": 0,
+    "install_mode": "0555",
+    "shebang": "#!\"/the one/software/python/bin/python\" -B\n",
+    "entries": [
+      {
+        "root": "boot",
+        "path": "boot animation/boot animation.py",
+        "destination": "/boot/boot animation/boot animation.py"
+      },
+      {
+        "root": "build_software",
+        "path": "GODDESS/GODDESS.py",
+        "destination": "/the one/build/GODDESS/GODDESS.py"
+      },
+      {
+        "root": "build_software",
+        "path": "array/array.py",
+        "destination": "/the one/build/array/array.py"
+      },
+      {
+        "root": "build_software",
+        "path": "audio/audioserver.py",
+        "destination": "/the one/build/audio/audioserver.py"
+      },
+      {
+        "root": "build_software",
+        "path": "brick/brick.py",
+        "destination": "/the one/build/brick/brick.py"
+      },
+      {
+        "root": "build_software",
+        "path": "calculator/calculator.py",
+        "destination": "/the one/build/calculator/calculator.py"
+      },
+      {
+        "root": "build_software",
+        "path": "chromium/chromium.py",
+        "destination": "/the one/build/chromium/chromium.py"
+      },
+      {
+        "root": "build_software",
+        "path": "drivers/driverserver.py",
+        "destination": "/the one/build/drivers/driverserver.py"
+      },
+      {
+        "root": "build_software",
+        "path": "exchange/exchange.py",
+        "destination": "/the one/build/exchange/exchange.py"
+      },
+      {
+        "root": "build_software",
+        "path": "expanse/expanse.py",
+        "destination": "/the one/build/expanse/expanse.py"
+      },
+      {
+        "root": "build_software",
+        "path": "input/inputserver.py",
+        "destination": "/the one/build/input/inputserver.py"
+      },
+      {
+        "root": "build_software",
+        "path": "lock screen/lock screen.py",
+        "destination": "/the one/build/lock screen/lock screen.py"
+      },
+      {
+        "root": "build_software",
+        "path": "network/network.py",
+        "destination": "/the one/build/network/network.py"
+      },
+      {
+        "root": "build_software",
+        "path": "operations/operationscentre.py",
+        "destination": "/the one/build/operations/operationscentre.py"
+      },
+      {
+        "root": "build_software",
+        "path": "operations/operationsserver.py",
+        "destination": "/the one/build/operations/operationsserver.py"
+      },
+      {
+        "root": "build_software",
+        "path": "player/player.py",
+        "destination": "/the one/build/player/player.py"
+      },
+      {
+        "root": "build_software",
+        "path": "procedures/procedures.py",
+        "destination": "/the one/build/procedures/procedures.py"
+      },
+      {
+        "root": "build_software",
+        "path": "python/python.py",
+        "destination": "/the one/build/python/python.py"
+      },
+      {
+        "root": "build_software",
+        "path": "reign/reign.py",
+        "destination": "/the one/build/reign/reign.py"
+      },
+      {
+        "root": "build_software",
+        "path": "settings/settings.py",
+        "destination": "/the one/build/settings/settings.py"
+      },
+      {
+        "root": "build_software",
+        "path": "snap/snap.py",
+        "destination": "/the one/build/snap/snap.py"
+      },
+      {
+        "root": "build_software",
+        "path": "startup/startup.py",
+        "destination": "/the one/build/startup/startup.py"
+      },
+      {
+        "root": "build_software",
+        "path": "viewer/viewer.py",
+        "destination": "/the one/build/viewer/viewer.py"
+      },
+      {
+        "root": "build_software",
+        "path": "windows/windowserver.py",
+        "destination": "/the one/build/windows/windowserver.py"
+      },
+      {
+        "root": "build_software",
+        "path": "write/write.py",
+        "destination": "/the one/build/write/write.py"
+      },
+      {
+        "root": "virtualbox_software",
+        "path": "guestadditions.py",
+        "destination": "/the one/software/virtualbox/guestadditions.py"
+      }
+    ]
+  },
+  "source_date_epoch": 1786242345,
+  "protected_external_roots": [
+    {
+      "name": "image_catalogue",
+      "source": "source/catalogue/image",
+      "destination": "/the one/catalogue/image",
+      "exclude_generated_bytecode": false
+    },
+    {
+      "name": "build_software",
+      "source": "source/build software",
+      "destination": "/the one/build",
+      "exclude_generated_bytecode": true
+    },
+    {
+      "name": "boot",
+      "source": "source/boot",
+      "destination": "/boot",
+      "exclude_generated_bytecode": true
+    },
+    {
+      "name": "virtualbox_software",
+      "source": "source/software/virtualbox",
+      "destination": "/the one/software/virtualbox",
+      "exclude_generated_bytecode": true
+    }
+  ],
+  "forbidden_needed": [
+    "libdl.so.2",
+    "libpthread.so.0",
+    "librt.so.1"
+  ],
+  "bytecode": {
+    "enabled": true,
+    "invalidation_mode": "checked-hash",
+    "embedded_prefix": "/the one/software/python"
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "format": "roothealth-ntfscp-provenance",
+  "format_version": 1,
+  "state": "proposed-test-only",
+  "tool": "ntfscp",
+  "upstream": {
+    "project": "ntfs-next",
+    "commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+    "archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5"
+  },
+  "binary": {
+    "sha256": "d15a0c60451153c1a1d2c2d033be2262b1bd4df42a915947d02492c6f2eb5b57",
+    "bytes": 344784
+  },
+  "build": {
+    "source_manifest_sha256": null,
+    "link_manifest_sha256": null,
+    "qualification_sha256": null
+  }
+}

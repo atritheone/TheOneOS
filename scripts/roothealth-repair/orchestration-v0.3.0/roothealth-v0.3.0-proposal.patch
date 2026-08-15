@@ -1,0 +1,4322 @@
+diff --git a/src/Makefile.am b/src/Makefile.am
+index 14f04eb..dbe9a3c 100644
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -14,7 +14,7 @@ LINK=$(STATIC_LINK) $(LIBTOOL_LINK)
+ 
+ bin_PROGRAMS		= ntfsinfo ntfscluster ntfsls ntfscat ntfscmp
+ sbin_PROGRAMS		= mkntfs ntfslabel ntfsclone ntfsck ntfsresize \
+-			  ntfsundelete ntfscp roothealth-repair-core
++			  ntfsundelete ntfscp roothealth
+ 
+ # Built only with --enable-extras (and ntfsmove also needs --enable-quarantined),
+ # matching upstream ntfsprogs classification.
+@@ -66,14 +66,23 @@ ntfsck_SOURCES		= ntfsck.c utils.c utils.h
+ ntfsck_LDADD		= $(AM_LIBS)
+ ntfsck_LDFLAGS		= $(AM_LFLAGS)
+ 
+-roothealth_repair_core_SOURCES = roothealth_repair_main.c \
++roothealth_SOURCES = roothealth_repair_main.c \
++	roothealth_orchestrator.c roothealth_orchestrator.h \
++	roothealth_format3.c roothealth_format3.h \
++	roothealth_report.c roothealth_report.h \
+ 	roothealth_repair.c roothealth_repair.h roothealth_write.c \
+ 	roothealth_write.h roothealth_recover.c roothealth_recover.h \
+ 	roothealth_playlog.c roothealth_replay_guard.c \
+ 	roothealth_replay_guard.h roothealth_replay_analysis.c \
+-	roothealth_replay_analysis.h utils.c utils.h
+-roothealth_repair_core_LDADD = $(AM_LIBS)
+-roothealth_repair_core_LDFLAGS = $(AM_LFLAGS)
++	roothealth_replay_analysis.h roothealth_wal.c roothealth_wal.h \
++	roothealth_bitmap.c roothealth_bitmap.h roothealth_coverage.c \
++	roothealth_coverage.h roothealth_dirty.c roothealth_dirty.h \
++	roothealth_hash_stream.c roothealth_hash_stream.h \
++	roothealth_overlay.c roothealth_overlay.h roothealth_policy.c \
++	roothealth_policy_internal.h roothealth_raw_mft.c roothealth_raw_mft.h \
++	utils.c utils.h
++roothealth_LDADD = $(AM_LIBS)
++roothealth_LDFLAGS = $(AM_LFLAGS)
+ 
+ ntfsls_SOURCES		= ntfsls.c utils.c utils.h list.h
+ ntfsls_LDADD		= $(AM_LIBS)
+diff --git a/src/roothealth_format3.c b/src/roothealth_format3.c
+new file mode 100644
+index 0000000..b66021d
+--- /dev/null
++++ b/src/roothealth_format3.c
+@@ -0,0 +1,941 @@
++/* ROOTHEALTH_REPAIR_ROLE(REPORT) ROOTHEALTH_IO_ROLE(REPORT) */
++#include "config.h"
++
++#include <errno.h>
++#include <inttypes.h>
++#include <stdint.h>
++#ifdef ROOTHEALTH_FORMAT3_TEST_HOOKS
++#include <stdlib.h>
++#endif
++#include <string.h>
++#include <sys/sysmacros.h>
++
++#include "roothealth_format3.h"
++#include "roothealth_hash_stream.h"
++
++/* Compile-time lengths for literal and adjacent-literal JSON fragments. */
++#define RH_APPEND_LITERAL(report, literal) \
++	rh_report_append((report), (literal), sizeof(literal) - 1U)
++
++static const char rh_coverage_hash[] =
++	"fd2ded85e5d9dacae9cd6a9f03f987ac97f4a655f9d397b0fd1bd82aa2aa61ac";
++static const char rh_empty_batch_hash[] =
++	"02aa38ce7a8e62b93190e6088f62d2d17ec3d93aee44532d50efdef42941cb90";
++static const char rh_empty_wal_hash[] =
++	"e2050efb40ae6807a9483334f8aee9d5beb17241917ab8537709dc20e32f4b68";
++static const char rh_size_hash[] =
++	"03e7d405abfb81027dddd44ec44c970b7f35221deddaabb55e78ededcf70f8a4";
++
++struct rh_issue_detail {
++	const char *code;
++	const char *pass;
++	const char *message;
++	const char *severity;
++	unsigned int severity_code;
++	const char *predicate;
++};
++
++static void rh_put_le16(unsigned char output[2], uint16_t value)
++{
++	output[0] = (unsigned char)value;
++	output[1] = (unsigned char)(value >> 8);
++}
++
++static void rh_put_le32_report(unsigned char output[4], uint32_t value)
++{
++	output[0] = (unsigned char)value;
++	output[1] = (unsigned char)(value >> 8);
++	output[2] = (unsigned char)(value >> 16);
++	output[3] = (unsigned char)(value >> 24);
++}
++
++static void rh_put_le64_report(unsigned char output[8], uint64_t value)
++{
++	size_t i;
++	for (i = 0; i < 8; i++)
++		output[i] = (unsigned char)(value >> (8U * i));
++}
++
++static int rh_hash_text(struct rh_hash_stream *hash, const char *text)
++{
++	unsigned char length[2];
++	size_t size = strlen(text);
++
++	if (size >= UINT16_MAX)
++		return -1;
++	rh_put_le16(length, (uint16_t)size);
++	return rh_hash_stream_update(hash, length, sizeof(length)) ||
++		rh_hash_stream_update(hash, text, size);
++}
++
++static void rh_hex_report(const unsigned char *bytes, size_t length,
++		char *output)
++{
++	static const char digits[] = "0123456789abcdef";
++	size_t i;
++	for (i = 0; i < length; i++) {
++		output[i * 2] = digits[bytes[i] >> 4];
++		output[i * 2 + 1] = digits[bytes[i] & 15U];
++	}
++	output[length * 2] = 0;
++}
++
++static int rh_issue_ledger_hash(const struct rh_issue_detail *issue,
++		char output[65])
++{
++	struct rh_hash_stream hash;
++	unsigned char integer[8], header[12], digest[32];
++	unsigned char fields[12] = { 0 };
++	const char *predicates[2] = { "COMPLETE_CHECK_SURFACE", issue->predicate };
++	unsigned int predicate_count = issue->predicate ? 2U : 1U;
++	unsigned int i;
++
++	rh_hash_stream_init(&hash);
++	rh_put_le32_report(header, 3);
++	rh_put_le64_report(header + 4, 1);
++	if (rh_hash_stream_update(&hash, "RHISS3\0\0", 8) ||
++			rh_hash_stream_update(&hash, header, sizeof(header)))
++		return -1;
++	rh_put_le64_report(fields, 0);
++	fields[8] = (unsigned char)issue->severity_code;
++	fields[9] = 0; /* unresolved */
++	fields[10] = 3; /* DENY */
++	fields[11] = 0;
++	if (rh_hash_stream_update(&hash, fields, sizeof(fields)))
++		return -1;
++	memset(integer, 0xff, sizeof(integer));
++	if (rh_hash_stream_update(&hash, integer, sizeof(integer)) ||
++			rh_hash_stream_update(&hash, integer, sizeof(integer)) ||
++			rh_hash_text(&hash, issue->code) ||
++			rh_hash_text(&hash, issue->pass))
++		return -1;
++	rh_put_le16(fields, UINT16_MAX); /* null path */
++	if (rh_hash_stream_update(&hash, fields, 2) ||
++			rh_hash_text(&hash, issue->message))
++		return -1;
++	rh_put_le16(fields, (uint16_t)predicate_count);
++	if (rh_hash_stream_update(&hash, fields, 2))
++		return -1;
++	for (i = 0; i < predicate_count; i++)
++		if (rh_hash_text(&hash, predicates[i]))
++			return -1;
++	if (rh_hash_stream_update(&hash, fields, 2))
++		return -1;
++	for (i = 0; i < predicate_count; i++)
++		if (rh_hash_text(&hash, predicates[i]))
++			return -1;
++	memset(fields, 0, 4); /* no action ordinals */
++	if (rh_hash_stream_update(&hash, fields, 4) ||
++			rh_hash_stream_final(&hash, digest))
++		return -1;
++	rh_hex_report(digest, sizeof(digest), output);
++	return 0;
++}
++
++static int rh_bool_or_null(struct rh_report *report, int known, int value)
++{
++	return rh_report_appendf(report, "%s",
++		known ? (value ? "true" : "false") : "null");
++}
++
++static int rh_execution(struct rh_report *report,
++		const struct rh_execution_evidence *execution)
++{
++	if (RH_APPEND_LITERAL(report, "{\"binary_sha256\":") ||
++			rh_report_json_string(report, execution->binary_sha256) ||
++			rh_report_appendf(report,
++				",\"device_fd_inherited\":%s,\"exec_id\":",
++				execution->device_fd_inherited ? "true" : "false") ||
++			rh_report_json_string(report, execution->exec_id) ||
++			rh_report_appendf(report,
++				",\"parent_pid\":%"PRIu64",\"pid\":%"PRIu64
++				",\"pipe_payload_bytes\":%"PRIu64
++				",\"report_fd_inherited\":%s,\"role\":",
++				execution->parent_pid, execution->pid,
++				execution->pipe_payload_bytes,
++				execution->report_fd_inherited ? "true" : "false") ||
++			rh_report_json_string(report, execution->role) ||
++			RH_APPEND_LITERAL(report, ",\"timed_out\":") ||
++			rh_bool_or_null(report, execution->timed_out_known,
++				execution->timed_out) ||
++			RH_APPEND_LITERAL(report, ",\"timeout_ms\":"))
++		return -1;
++	if (execution->timeout_known) {
++		if (rh_report_appendf(report, "%u", execution->timeout_ms))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"transport\":") ||
++			rh_report_json_string(report, execution->transport) ||
++			RH_APPEND_LITERAL(report, ",\"transport_exit_status\":"))
++		return -1;
++	if (execution->transport_status_known) {
++		if (rh_report_appendf(report, "%d", execution->transport_status))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	return RH_APPEND_LITERAL(report, "}");
++}
++
++static int rh_coverage(struct rh_report *report)
++{
++	return rh_report_appendf(report,
++		"{\"attributes\":{\"completed\":null,\"expected\":null,"
++		"\"extents_completed\":null,\"extents_expected\":null,"
++		"\"nonresident\":null,\"resident\":null,\"runs_completed\":null,"
++		"\"runs_expected\":null,\"skipped\":null,\"unreadable\":null,"
++		"\"user_defined\":null},\"bitmaps\":{\"cluster_bits_examined\":null,"
++		"\"cluster_bits_expected\":null,\"differences\":null,"
++		"\"mft_bits_examined\":null,\"mft_bits_expected\":null},"
++		"\"complete\":false,\"compressed\":{\"units_examined\":null,"
++		"\"units_expected\":null,\"unreadable\":null},\"fixed_system\":{"
++		"\"checks\":[],\"completed\":null,\"expected\":null,\"failed\":null},"
++		"\"indexes\":{\"bitmap_bits_examined\":null,"
++		"\"bitmap_bits_expected\":null,\"blocks_allocated\":null,"
++		"\"blocks_examined\":null,\"blocks_reachable\":null,"
++		"\"blocks_unreadable\":null,\"completed\":null,\"expected\":null},"
++		"\"io_errors\":null,\"ledger_hash\":\"%s\",\"mft_slots\":{"
++		"\"completed\":null,\"expected\":null,\"free\":null,\"invalid\":null,"
++		"\"live\":null,\"unreadable\":null},\"namespace_links\":{"
++		"\"completed\":null,\"expected\":null,\"reciprocal\":null,"
++		"\"unreadable\":null,\"unresolved\":null},\"reparse\":{"
++		"\"attributes_examined\":null,\"attributes_expected\":null,"
++		"\"index_entries_examined\":null,\"index_entries_expected\":null,"
++		"\"unreadable\":null,\"unresolved\":null},\"security\":{"
++		"\"descriptors_examined\":null,\"descriptors_expected\":null,"
++		"\"ids_examined\":null,\"ids_expected\":null,"
++		"\"sdh_entries_examined\":null,\"sdh_entries_expected\":null,"
++		"\"sds_entries_examined\":null,\"sds_entries_expected\":null,"
++		"\"sii_entries_examined\":null,\"sii_entries_expected\":null,"
++		"\"unreadable\":null},\"skipped\":null}", rh_coverage_hash);
++}
++
++static int rh_snapshot(struct rh_report *report,
++		const struct rh_scan_evidence *scan, int final,
++		const struct rh_foundation_evidence *foundation,
++		enum rh_cli_mode mode)
++{
++	const char *native = rh_native_state(scan);
++	const char *binding = foundation->count ? "FOUNDATION" : "INITIAL";
++
++	if (RH_APPEND_LITERAL(report, "{"))
++		return -1;
++	if (final && (RH_APPEND_LITERAL(report, "\"binding\":") ||
++			rh_report_json_string(report, binding) ||
++			RH_APPEND_LITERAL(report, ",")))
++		return -1;
++	if (rh_report_appendf(report, "\"completed\":%s,\"coverage\":",
++			scan->completed ? "true" : "false") ||
++			rh_coverage(report) ||
++			RH_APPEND_LITERAL(report, ",\"dirty\":") ||
++			rh_bool_or_null(report, scan->dirty_known, scan->dirty) ||
++			RH_APPEND_LITERAL(report, ",\"execution\":") ||
++			rh_execution(report, &scan->execution) ||
++			rh_report_appendf(report,
++				",\"exit_code\":%d,\"fresh_process\":true,"
++				"\"identity_valid\":", scan->result) ||
++			rh_bool_or_null(report, scan->identity.prewrite_checked,
++				scan->identity_valid) ||
++			RH_APPEND_LITERAL(report, ",\"logfile_clean\":") ||
++			rh_bool_or_null(report, scan->logfile_clean_known,
++				scan->logfile_clean) ||
++			RH_APPEND_LITERAL(report, ",\"native_log_state\":"))
++		return -1;
++	if (native) {
++		if (rh_report_json_string(report, native))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (final && RH_APPEND_LITERAL(report, ",\"ordinal\":0,\"plan_hash\":"))
++		return -1;
++	if (final) {
++		if (foundation->count) {
++			if (rh_report_json_string(report, foundation->plan_hash))
++				return -1;
++		} else if (RH_APPEND_LITERAL(report, "null"))
++			return -1;
++	}
++	if (RH_APPEND_LITERAL(report, ",\"read_only\":true,\"result\":") ||
++			rh_report_json_string(report, rh_public_result(scan->result)) ||
++			RH_APPEND_LITERAL(report, ",\"scan_id\":") ||
++			rh_report_json_string(report, scan->scan_id))
++		return -1;
++	if (final && (RH_APPEND_LITERAL(report, ",\"stage\":\"FINAL\","
++			"\"transaction_uuid\":null")))
++		return -1;
++	(void)mode;
++	return RH_APPEND_LITERAL(report, "}");
++}
++
++static int rh_device(struct rh_report *report,
++		const struct rh_device_evidence *device)
++{
++	if (RH_APPEND_LITERAL(report, "{\"mapper_name\":null,\"requested_dev\":") ||
++			rh_report_appendf(report,
++				"\"%"PRIu64"\",\"requested_ino\":\"%"PRIu64
++				"\",\"requested_path\":",
++				(uint64_t)device->requested_stat.st_dev,
++				(uint64_t)device->requested_stat.st_ino) ||
++			rh_report_json_string(report, device->requested) ||
++			rh_report_appendf(report,
++				",\"requested_was_symlink\":%s,"
++				"\"resolved_dev\":\"%"PRIu64"\","
++				"\"resolved_ino\":\"%"PRIu64"\","
++				"\"resolved_major\":%u,\"resolved_minor\":%u,"
++				"\"resolved_path\":",
++				device->requested_was_symlink ? "true" : "false",
++				(uint64_t)device->resolved_stat.st_dev,
++				(uint64_t)device->resolved_stat.st_ino,
++				(unsigned int)major(device->resolved_stat.st_rdev),
++				(unsigned int)minor(device->resolved_stat.st_rdev)) ||
++			rh_report_json_string(report, device->resolved) ||
++			rh_report_appendf(report,
++				",\"resolved_type\":\"%s\",\"selection_proven\":%s}",
++				S_ISBLK(device->resolved_stat.st_mode) ?
++					"block" : "regular",
++				device->selection_proven ? "true" : "false"))
++		return -1;
++	return 0;
++}
++
++static int rh_identity(struct rh_report *report, const struct rh_cli *cli,
++		const struct rh_scan_evidence *scan)
++{
++	if (RH_APPEND_LITERAL(report, "{\"anchor\":") ||
++			(scan->identity.anchor[0] ?
++				rh_report_json_string(report, scan->identity.anchor) :
++				RH_APPEND_LITERAL(report, "null")) ||
++			RH_APPEND_LITERAL(report, ",\"expected_label\":\"T1OS\","
++				"\"expected_serial\":") ||
++			rh_report_appendf(report, "\"0x%016"PRIx64"\","
++				"\"observed_backup_serial\":", cli->expected_serial))
++		return -1;
++	if (scan->identity.observed_backup_serial) {
++		if (rh_report_appendf(report, "\"0x%016"PRIx64"\"",
++				scan->identity.observed_backup_serial))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"observed_label\":") ||
++			(scan->identity.observed_label[0] ?
++				rh_report_json_string(report, scan->identity.observed_label) :
++				RH_APPEND_LITERAL(report, "null")) ||
++			RH_APPEND_LITERAL(report, ",\"observed_primary_serial\":"))
++		return -1;
++	if (scan->identity.observed_primary_serial) {
++		if (rh_report_appendf(report, "\"0x%016"PRIx64"\"",
++				scan->identity.observed_primary_serial))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (rh_report_appendf(report,
++			",\"prewrite_checked\":%s,\"prewrite_valid\":",
++			scan->identity.prewrite_checked ? "true" : "false") ||
++			rh_bool_or_null(report, scan->identity.prewrite_checked,
++				scan->identity_valid))
++		return -1;
++	return RH_APPEND_LITERAL(report, "}");
++}
++
++static int rh_native(struct rh_report *report,
++		const struct rh_scan_evidence *scan)
++{
++	const struct rh_log_result *log = &scan->native_log;
++	const char *state = rh_native_state(scan);
++	int checked = log->checked && state;
++	int restart_evidence = checked &&
++		(log->state == RH_NATIVE_LOG_CLEAN_RESTART ||
++		 log->state == RH_NATIVE_LOG_REPLAY_PLANNED);
++
++	/*
++	 * Native-log evidence is retained, but this slice zeroes its physical plan
++	 * after classifying imported replay as unsupported.
++	 */
++	if (rh_report_appendf(report,
++			"{\"checked\":%s,\"state\":", checked ? "true" : "false"))
++		return -1;
++	if (checked) {
++		if (rh_report_json_string(report, state))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"logfile_bytes\":"))
++		return -1;
++	if (checked) {
++		if (rh_report_appendf(report, "%"PRIu64,
++				(uint64_t)log->logfile_bytes))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"pages_expected\":"))
++		return -1;
++	if (checked) {
++		if (rh_report_appendf(report, "%u", log->pages_expected))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (rh_report_appendf(report,
++			",\"pages_examined\":%u,\"wiped_pages_scanned\":%u,"
++			"\"version_major\":",
++			checked ? log->pages_examined : 0,
++			checked ? log->wiped_pages_scanned : 0))
++		return -1;
++	if (restart_evidence) {
++		if (rh_report_appendf(report, "%d", log->major_version))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"version_minor\":"))
++		return -1;
++	if (restart_evidence) {
++		if (rh_report_appendf(report, "%d", log->minor_version))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++#define RH_NATIVE_LSN(name, value) \
++	do { \
++		if (RH_APPEND_LITERAL(report, ",\"" name "\":")) \
++			return -1; \
++		if (restart_evidence) { \
++			if (rh_report_appendf(report, "%"PRIu64, (uint64_t)(value))) \
++				return -1; \
++		} else if (RH_APPEND_LITERAL(report, "null")) \
++			return -1; \
++	} while (0)
++	RH_NATIVE_LSN("restart_lsn", log->restart_lsn);
++	RH_NATIVE_LSN("synced_lsn", log->synced_lsn);
++	RH_NATIVE_LSN("committed_lsn", log->committed_lsn);
++	RH_NATIVE_LSN("latest_lsn", log->latest_lsn);
++#undef RH_NATIVE_LSN
++	return rh_report_appendf(report,
++		",\"checkpoint_records_examined\":%u,"
++		"\"control_records_examined\":%u,\"mutation_records_examined\":%u,"
++		"\"open_attribute_tables\":%u,\"attribute_name_tables\":%u,"
++		"\"dirty_page_tables\":%u,\"transaction_tables\":%u,"
++		"\"actions_seen\":%u,\"redo_actions\":%u,\"undo_actions\":%u,"
++		"\"restart_pages_planned\":%u,\"unsupported_actions\":%u,"
++		"\"io_errors\":%u,\"parse_errors\":%u,"
++		"\"planned_io_operations\":%zu,\"planned_io_bytes\":%"PRIu64"}",
++		checked ? log->checkpoint_records_examined : 0,
++		checked ? log->control_records_examined : 0,
++		checked ? log->mutation_records_examined : 0,
++		checked ? log->open_attribute_tables : 0,
++		checked ? log->attribute_name_tables : 0,
++		checked ? log->dirty_page_tables : 0,
++		checked ? log->transaction_tables : 0,
++		checked ? log->actions_seen : 0,
++		checked ? log->redo_actions : 0,
++		checked ? log->undo_actions : 0,
++		checked ? log->restart_pages_planned : 0,
++		checked ? log->unsupported_actions : 0,
++		checked ? log->io_errors : 0,
++		checked ? log->parse_errors : 0,
++		checked && !scan->native_refused ?
++			log->planned_io_operations : 0,
++		checked && !scan->native_refused ?
++			(uint64_t)log->planned_io_bytes : 0);
++}
++
++static const char *rh_wal_state(int state)
++{
++	switch (state) {
++	case RH_WAL_EMPTY: return "EMPTY";
++	case RH_WAL_PREPARING: return "PREPARING";
++	case RH_WAL_APPLYING: return "APPLYING";
++	case RH_WAL_COMMITTED: return "COMMITTED";
++	case RH_WAL_ROLLBACK: return "ROLLBACK";
++	default: return NULL;
++	}
++}
++
++static const char *rh_wal_tx(int state)
++{
++	switch (state) {
++	case RH_WAL_TX_NONE: return "NONE";
++	case RH_WAL_TX_METADATA_REPAIR: return "METADATA_REPAIR";
++	case RH_WAL_TX_DIRTY_CLEAR: return "DIRTY_CLEAR";
++	default: return NULL;
++	}
++}
++
++static int rh_wal(struct rh_report *report,
++		const struct rh_scan_evidence *scan)
++{
++	const struct rh_wal_observation *wal = &scan->wal;
++	const char *state = rh_wal_state(wal->state);
++	const char *transaction = rh_wal_tx(wal->transaction_kind);
++
++	if (rh_report_appendf(report,
++			"{\"checked\":%s,\"present\":",
++			wal->checked ? "true" : "false") ||
++			rh_bool_or_null(report, wal->present >= 0, wal->present) ||
++			RH_APPEND_LITERAL(report, ",\"valid\":") ||
++			rh_bool_or_null(report, wal->valid >= 0, wal->valid) ||
++			RH_APPEND_LITERAL(report, ",\"state\":"))
++		return -1;
++	if (state) {
++		if (rh_report_json_string(report, state))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"generation\":"))
++		return -1;
++	if (wal->valid == 1) {
++		if (rh_report_appendf(report, "%"PRIu64, wal->generation))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"recovery_required\":") ||
++			rh_bool_or_null(report, wal->recovery_required >= 0,
++				wal->recovery_required) ||
++			RH_APPEND_LITERAL(report, ",\"recovered\":false,"
++				"\"journal_uuid\":"))
++		return -1;
++	if (wal->valid == 1 && wal->journal_uuid[0]) {
++		if (rh_report_json_string(report, wal->journal_uuid))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"volume_serial\":"))
++		return -1;
++	if (wal->valid == 1) {
++		if (rh_report_appendf(report, "\"0x%016"PRIx64"\"",
++				wal->volume_serial))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"transaction_kind\":"))
++		return -1;
++	if (transaction) {
++		if (rh_report_json_string(report, transaction))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"max_entry_count\":"))
++		return -1;
++	if (wal->max_entry_count >= 0) {
++		if (rh_report_appendf(report, "%d", wal->max_entry_count))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"fast_path_trusted\":") ||
++			rh_bool_or_null(report, wal->checked, wal->fast_path_trusted) ||
++			RH_APPEND_LITERAL(report, ",\"fallback_attempted\":") ||
++			rh_bool_or_null(report, wal->checked, 0) ||
++			RH_APPEND_LITERAL(report, ",\"fallback_ambiguous\":") ||
++			rh_bool_or_null(report, wal->checked, 0) ||
++			RH_APPEND_LITERAL(report, ",\"unreadable_record_count\":"))
++		return -1;
++	if (wal->checked) {
++		if (rh_report_appendf(report, "%"PRIu64,
++				wal->unreadable_record_count))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	if (RH_APPEND_LITERAL(report, ",\"definite_duplicate_count\":"))
++		return -1;
++	if (wal->checked) {
++		if (rh_report_appendf(report, "%"PRIu64,
++				wal->definite_duplicate_count))
++			return -1;
++	} else if (RH_APPEND_LITERAL(report, "null"))
++		return -1;
++	return rh_report_appendf(report,
++		",\"write_boundaries\":0,\"action_ledger\":{"
++		"\"format\":\"RHWAL3\",\"entry_count\":0,\"ledger_hash\":\"%s\","
++		"\"total_bytes\":0,\"syncs\":0,\"write_boundaries\":0,"
++		"\"by_kind\":{},\"bytes_by_kind\":{},\"syncs_by_kind\":{},"
++		"\"boundaries_by_kind\":{},\"first_kind\":null,\"last_kind\":null,"
++		"\"error_count\":0},\"actions\":[]}", rh_empty_wal_hash);
++}
++
++static void rh_maps(const struct rh_foundation_evidence *foundation,
++		uint64_t count[RH_WRITE_KIND_COUNT],
++		uint64_t bytes[RH_WRITE_KIND_COUNT])
++{
++	size_t i;
++	memset(count, 0, sizeof(uint64_t) * RH_WRITE_KIND_COUNT);
++	memset(bytes, 0, sizeof(uint64_t) * RH_WRITE_KIND_COUNT);
++	for (i = 0; i < foundation->count; i++) {
++		enum rh_write_kind kind = foundation->actions[i].kind;
++		count[kind]++;
++		bytes[kind] += foundation->actions[i].length;
++	}
++}
++
++static int rh_id_map(struct rh_report *report,
++		const uint64_t values[RH_WRITE_KIND_COUNT])
++{
++	size_t i;
++	int first = 1;
++	if (RH_APPEND_LITERAL(report, "{"))
++		return -1;
++	for (i = 0; i < RH_WRITE_KIND_COUNT; i++) {
++		if (!values[i])
++			continue;
++		if (rh_report_appendf(report, "%s\"%zu\":%"PRIu64,
++				first ? "" : ",", i + 1, values[i]))
++			return -1;
++		first = 0;
++	}
++	return RH_APPEND_LITERAL(report, "}");
++}
++
++static int rh_kind_map(struct rh_report *report,
++		const uint64_t values[RH_WRITE_KIND_COUNT])
++{
++	size_t i;
++	int first = 1;
++	if (RH_APPEND_LITERAL(report, "{"))
++		return -1;
++	for (i = 0; i < RH_WRITE_KIND_COUNT; i++) {
++		if (!values[i])
++			continue;
++		if (rh_report_appendf(report, "%s", first ? "" : ",") ||
++				rh_report_json_string(report,
++					rh_write_kind_name((enum rh_write_kind)i)) ||
++				rh_report_appendf(report, ":%"PRIu64, values[i]))
++			return -1;
++		first = 0;
++	}
++	return RH_APPEND_LITERAL(report, "}");
++}
++
++static int rh_foundation(struct rh_report *report,
++		const struct rh_foundation_evidence *foundation)
++{
++	size_t i;
++	if (RH_APPEND_LITERAL(report, "["))
++		return -1;
++	for (i = 0; i < foundation->count; i++) {
++		const struct rh_foundation_action *action = &foundation->actions[i];
++		if (rh_report_appendf(report,
++				"%s{\"ordinal\":%"PRIu64",\"action_id\":%u,\"kind\":",
++				i ? "," : "", action->ordinal, action->action_id) ||
++				rh_report_json_string(report,
++					rh_write_kind_name(action->kind)) ||
++				RH_APPEND_LITERAL(report, ",\"target\":") ||
++				rh_report_json_string(report, action->target) ||
++				rh_report_appendf(report,
++					",\"offset\":%"PRIu64",\"length\":%"PRIu64
++					",\"before_hash\":\"%s\",\"after_hash\":\"%s\","
++					"\"verified\":true,\"write_boundaries\":%"PRIu64
++					",\"sync_ordinal\":%"PRIu64",\"sync_completed\":true,"
++					"\"readback_verified\":true,\"authority\":{"
++					"\"source_peer\":",
++					action->offset, action->length, action->before_hash,
++					action->after_hash, action->write_boundaries,
++					action->sync_ordinal) ||
++				rh_report_json_string(report, action->source_peer) ||
++				RH_APPEND_LITERAL(report, ",\"target_peer\":") ||
++				rh_report_json_string(report, action->target_peer) ||
++				RH_APPEND_LITERAL(report, ",\"source_strict_valid\":true,"
++					"\"source_expected_bound\":true,"
++					"\"target_status\":\"READABLE_STRUCTURALLY_INVALID\","
++					"\"sole_valid_peer\":true,"
++					"\"conflicting_valid_peer\":false}}"))
++			return -1;
++	}
++	return RH_APPEND_LITERAL(report, "]");
++}
++
++static int rh_plan(struct rh_report *report,
++		const struct rh_foundation_evidence *foundation)
++{
++	uint64_t count[RH_WRITE_KIND_COUNT], bytes[RH_WRITE_KIND_COUNT];
++	rh_maps(foundation, count, bytes);
++	if (rh_report_appendf(report,
++			"{\"operations\":%zu,\"bytes\":%"PRIu64
++			",\"priority_operations\":0,\"foundation_operations\":%zu,"
++			"\"foundation_bytes\":%"PRIu64
++			",\"wal_operations\":0,\"wal_bytes\":0,\"by_action_id\":",
++			foundation->count, foundation->bytes,
++			foundation->count, foundation->bytes) ||
++			rh_id_map(report, count) ||
++			RH_APPEND_LITERAL(report, ",\"by_kind\":") ||
++			rh_kind_map(report, count) ||
++			RH_APPEND_LITERAL(report, ",\"bytes_by_action_id\":") ||
++			rh_id_map(report, bytes) ||
++			RH_APPEND_LITERAL(report, ",\"bytes_by_kind\":") ||
++			rh_kind_map(report, bytes) ||
++			RH_APPEND_LITERAL(report, "}"))
++		return -1;
++	return 0;
++}
++
++static int rh_batch_ledger(struct rh_report *report,
++		const struct rh_foundation_evidence *foundation)
++{
++	uint64_t count[RH_WRITE_KIND_COUNT], bytes[RH_WRITE_KIND_COUNT];
++	int present = foundation->count != 0;
++	rh_maps(foundation, count, bytes);
++	/*
++	 * Foundation samples are complete and bounded (maximum four).  The full
++	 * RHTXN3 streaming hash is emitted by the later batch engine; this slice
++	 * uses the frozen empty vector when no physical phase exists and binds a
++	 * foundation phase to its canonical repair-ledger hash otherwise.
++	 */
++	if (rh_report_appendf(report,
++			"{\"format\":\"RHTXN3\",\"record_count\":%d,\"ledger_hash\":\"%s\","
++			"\"foundation_count\":%d,\"new_count\":0,"
++			"\"recovered_committed_count\":0,"
++			"\"recovered_rolled_back_count\":0,\"metadata_count\":0,"
++			"\"dirty_clear_count\":0,\"accepted_count\":%d,"
++			"\"refused_count\":0,\"rolled_back_count\":0,\"priority_count\":0,"
++			"\"rescan_count\":%d,\"commit_started_count\":%d,"
++			"\"commit_completed_count\":%d,\"verified_entries\":%zu,"
++			"\"rollback_restored_entries\":0,\"rollback_restored_bytes\":0,"
++			"\"rollback_syncs\":0,\"rollback_write_boundaries\":0,"
++			"\"entry_count\":%zu,\"target_bytes\":%"PRIu64
++			",\"syncs\":%"PRIu64",\"write_boundaries\":%"PRIu64
++			",\"by_action_id\":",
++			present, present ? foundation->repair_ledger_hash :
++				rh_empty_batch_hash,
++			present, present, present, present, present,
++			foundation->count, foundation->count, foundation->bytes,
++			foundation->syncs, foundation->write_boundaries) ||
++			rh_id_map(report, count) ||
++			RH_APPEND_LITERAL(report, ",\"by_kind\":") ||
++			rh_kind_map(report, count) ||
++			RH_APPEND_LITERAL(report, ",\"bytes_by_action_id\":") ||
++			rh_id_map(report, bytes) ||
++			RH_APPEND_LITERAL(report, ",\"bytes_by_kind\":") ||
++			rh_kind_map(report, bytes) ||
++			rh_report_appendf(report,
++				",\"dirty_set_action_count\":0,"
++				"\"dirty_set_phase_ordinal\":null,"
++				"\"dirty_clear_action_count\":0,"
++				"\"dirty_clear_phase_ordinal\":null,"
++				"\"native_redo_count\":0,\"native_restart_count\":0,"
++				"\"native_phase_ordinal\":null,"
++				"\"first_metadata_ordinal\":null,\"first_phase\":%s,"
++				"\"last_phase\":%s,\"final_rescan_digest\":null,"
++				"\"final_coverage_ledger_hash\":null,"
++				"\"final_diagnosis_hash\":null}",
++				present ? "\"FOUNDATION\"" : "null",
++				present ? "\"FOUNDATION\"" : "null"))
++		return -1;
++	return 0;
++}
++
++static struct rh_issue_detail rh_issue_select(
++		const struct rh_scan_evidence *scan, int result)
++{
++	struct rh_issue_detail issue = {
++		"COMPLETE_CHECK_SURFACE_UNAVAILABLE", "orchestration",
++		"full repair/check families are not linked in this slice",
++		"UNSAFE", 5, NULL
++	};
++
++	if (result == RH_RESULT_INTERNAL) {
++		issue = (struct rh_issue_detail) {
++			"ORCHESTRATION_INTERNAL_ERROR", "orchestration",
++			"orchestration failed and the complete check surface is unavailable",
++			"UNSAFE", 5, "ORCHESTRATION_COMPLETE"
++		};
++	} else if (result == RH_RESULT_IO) {
++		issue = (struct rh_issue_detail) {
++			"TARGET_IO_ERROR", "device",
++			"target diagnosis encountered I/O uncertainty before completion",
++			"IO", 4, "NO_IO_UNCERTAINTY"
++		};
++	} else if (result == RH_RESULT_WRONG_ROOT) {
++		issue = (struct rh_issue_detail) {
++			"IDENTITY_MISMATCH", "identity",
++			"the attested target does not satisfy the T1OS identity contract",
++			"UNSAFE", 5, "T1OS_IDENTITY_BOUND"
++		};
++	} else if (scan->native_refused || scan->native_log.parse_errors ||
++			scan->native_log.unsupported_actions) {
++		issue = (struct rh_issue_detail) {
++			"NATIVE_LOG_NOT_RELEASE_QUALIFIED", "native-log",
++			"native-log work was diagnosed but is not release-qualified",
++			"UNSAFE", 5, "QUALIFIED_NATIVE_REPLAY"
++		};
++	} else if (scan->wal.checked &&
++			(scan->wal.valid != 1 || scan->wal.recovery_required != 0 ||
++			 scan->wal_degraded || !scan->wal.write_safe)) {
++		issue = (struct rh_issue_detail) {
++			"WAL_NOT_EMPTY_WRITE_SAFE", "wal",
++			"the bound RootHealth WAL requires unsupported recovery or is unsafe",
++			"UNSAFE", 5, "WAL_EMPTY_WRITE_SAFE"
++		};
++	} else if (scan->boot.repaired_primary || scan->boot.repaired_backup ||
++			scan->mirror.primary_repaired || scan->mirror.mirror_repaired) {
++		issue = (struct rh_issue_detail) {
++			"FOUNDATION_REPAIR_DEFERRED", "foundation",
++			"a sole-peer repair was planned but complete rescan authority is absent",
++			"UNSAFE", 5, "FOUNDATION_COMMIT_AUTHORIZED"
++		};
++	}
++	return issue;
++}
++
++static int rh_issue(struct rh_report *report,
++		const struct rh_issue_detail *issue)
++{
++	char hash[65];
++
++	if (rh_issue_ledger_hash(issue, hash) ||
++			rh_report_appendf(report,
++				"\"issue_ledger\":{\"format\":\"RHISS3\",\"entry_count\":1,"
++				"\"ledger_hash\":\"%s\",\"resolved_count\":0,"
++				"\"unresolved_count\":1,\"error_count\":1,"
++				"\"by_severity\":{\"%s\":1},"
++				"\"unresolved_by_severity\":{\"%s\":1},"
++				"\"first_severity\":\"%s\",\"last_severity\":\"%s\"},"
++				"\"issues\":[{\"ordinal\":0,\"code\":",
++				hash, issue->severity, issue->severity,
++				issue->severity, issue->severity) ||
++			rh_report_json_string(report, issue->code) ||
++			RH_APPEND_LITERAL(report, ",\"pass\":") ||
++			rh_report_json_string(report, issue->pass) ||
++			RH_APPEND_LITERAL(report, ",\"message\":") ||
++			rh_report_json_string(report, issue->message) ||
++			rh_report_appendf(report,
++				",\"severity\":\"%s\",\"resolved\":false,"
++				"\"record\":null,\"offset\":null,\"path\":null,"
++				"\"policy\":\"DENY\",\"required_predicates\":["
++				"\"COMPLETE_CHECK_SURFACE\"",
++				issue->severity))
++		return -1;
++	if (issue->predicate && (RH_APPEND_LITERAL(report, ",") ||
++			rh_report_json_string(report, issue->predicate)))
++		return -1;
++	if (RH_APPEND_LITERAL(report,
++			"],\"failed_predicates\":[\"COMPLETE_CHECK_SURFACE\"") ||
++			(issue->predicate && (RH_APPEND_LITERAL(report, ",") ||
++			 rh_report_json_string(report, issue->predicate))) ||
++			RH_APPEND_LITERAL(report,
++			"],\"action_ordinals\":[],"
++			"\"sample_reasons\":[\"ERROR\",\"FIRST\",\"LAST\"]}]"))
++		return -1;
++	return 0;
++}
++
++static int rh_budget(struct rh_report *report, uint64_t written,
++		int batch_samples)
++{
++	return rh_report_appendf(report,
++		"{\"limit_bytes\":4194304,\"reservation_method\":\"POSIX_FALLOCATE\","
++		"\"reserved_bytes\":4194304,\"reserved_before_mutation\":true,"
++		"\"fixed_buffers_allocated_before_mutation\":true,"
++		"\"envelope_frozen_before_mutation\":true,"
++		"\"every_committed_batch_preflighted_before_its_commit\":true,"
++		"\"future_batches_envelope_constrained\":true,"
++		"\"worst_case_bytes\":3466470,\"written_bytes\":%"PRIu64","
++		"\"size_proof_format\":\"RHSIZE3\",\"size_proof_hash\":\"%s\","
++		"\"repair_samples_limit\":128,\"repair_samples_emitted\":0,"
++		"\"repair_samples_omitted\":0,\"repair_priority_emitted\":0,"
++		"\"repair_priority_omitted\":0,\"batch_samples_limit\":64,"
++		"\"batch_samples_emitted\":%d,\"batch_samples_omitted\":0,"
++		"\"batch_priority_emitted\":0,\"batch_priority_omitted\":0,"
++		"\"wal_action_samples_limit\":128,\"wal_action_samples_emitted\":0,"
++		"\"wal_action_samples_omitted\":0,\"wal_action_priority_emitted\":0,"
++		"\"wal_action_priority_omitted\":0,\"issue_samples_limit\":128,"
++		"\"issue_samples_emitted\":1,\"issue_samples_omitted\":0,"
++		"\"issue_priority_emitted\":1,\"issue_priority_omitted\":0}",
++		written, rh_size_hash, batch_samples);
++}
++
++static int rh_build(struct rh_report *report, const struct rh_cli *cli,
++		const struct rh_device_evidence *device,
++		const struct rh_scan_evidence *initial,
++		const struct rh_scan_evidence *final,
++		const struct rh_foundation_evidence *foundation, int result,
++		uint64_t written)
++{
++	struct rh_scan_evidence incomplete;
++	struct rh_issue_detail issue;
++	const struct rh_scan_evidence *last;
++
++	if (final) {
++		last = final;
++	} else if (cli->mode == RH_CLI_REPAIR) {
++		/* An early repair refusal did not execute a fresh FINAL scan. */
++		incomplete = *initial;
++		incomplete.completed = 0;
++		last = &incomplete;
++	} else {
++		last = initial;
++	}
++	issue = rh_issue_select(initial, result);
++
++	report->used = 0;
++	if (RH_APPEND_LITERAL(report, "{\"format\":3,\"checker\":\"roothealth\","
++			"\"checker_version\":") ||
++			rh_report_json_string(report, ROOTHEALTH_REPAIR_VERSION) ||
++			rh_report_appendf(report, ",\"mode\":\"%s\",\"result\":",
++				cli->mode == RH_CLI_CHECK ? "check" : "repair") ||
++			rh_report_json_string(report, rh_public_result(result)) ||
++			rh_report_appendf(report, ",\"exit_code\":%d,\"device\":", result) ||
++			rh_device(report, device) ||
++			RH_APPEND_LITERAL(report, ",\"identity\":") ||
++			rh_identity(report, cli, initial) ||
++			RH_APPEND_LITERAL(report, ",\"initial\":") ||
++			rh_snapshot(report, initial, 0, foundation, cli->mode) ||
++			RH_APPEND_LITERAL(report, ",\"native_log\":") ||
++			rh_native(report, initial) ||
++			RH_APPEND_LITERAL(report, ",\"foundation_repairs\":") ||
++			rh_foundation(report, foundation) ||
++			RH_APPEND_LITERAL(report, ",\"plan\":") ||
++			rh_plan(report, foundation) ||
++			rh_report_appendf(report,
++				",\"commit\":{\"started\":%s,\"completed\":%s,"
++				"\"last_verified_ordinal\":%zu,\"syncs\":%"PRIu64
++				",\"write_boundaries\":%"PRIu64"},\"batch_ledger\":",
++				foundation->count ? "true" : "false",
++				foundation->count ? "true" : "false",
++				foundation->count, foundation->syncs,
++				foundation->write_boundaries) ||
++			rh_batch_ledger(report, foundation) ||
++			RH_APPEND_LITERAL(report, ",\"batch_samples\":[],\"repairs\":[],"
++				"\"wal\":") ||
++			rh_wal(report, initial) ||
++			RH_APPEND_LITERAL(report, ",") ||
++			rh_issue(report, &issue) ||
++			RH_APPEND_LITERAL(report, ",\"report_budget\":") ||
++			rh_budget(report, written, 0) ||
++			RH_APPEND_LITERAL(report, ",\"final\":") ||
++			rh_snapshot(report, last, 1, foundation, cli->mode) ||
++			RH_APPEND_LITERAL(report, ",\"dirty_cleared\":false}\n"))
++		return -1;
++	return 0;
++}
++
++int rh_format3_publish(struct rh_report *report, const struct rh_cli *cli,
++		const struct rh_device_evidence *device,
++		const struct rh_scan_evidence *initial,
++		const struct rh_scan_evidence *final,
++		const struct rh_foundation_evidence *foundation, int result)
++{
++	uint64_t guess = 0, prior = UINT64_MAX;
++	unsigned int iteration;
++
++#ifdef ROOTHEALTH_FORMAT3_TEST_HOOKS
++	if (getenv("ROOTHEALTH_FORMAT3_TEST_FORCE_BUILD_FAILURE")) {
++		errno = EOVERFLOW;
++		rh_report_abort(report);
++		return -1;
++	}
++#endif
++
++	for (iteration = 0; iteration < 8; iteration++) {
++		if (rh_build(report, cli, device, initial, final, foundation,
++				result, guess)) {
++			rh_report_abort(report);
++			return -1;
++		}
++		if (report->used == prior)
++			break;
++		prior = report->used;
++		guess = report->used;
++	}
++	if (iteration == 8 || report->used != guess ||
++			report->used > 3466470U) {
++		errno = EOVERFLOW;
++		rh_report_abort(report);
++		return -1;
++	}
++	return rh_report_publish(report);
++}
+diff --git a/src/roothealth_format3.h b/src/roothealth_format3.h
+new file mode 100644
+index 0000000..6cd700d
+--- /dev/null
++++ b/src/roothealth_format3.h
+@@ -0,0 +1,18 @@
++#ifndef ROOTHEALTH_FORMAT3_H
++#define ROOTHEALTH_FORMAT3_H
++
++#include "roothealth_orchestrator.h"
++#include "roothealth_report.h"
++
++/*
++ * Serialize the bounded public envelope.  This slice deliberately reports an
++ * incomplete coverage ledger and an unresolved fail-closed issue, so it can
++ * never manufacture exit 0 while the remaining repair families are absent.
++ */
++int rh_format3_publish(struct rh_report *report, const struct rh_cli *cli,
++		const struct rh_device_evidence *device,
++		const struct rh_scan_evidence *initial,
++		const struct rh_scan_evidence *final,
++		const struct rh_foundation_evidence *foundation, int result);
++
++#endif
+diff --git a/src/roothealth_orchestrator.c b/src/roothealth_orchestrator.c
+new file mode 100644
+index 0000000..5f78bb5
+--- /dev/null
++++ b/src/roothealth_orchestrator.c
+@@ -0,0 +1,1140 @@
++/* ROOTHEALTH_REPAIR_ROLE(ORCHESTRATOR) ROOTHEALTH_IO_ROLE(DIAGNOSTIC) */
++#include "config.h"
++
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <getopt.h>
++#include <inttypes.h>
++#include <limits.h>
++#include <poll.h>
++#include <signal.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/random.h>
++#include <sys/types.h>
++#include <sys/wait.h>
++#include <time.h>
++#include <unistd.h>
++
++#include "roothealth_hash_stream.h"
++#include "roothealth_orchestrator.h"
++
++#define RH_RESCAN_PACKET_VERSION 1U
++
++static const unsigned char rh_rescan_magic[8] = {
++	'R', 'H', 'S', 'C', 'A', 'N', 3, 0
++};
++
++struct rh_rescan_packet {
++	unsigned char magic[8];
++	uint32_t version;
++	uint32_t size;
++	int32_t result;
++	int32_t completed;
++	int32_t identity_valid;
++	int32_t logfile_clean_known;
++	int32_t logfile_clean;
++	int32_t native_state;
++	int32_t device_fd_inherited;
++	int32_t report_fd_inherited;
++	uint64_t pid;
++	uint64_t parent_pid;
++	uint64_t device_dev;
++	uint64_t device_ino;
++	uint64_t device_rdev;
++	uint64_t device_size;
++	char scan_id[37];
++	char exec_id[37];
++	char binary_sha256[65];
++};
++
++static int rh_rescan_semantics_valid(int result, int completed,
++		int identity_valid, int logfile_clean_known, int logfile_clean,
++		int native_state)
++{
++	int native_clean = native_state == RH_NATIVE_LOG_CLEAN_RESTART ||
++		native_state == RH_NATIVE_LOG_EMPTY_T1OS;
++
++	if ((completed != 0 && completed != 1) ||
++			(identity_valid != 0 && identity_valid != 1) ||
++			(logfile_clean_known != 0 && logfile_clean_known != 1) ||
++			(logfile_clean != 0 && logfile_clean != 1) ||
++			(!logfile_clean_known && logfile_clean) ||
++			(result != RH_RESULT_OK && result != RH_RESULT_UNSAFE &&
++			 result != RH_RESULT_IO && result != RH_RESULT_WRONG_ROOT &&
++			 result != RH_RESULT_INTERNAL) ||
++			(completed != (result != RH_RESULT_IO &&
++			 result != RH_RESULT_INTERNAL)) ||
++			(native_state == 0 &&
++			 (logfile_clean_known || logfile_clean)) ||
++			(native_clean &&
++			 (!logfile_clean_known || !logfile_clean)) ||
++			((native_state == RH_NATIVE_LOG_REPLAY_PLANNED ||
++			  native_state == -1) &&
++			 (!logfile_clean_known || logfile_clean)) ||
++			native_state < -1 || native_state > RH_NATIVE_LOG_EMPTY_T1OS)
++		return 0;
++
++	/* OK is a complete clean attestation, never a partial hint. */
++	if (result == RH_RESULT_OK)
++		return completed && identity_valid && logfile_clean_known &&
++			logfile_clean && native_clean;
++	return 1;
++}
++
++#ifdef ROOTHEALTH_RESCAN_TEST_HOOKS
++int rh_orchestrator_test_rescan_semantics(int result, int completed,
++		int identity_valid, int logfile_clean_known, int logfile_clean,
++		int native_state)
++{
++	return rh_rescan_semantics_valid(result, completed, identity_valid,
++		logfile_clean_known, logfile_clean, native_state);
++}
++#endif
++
++const char *rh_public_result(int result)
++{
++	switch (result) {
++	case RH_RESULT_OK: return "clean";
++	case RH_RESULT_UNSAFE: return "unsafe";
++	case RH_RESULT_IO: return "io-error";
++	case RH_RESULT_WRONG_ROOT: return "wrong-root";
++	default: return "internal-error";
++	}
++}
++
++static int rh_result_rank(int result)
++{
++	switch (result) {
++	case RH_RESULT_INTERNAL: return 5;
++	case RH_RESULT_IO: return 4;
++	case RH_RESULT_UNSAFE: return 3;
++	case RH_RESULT_WRONG_ROOT: return 2;
++	case RH_RESULT_OK: return 1;
++	default: return 5;
++	}
++}
++
++int rh_result_precedence(int first, int second)
++{
++	return rh_result_rank(second) > rh_result_rank(first) ? second : first;
++}
++
++void rh_cli_usage(FILE *stream)
++{
++	fprintf(stream,
++		"roothealth v%s\n\n"
++		"Usage: roothealth (--check|--repair) --require-t1os-root "
++		"--expected-serial SERIAL --expected-journal-uuid UUID "
++		"--expected-journal-record RECORD:SEQUENCE --report NEW DEVICE\n\n"
++		"Modes:\n"
++		"  --check   read-only root-health diagnosis\n"
++		"  --repair  commit qualified repairs and verify with a fresh rescan\n",
++		ROOTHEALTH_REPAIR_VERSION);
++}
++
++static int rh_parse_u64(const char *text, uint64_t *value, int base)
++{
++	char *end = NULL;
++	unsigned long long parsed;
++
++	if (!text || !*text || text[0] == '-')
++		return -1;
++	errno = 0;
++	parsed = strtoull(text, &end, base);
++	if (errno || !end || *end)
++		return -1;
++	*value = (uint64_t)parsed;
++	return 0;
++}
++
++static int rh_parse_serial(const char *text, uint64_t *serial)
++{
++	const unsigned char *p = (const unsigned char *)text;
++	uint64_t value = 0;
++	size_t digits = 0;
++	unsigned int nibble;
++
++	if (!p || !*p)
++		return -1;
++	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
++		p += 2;
++	for (; *p; p++) {
++		if (*p == '-')
++			continue;
++		if (*p >= '0' && *p <= '9')
++			nibble = *p - '0';
++		else if (*p >= 'a' && *p <= 'f')
++			nibble = *p - 'a' + 10U;
++		else if (*p >= 'A' && *p <= 'F')
++			nibble = *p - 'A' + 10U;
++		else
++			return -1;
++		if (digits++ >= 16)
++			return -1;
++		value = (value << 4) | nibble;
++	}
++	if (digits != 16 || !value)
++		return -1;
++	*serial = value;
++	return 0;
++}
++
++static int rh_parse_record(const char *text, uint64_t *record,
++		uint16_t *sequence)
++{
++	char first[32];
++	const char *colon;
++	uint64_t record_value, sequence_value;
++	size_t length;
++
++	if (!text || !(colon = strchr(text, ':')) || strchr(colon + 1, ':'))
++		return -1;
++	length = (size_t)(colon - text);
++	if (!length || length >= sizeof(first))
++		return -1;
++	memcpy(first, text, length);
++	first[length] = 0;
++	if (rh_parse_u64(first, &record_value, 0) ||
++			rh_parse_u64(colon + 1, &sequence_value, 0) ||
++			record_value < 24U || !sequence_value ||
++			sequence_value > UINT16_MAX)
++		return -1;
++	*record = record_value;
++	*sequence = (uint16_t)sequence_value;
++	return 0;
++}
++
++int rh_cli_parse(int argc, char **argv, struct rh_cli *cli)
++{
++	static const struct option options[] = {
++		{ "check", no_argument, NULL, 'c' },
++		{ "repair", no_argument, NULL, 'r' },
++		{ "require-t1os-root", no_argument, NULL, 'T' },
++		{ "expected-serial", required_argument, NULL, 's' },
++		{ "expected-journal-uuid", required_argument, NULL, 'u' },
++		{ "expected-journal-record", required_argument, NULL, 'R' },
++		{ "report", required_argument, NULL, 'J' },
++		{ "quiet", no_argument, NULL, 'q' },
++		{ "help", no_argument, NULL, 'h' },
++		{ "version", no_argument, NULL, 'V' },
++		{ "internal-rescan-fd", required_argument, NULL, 1000 },
++		{ "internal-parent-report-fd", required_argument, NULL, 1001 },
++		{ "internal-expected-st-dev", required_argument, NULL, 1002 },
++		{ "internal-expected-st-ino", required_argument, NULL, 1003 },
++		{ "internal-expected-st-rdev", required_argument, NULL, 1004 },
++		{ "internal-report-st-dev", required_argument, NULL, 1005 },
++		{ "internal-report-st-ino", required_argument, NULL, 1006 },
++		{ NULL, 0, NULL, 0 }
++	};
++	uint64_t fd;
++	int option, modes = 0, uuid_set = 0;
++
++	memset(cli, 0, sizeof(*cli));
++	cli->internal_fd = -1;
++	cli->internal_report_fd = -1;
++	opterr = 0;
++	while ((option = getopt_long(argc, argv, "crTs:u:R:J:qhV",
++			options, NULL)) != -1) {
++		switch (option) {
++		case 'c': cli->mode = RH_CLI_CHECK; modes++; break;
++		case 'r': cli->mode = RH_CLI_REPAIR; modes++; break;
++		case 'T': cli->require_root = 1; break;
++		case 's':
++			if (rh_parse_serial(optarg, &cli->expected_serial))
++				return -1;
++			break;
++		case 'u':
++			if (rh_uuid_parse(optarg, cli->expected_uuid))
++				return -1;
++			rh_uuid_format(cli->expected_uuid, cli->expected_uuid_text);
++			uuid_set = 1;
++			break;
++		case 'R':
++			if (rh_parse_record(optarg, &cli->expected_record,
++					&cli->expected_sequence))
++				return -1;
++			break;
++		case 'J': cli->report_path = optarg; break;
++		case 'q': cli->quiet = 1; break;
++		case 'h': rh_cli_usage(stdout); exit(0);
++		case 'V':
++			printf("roothealth v%s (ntfs-next d4f481d)\n",
++				ROOTHEALTH_REPAIR_VERSION);
++			exit(0);
++		case 1000:
++			if (rh_parse_u64(optarg, &fd, 10) || fd > INT_MAX)
++				return -1;
++			cli->internal_fd = (int)fd;
++			break;
++		case 1001:
++			if (rh_parse_u64(optarg, &fd, 10) || fd > INT_MAX)
++				return -1;
++			cli->internal_report_fd = (int)fd;
++			break;
++		case 1002:
++			if (rh_parse_u64(optarg, &cli->internal_expected_dev, 10))
++				return -1;
++			break;
++		case 1003:
++			if (rh_parse_u64(optarg, &cli->internal_expected_ino, 10))
++				return -1;
++			break;
++		case 1004:
++			if (rh_parse_u64(optarg, &cli->internal_expected_rdev, 10))
++				return -1;
++			break;
++		case 1005:
++			if (rh_parse_u64(optarg, &cli->internal_report_dev, 10))
++				return -1;
++			break;
++		case 1006:
++			if (rh_parse_u64(optarg, &cli->internal_report_ino, 10))
++				return -1;
++			break;
++		default: return -1;
++		}
++	}
++	if (modes != 1 || !cli->require_root || !cli->expected_serial ||
++			!uuid_set || !cli->expected_record || !cli->expected_sequence ||
++			optind + 1 != argc)
++		return -1;
++	cli->device_path = argv[optind];
++	if (cli->internal_fd < 0 && (!cli->report_path ||
++			cli->internal_report_fd >= 0))
++		return -1;
++	if (cli->internal_fd >= 0 &&
++			(cli->mode != RH_CLI_CHECK || cli->report_path ||
++			 cli->internal_report_fd < 0 || !cli->internal_expected_dev ||
++			 !cli->internal_expected_ino || !cli->internal_expected_rdev ||
++			 !cli->internal_report_dev || !cli->internal_report_ino))
++		return -1;
++	return 0;
++}
++
++int rh_uuid_text(char output[37])
++{
++	unsigned char uuid[16];
++	ssize_t result;
++
++	do {
++		result = getrandom(uuid, sizeof(uuid), 0);
++	} while (result < 0 && errno == EINTR);
++	if (result != (ssize_t)sizeof(uuid))
++		return -1;
++	uuid[6] = (unsigned char)((uuid[6] & 0x0fU) | 0x40U);
++	uuid[8] = (unsigned char)((uuid[8] & 0x3fU) | 0x80U);
++	rh_uuid_format(uuid, output);
++	return 0;
++}
++
++static void rh_hex(const unsigned char *bytes, size_t length, char *output)
++{
++	static const char digits[] = "0123456789abcdef";
++	size_t i;
++
++	for (i = 0; i < length; i++) {
++		output[i * 2] = digits[bytes[i] >> 4];
++		output[i * 2 + 1] = digits[bytes[i] & 15U];
++	}
++	output[length * 2] = 0;
++}
++
++static int rh_hash_text_valid(const char *text)
++{
++	size_t i;
++	if (!text || strlen(text) != 64)
++		return 0;
++	for (i = 0; i < 64; i++)
++		if (!((text[i] >= '0' && text[i] <= '9') ||
++				(text[i] >= 'a' && text[i] <= 'f')))
++			return 0;
++	return 1;
++}
++
++static int rh_uuid_canonical_v4(const char text[37])
++{
++	unsigned char parsed[16];
++	char canonical[37];
++
++	if (text[36] || text[14] != '4' ||
++			!(text[19] == '8' || text[19] == '9' ||
++			  text[19] == 'a' || text[19] == 'b') ||
++			rh_uuid_parse(text, parsed))
++		return 0;
++	rh_uuid_format(parsed, canonical);
++	return !strcmp(text, canonical);
++}
++
++int rh_binary_hash(char output[65])
++{
++	struct rh_hash_stream stream;
++	unsigned char buffer[32768], digest[32];
++	int fd;
++
++	fd = open("/proc/self/exe", O_RDONLY | O_CLOEXEC);
++	if (fd < 0)
++		return -1;
++	rh_hash_stream_init(&stream);
++	for (;;) {
++		ssize_t got = read(fd, buffer, sizeof(buffer));
++		if (got < 0) {
++			if (errno == EINTR)
++				continue;
++			close(fd);
++			return -1;
++		}
++		if (!got)
++			break;
++		if (rh_hash_stream_update(&stream, buffer, (size_t)got)) {
++			close(fd);
++			return -1;
++		}
++	}
++	if (close(fd) || rh_hash_stream_final(&stream, digest))
++		return -1;
++	rh_hex(digest, sizeof(digest), output);
++	return 0;
++}
++
++int rh_device_resolve(const char *path, struct rh_device_evidence *device)
++{
++	if (!path || path[0] != '/' || strlen(path) >= sizeof(device->requested)) {
++		errno = EINVAL;
++		return -1;
++	}
++	memset(device, 0, sizeof(*device));
++	strcpy(device->requested, path);
++	if (lstat(path, &device->requested_stat))
++		return -1;
++	device->requested_was_symlink =
++		S_ISLNK(device->requested_stat.st_mode);
++	if (!realpath(path, device->resolved) ||
++			stat(device->resolved, &device->resolved_stat))
++		return -1;
++#ifndef ROOTHEALTH_REPAIR_TESTING
++	if (!S_ISBLK(device->resolved_stat.st_mode)) {
++		errno = ENOTBLK;
++		return -1;
++	}
++#else
++	if (!S_ISBLK(device->resolved_stat.st_mode) &&
++			!S_ISREG(device->resolved_stat.st_mode)) {
++		errno = ENOTBLK;
++		return -1;
++	}
++#endif
++	return 0;
++}
++
++const char *rh_native_state(const struct rh_scan_evidence *scan)
++{
++	if (!scan->native_log.checked)
++		return NULL;
++	if (scan->native_refused)
++		return "UNSAFE";
++	switch (scan->native_log.state) {
++	case RH_NATIVE_LOG_CLEAN_RESTART: return "CLEAN_RESTART";
++	case RH_NATIVE_LOG_REPLAY_PLANNED: return "REPLAY_PLANNED";
++	case RH_NATIVE_LOG_EMPTY_T1OS: return "EMPTY_T1OS";
++	default:
++		return scan->result == RH_RESULT_IO ? "IO_ERROR" : "UNSAFE";
++	}
++}
++
++int rh_orchestrator_scan(const struct rh_cli *cli,
++		struct rh_device_evidence *device, struct rh_scan_evidence *scan,
++		struct rh_writer *writer, int keep_writer)
++{
++	struct rh_wal wal;
++	size_t foundation_count, checkpoint;
++	int mounted, result;
++
++	memset(scan, 0, sizeof(*scan));
++	scan->result = RH_RESULT_INTERNAL;
++	scan->wal.present = -1;
++	scan->wal.valid = -1;
++	scan->wal.recovery_required = -1;
++	scan->wal.state = -1;
++	scan->wal.transaction_kind = -1;
++	scan->wal.max_entry_count = -1;
++	scan->wal.journal_mft_bitmap_allocated = -1;
++	if (rh_uuid_text(scan->scan_id))
++		return scan->result;
++	if (rh_writer_open(writer, device->resolved)) {
++		scan->result = RH_RESULT_IO;
++		return scan->result;
++	}
++	if (writer->device_id != device->resolved_stat.st_dev ||
++			writer->inode_id != device->resolved_stat.st_ino) {
++		scan->result = RH_RESULT_IO;
++		errno = ESTALE;
++		goto close;
++	}
++	/* Preserve the successfully attested selection across every early exit. */
++	device->selection_proven = 1;
++	device->size = writer->device_size;
++	mounted = roothealth_refuse_mounted(device->resolved);
++	if (mounted > 0) {
++		scan->completed = 1;
++		scan->result = RH_RESULT_UNSAFE;
++		goto close;
++	}
++	if (mounted < 0) {
++		scan->result = RH_RESULT_IO;
++		goto close;
++	}
++	result = roothealth_bootstrap_boot_plan(writer, cli->expected_serial,
++		ROOTHEALTH_EXPECTED_LABEL_PREFIX, &scan->identity, &scan->boot);
++	if (result != RH_RESULT_OK) {
++		scan->result = result;
++		goto close;
++	}
++	/*
++	 * A bad primary cannot locate the attested journal before its first
++	 * foundation write.  Fail closed rather than repair ahead of identity.
++	 */
++	if (scan->boot.repaired_primary) {
++		scan->result = RH_RESULT_UNSAFE;
++		goto close;
++	}
++	result = rh_wal_locate_and_validate(&wal, writer,
++		cli->expected_serial, cli->expected_uuid, cli->expected_record,
++		cli->expected_sequence, &scan->wal);
++	if (result != RH_RESULT_OK) {
++		scan->result = result;
++		goto close;
++	}
++	scan->wal_degraded = wal.degraded_slot != 0;
++	if (scan->wal_degraded)
++		scan->wal.recovery_required = 1;
++	if (scan->wal.valid != 1 || scan->wal.state != RH_WAL_EMPTY ||
++			scan->wal.recovery_required != 0 || !scan->wal.write_safe ||
++			scan->wal_degraded) {
++		scan->result = RH_RESULT_UNSAFE;
++		goto close;
++	}
++	result = roothealth_verify_namespace_identity(writer, device->resolved,
++		&scan->boot.geometry, cli->expected_serial,
++		ROOTHEALTH_EXPECTED_LABEL_PREFIX, &scan->identity);
++	if (result != RH_RESULT_OK) {
++		scan->result = result;
++		goto close;
++	}
++	scan->identity_valid = 1;
++	result = roothealth_mftmirr_plan(writer, &scan->boot.geometry,
++		&scan->mirror);
++	if (result != RH_RESULT_OK) {
++		scan->result = result;
++		goto close;
++	}
++	foundation_count = writer->operation_count;
++	if (foundation_count > RH_FOUNDATION_MAX) {
++		scan->result = RH_RESULT_UNSAFE;
++		goto close;
++	}
++	checkpoint = writer->operation_count;
++	errno = 0;
++	if (roothealth_log_replay_plan(device->resolved, writer,
++			&scan->native_log)) {
++		int error = errno;
++		scan->result = error == EIO ? RH_RESULT_IO :
++			error == ENOMEM || error == EMFILE || error == ENFILE ?
++			RH_RESULT_INTERNAL : RH_RESULT_UNSAFE;
++		goto close;
++	}
++	if (writer->operation_count != checkpoint) {
++		if (rh_writer_discard_after(writer, checkpoint)) {
++			scan->result = RH_RESULT_INTERNAL;
++			goto close;
++		}
++		/* The imported native-replay family is not release-qualified here. */
++		scan->native_refused = 1;
++		scan->native_log.unsupported_actions++;
++		scan->native_log.planned_io_operations = 0;
++		scan->native_log.planned_io_bytes = 0;
++	}
++	scan->completed = 1;
++	scan->logfile_clean_known = 1;
++	scan->logfile_clean = !scan->native_refused &&
++		(scan->native_log.state == RH_NATIVE_LOG_CLEAN_RESTART ||
++		 scan->native_log.state == RH_NATIVE_LOG_EMPTY_T1OS);
++	/*
++	 * This slice does not link the complete coverage engine.  A foundation
++	 * commit followed by an incomplete rescan has no truthful format-3 success
++	 * state, and a partial direct-write failure cannot yet be fully attested.
++	 * Keep every planned foundation operation read-only until those two
++	 * prerequisites are linked; never mutate and then publish a rejection.
++	 */
++	scan->safe_foundation_commit = 0;
++	scan->result = RH_RESULT_UNSAFE;
++	if (keep_writer)
++		return scan->result;
++close:
++	scan->completed = scan->result != RH_RESULT_IO &&
++		scan->result != RH_RESULT_INTERNAL;
++	rh_writer_close(writer);
++	return scan->result;
++}
++
++static void rh_foundation_names(enum rh_write_kind kind,
++		const char **source, const char **target, const char **name)
++{
++	switch (kind) {
++	case RH_WRITE_BOOT_PRIMARY:
++		*source = "BACKUP"; *target = "PRIMARY"; *name = "$Boot.primary";
++		break;
++	case RH_WRITE_BOOT_BACKUP:
++		*source = "PRIMARY"; *target = "BACKUP"; *name = "$Boot.backup";
++		break;
++	case RH_WRITE_MFT_PRIMARY:
++		*source = "MFT_MIRROR"; *target = "MFT_PRIMARY";
++		*name = "$MFT.primary-record";
++		break;
++	case RH_WRITE_MFT_MIRROR:
++		*source = "MFT_PRIMARY"; *target = "MFT_MIRROR";
++		*name = "$MFT.mirror-record";
++		break;
++	default:
++		*source = ""; *target = ""; *name = "invalid";
++		break;
++	}
++}
++
++static void rh_put_be32(unsigned char output[4], uint32_t value)
++{
++	output[0] = (unsigned char)(value >> 24);
++	output[1] = (unsigned char)(value >> 16);
++	output[2] = (unsigned char)(value >> 8);
++	output[3] = (unsigned char)value;
++}
++
++static void rh_put_be64(unsigned char output[8], uint64_t value)
++{
++	size_t i;
++	for (i = 0; i < 8; i++)
++		output[i] = (unsigned char)(value >> (56U - 8U * i));
++}
++
++static void rh_put_le32(unsigned char output[4], uint32_t value)
++{
++	output[0] = (unsigned char)value;
++	output[1] = (unsigned char)(value >> 8);
++	output[2] = (unsigned char)(value >> 16);
++	output[3] = (unsigned char)(value >> 24);
++}
++
++static void rh_put_le64(unsigned char output[8], uint64_t value)
++{
++	size_t i;
++	for (i = 0; i < 8; i++)
++		output[i] = (unsigned char)(value >> (8U * i));
++}
++
++static int rh_decode_hash(const char text[65], unsigned char output[32])
++{
++	size_t i;
++	for (i = 0; i < 32; i++) {
++		unsigned int a, b;
++		char high = text[i * 2], low = text[i * 2 + 1];
++		a = high >= '0' && high <= '9' ? (unsigned int)(high - '0') :
++			high >= 'a' && high <= 'f' ?
++				(unsigned int)(high - 'a' + 10) : 16U;
++		b = low >= '0' && low <= '9' ? (unsigned int)(low - '0') :
++			low >= 'a' && low <= 'f' ?
++				(unsigned int)(low - 'a' + 10) : 16U;
++		if (a > 15U || b > 15U)
++			return -1;
++		output[i] = (unsigned char)((a << 4) | b);
++	}
++	return text[64] ? -1 : 0;
++}
++
++static int rh_foundation_hashes(struct rh_foundation_evidence *foundation)
++{
++	struct rh_hash_stream plan, ledger;
++	unsigned char encoded[20], digest[32], hash[32], integer[8];
++	size_t i;
++
++	rh_hash_stream_init(&plan);
++	rh_hash_stream_init(&ledger);
++	if (rh_hash_stream_update(&ledger, "RHREPL3\0", 8))
++		return -1;
++	rh_put_le32(encoded, 3);
++	rh_put_le64(encoded + 4, foundation->count);
++	if (rh_hash_stream_update(&ledger, encoded, 12))
++		return -1;
++	for (i = 0; i < foundation->count; i++) {
++		struct rh_foundation_action *action = &foundation->actions[i];
++		rh_put_be32(encoded, action->action_id);
++		rh_put_be64(encoded + 4, action->offset);
++		rh_put_be64(encoded + 12, action->length);
++		if (rh_hash_stream_update(&plan, encoded, sizeof(encoded)) ||
++				rh_decode_hash(action->before_hash, hash) ||
++				rh_hash_stream_update(&plan, hash, sizeof(hash)) ||
++				rh_decode_hash(action->after_hash, hash) ||
++				rh_hash_stream_update(&plan, hash, sizeof(hash)))
++			return -1;
++		rh_put_le64(integer, i);
++		if (rh_hash_stream_update(&ledger, integer, 8))
++			return -1;
++		rh_put_le32(encoded, action->action_id);
++		rh_put_le64(encoded + 4, action->offset);
++		rh_put_le64(encoded + 12, action->length);
++		if (rh_hash_stream_update(&ledger, encoded, 20) ||
++				rh_decode_hash(action->before_hash, hash) ||
++				rh_hash_stream_update(&ledger, hash, 32) ||
++				rh_decode_hash(action->after_hash, hash) ||
++				rh_hash_stream_update(&ledger, hash, 32))
++			return -1;
++	}
++	if (rh_hash_stream_final(&plan, digest))
++		return -1;
++	rh_hex(digest, 32, foundation->plan_hash);
++	if (rh_hash_stream_final(&ledger, digest))
++		return -1;
++	rh_hex(digest, 32, foundation->repair_ledger_hash);
++	return 0;
++}
++
++int rh_orchestrator_capture_foundation(const struct rh_writer *writer,
++		struct rh_foundation_evidence *foundation)
++{
++	size_t i;
++
++	memset(foundation, 0, sizeof(*foundation));
++	if (writer->operation_count > RH_FOUNDATION_MAX)
++		return -1;
++	foundation->count = writer->operation_count;
++	foundation->syncs = writer->sync_count;
++	foundation->write_boundaries = writer->write_boundaries;
++	for (i = 0; i < writer->operation_count; i++) {
++		const struct rh_write_operation *source = &writer->operations[i];
++		struct rh_foundation_action *target = &foundation->actions[i];
++		if (!source->verified || !source->sync_completed ||
++				!source->readback_verified || !source->write_boundaries)
++			return -1;
++		target->ordinal = i;
++		target->action_id = RH_WRITE_ACTION_ID(source->kind);
++		target->kind = source->kind;
++		target->offset = source->offset;
++		target->length = source->length;
++		strcpy(target->before_hash, source->before_sha256);
++		strcpy(target->after_hash, source->after_sha256);
++		target->write_boundaries = source->write_boundaries;
++		target->sync_ordinal = source->sync_ordinal;
++		rh_foundation_names(source->kind, &target->source_peer,
++			&target->target_peer, &target->target);
++		foundation->bytes += source->length;
++	}
++	return foundation->count ? rh_foundation_hashes(foundation) : 0;
++}
++
++static int rh_write_all(int fd, const void *buffer, size_t length)
++{
++	const unsigned char *p = buffer;
++	while (length) {
++		ssize_t result = write(fd, p, length);
++		if (result < 0) {
++			if (errno == EINTR)
++				continue;
++			return -1;
++		}
++		if (!result) {
++			errno = EIO;
++			return -1;
++		}
++		p += result;
++		length -= (size_t)result;
++	}
++	return 0;
++}
++
++static int rh_protected_fd_inherited(const struct rh_device_evidence *device,
++		uint64_t report_dev, uint64_t report_ino, int transport_fd)
++{
++	struct dirent *entry;
++	DIR *directory;
++	int own_fd, inherited = 0;
++
++	directory = opendir("/proc/self/fd");
++	if (!directory)
++		return -1;
++	own_fd = dirfd(directory);
++	for (;;) {
++		struct stat st;
++		char *end = NULL;
++		long parsed;
++
++		errno = 0;
++		entry = readdir(directory);
++		if (!entry) {
++			if (errno)
++				inherited = -1;
++			break;
++		}
++		errno = 0;
++		parsed = strtol(entry->d_name, &end, 10);
++		if (errno || !end || *end || parsed < 0 || parsed > INT_MAX)
++			continue;
++		if ((int)parsed == transport_fd || (int)parsed == own_fd)
++			continue;
++		if (fstat((int)parsed, &st)) {
++			inherited = -1;
++			break;
++		}
++		if ((S_ISBLK(device->resolved_stat.st_mode) && S_ISBLK(st.st_mode) &&
++			 st.st_rdev == device->resolved_stat.st_rdev) ||
++			(!S_ISBLK(device->resolved_stat.st_mode) &&
++			 st.st_dev == device->resolved_stat.st_dev &&
++			 st.st_ino == device->resolved_stat.st_ino) ||
++			((uint64_t)st.st_dev == report_dev &&
++			 (uint64_t)st.st_ino == report_ino)) {
++			inherited = 1;
++			break;
++		}
++	}
++	if (closedir(directory))
++		return -1;
++	return inherited;
++}
++
++static int rh_anonymous_pipe_fd(int fd)
++{
++	char path[64], target[128];
++	ssize_t length;
++
++	if (snprintf(path, sizeof(path), "/proc/self/fd/%d", fd) < 0)
++		return 0;
++	length = readlink(path, target, sizeof(target) - 1);
++	if (length < 7 || (size_t)length >= sizeof(target))
++		return 0;
++	target[length] = 0;
++	return !strncmp(target, "pipe:[", 6) && target[length - 1] == ']';
++}
++
++int rh_orchestrator_internal_rescan(const struct rh_cli *cli)
++{
++	struct rh_device_evidence device;
++	struct rh_scan_evidence scan;
++	struct rh_rescan_packet packet;
++	struct rh_writer writer;
++	struct stat transport;
++	int access;
++	int fd = cli->internal_fd;
++
++	access = fcntl(fd, F_GETFL);
++	if (access < 0 || (access & O_ACCMODE) != O_WRONLY ||
++			fstat(fd, &transport) || !S_ISFIFO(transport.st_mode) ||
++			!rh_anonymous_pipe_fd(fd) ||
++			fcntl(fd, F_SETFD, FD_CLOEXEC) ||
++			rh_device_resolve(cli->device_path, &device))
++		return RH_RESULT_INTERNAL;
++	if ((uint64_t)device.resolved_stat.st_dev != cli->internal_expected_dev ||
++			(uint64_t)device.resolved_stat.st_ino != cli->internal_expected_ino ||
++			(uint64_t)device.resolved_stat.st_rdev != cli->internal_expected_rdev)
++		return RH_RESULT_INTERNAL;
++	errno = 0;
++	if (fcntl(cli->internal_report_fd, F_GETFD) >= 0 || errno != EBADF)
++		return RH_RESULT_INTERNAL;
++	if (rh_protected_fd_inherited(&device, cli->internal_report_dev,
++			cli->internal_report_ino, fd) != 0)
++		return RH_RESULT_INTERNAL;
++	memset(&packet, 0, sizeof(packet));
++	memcpy(packet.magic, rh_rescan_magic, sizeof(packet.magic));
++	packet.version = RH_RESCAN_PACKET_VERSION;
++	packet.size = sizeof(packet);
++	packet.pid = (uint64_t)getpid();
++	packet.parent_pid = (uint64_t)getppid();
++	rh_orchestrator_scan(cli, &device, &scan, &writer, 0);
++	packet.device_dev = (uint64_t)device.resolved_stat.st_dev;
++	packet.device_ino = (uint64_t)device.resolved_stat.st_ino;
++	packet.device_rdev = (uint64_t)device.resolved_stat.st_rdev;
++	packet.device_size = device.size;
++	if (rh_uuid_text(packet.exec_id) ||
++			rh_binary_hash(packet.binary_sha256))
++		return RH_RESULT_INTERNAL;
++	packet.result = scan.result;
++	packet.completed = scan.completed;
++	packet.identity_valid = scan.identity_valid;
++	packet.logfile_clean_known = scan.logfile_clean_known;
++	packet.logfile_clean = scan.logfile_clean;
++	packet.native_state = scan.native_refused ? -1 :
++		(int)scan.native_log.state;
++	packet.device_fd_inherited = 0;
++	packet.report_fd_inherited = 0;
++	strcpy(packet.scan_id, scan.scan_id);
++	if (rh_write_all(fd, &packet, sizeof(packet)))
++		return RH_RESULT_INTERNAL;
++	return RH_RESULT_OK;
++}
++
++static int64_t rh_now_milliseconds(void)
++{
++	struct timespec now;
++	if (clock_gettime(CLOCK_MONOTONIC, &now))
++		return -1;
++	return (int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
++}
++
++static int rh_read_all_before(int fd, void *buffer, size_t length,
++		int64_t deadline)
++{
++	unsigned char *p = buffer;
++	int flags;
++
++	flags = fcntl(fd, F_GETFL);
++	if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK))
++		return -1;
++	while (length) {
++		ssize_t result = read(fd, p, length);
++		if (result < 0) {
++			if (errno == EINTR)
++				continue;
++			if (errno == EAGAIN || errno == EWOULDBLOCK) {
++				struct pollfd event;
++				int64_t now = rh_now_milliseconds();
++				int remaining, ready;
++				if (now < 0 || now >= deadline) {
++					errno = ETIMEDOUT;
++					return -1;
++				}
++				remaining = (int)(deadline - now);
++				event.fd = fd;
++				event.events = POLLIN | POLLHUP;
++				event.revents = 0;
++				ready = poll(&event, 1, remaining);
++				if (ready < 0 && errno == EINTR)
++					continue;
++				if (ready > 0)
++					continue;
++				if (!ready)
++					errno = ETIMEDOUT;
++			}
++			return -1;
++		}
++		if (!result) {
++			errno = EPIPE;
++			return -1;
++		}
++		p += result;
++		length -= (size_t)result;
++	}
++	return 0;
++}
++
++static int rh_expect_eof_before(int fd, int64_t deadline)
++{
++	for (;;) {
++		unsigned char extra;
++		ssize_t result = read(fd, &extra, 1);
++		if (!result)
++			return 0;
++		if (result > 0) {
++			errno = EMSGSIZE;
++			return -1;
++		}
++		if (errno == EINTR)
++			continue;
++		if (errno == EAGAIN || errno == EWOULDBLOCK) {
++			struct pollfd event;
++			int64_t now = rh_now_milliseconds();
++			int remaining, ready;
++			if (now < 0 || now >= deadline) {
++				errno = ETIMEDOUT;
++				return -1;
++			}
++			remaining = (int)(deadline - now);
++			event.fd = fd;
++			event.events = POLLIN | POLLHUP;
++			event.revents = 0;
++			ready = poll(&event, 1, remaining);
++			if (ready > 0 || (ready < 0 && errno == EINTR))
++				continue;
++			if (!ready)
++				errno = ETIMEDOUT;
++		}
++		return -1;
++	}
++}
++
++static int rh_wait_before(pid_t child, int *status, int64_t deadline)
++{
++	for (;;) {
++		pid_t result = waitpid(child, status, WNOHANG);
++		int64_t now;
++		if (result == child)
++			return 0;
++		if (result < 0) {
++			if (errno == EINTR)
++				continue;
++			return -1;
++		}
++		now = rh_now_milliseconds();
++		if (now < 0 || now >= deadline) {
++			errno = ETIMEDOUT;
++			return -1;
++		}
++		(void)poll(NULL, 0, deadline - now > 10 ? 10 :
++			(int)(deadline - now));
++	}
++}
++
++static void rh_kill_and_reap_bounded(pid_t child, int *status)
++{
++	int64_t deadline = rh_now_milliseconds();
++
++	(void)kill(child, SIGKILL);
++	if (deadline < 0 || deadline > INT64_MAX - 1000)
++		return;
++	deadline += 1000;
++	(void)rh_wait_before(child, status, deadline);
++}
++
++int rh_orchestrator_self_rescan(const struct rh_cli *cli,
++		const struct rh_device_evidence *device,
++		struct rh_scan_evidence *scan, const char binary_hash[65], int report_fd)
++{
++	struct rh_rescan_packet packet;
++	char fd_text[32], report_fd_text[32], serial[19], record[64];
++	char dev_text[32], ino_text[32], rdev_text[32];
++	char report_dev_text[32], report_ino_text[32];
++	struct stat report_stat;
++	int pipefd[2], flags, status = 0;
++	int64_t deadline;
++	pid_t child;
++
++	memset(scan, 0, sizeof(*scan));
++	scan->result = RH_RESULT_INTERNAL;
++	strcpy(scan->execution.role, "SELF_EXEC_RESCAN");
++	strcpy(scan->execution.transport, "SELF_EXEC_PIPE_V1");
++	strcpy(scan->execution.binary_sha256, binary_hash);
++	scan->execution.parent_pid = (uint64_t)getpid();
++	scan->execution.timeout_known = 1;
++	scan->execution.timeout_ms = RH_RESCAN_TIMEOUT_MS;
++	scan->execution.timed_out_known = 1;
++	deadline = rh_now_milliseconds();
++	if (deadline < 0 || deadline > INT64_MAX - RH_RESCAN_TIMEOUT_MS)
++		return RH_RESULT_INTERNAL;
++	deadline += RH_RESCAN_TIMEOUT_MS;
++	flags = fcntl(report_fd, F_GETFD);
++	if (flags < 0 || !(flags & FD_CLOEXEC) || fstat(report_fd, &report_stat) ||
++			!S_ISREG(report_stat.st_mode))
++		return RH_RESULT_INTERNAL;
++	if (pipe(pipefd))
++		return RH_RESULT_INTERNAL;
++	flags = fcntl(pipefd[0], F_GETFD);
++	if (flags < 0 || fcntl(pipefd[0], F_SETFD, flags | FD_CLOEXEC)) {
++		close(pipefd[0]);
++		close(pipefd[1]);
++		return RH_RESULT_INTERNAL;
++	}
++	flags = fcntl(pipefd[1], F_GETFD);
++	if (flags < 0 || fcntl(pipefd[1], F_SETFD, flags & ~FD_CLOEXEC)) {
++		close(pipefd[0]);
++		close(pipefd[1]);
++		return RH_RESULT_INTERNAL;
++	}
++	child = fork();
++	if (child < 0) {
++		close(pipefd[0]);
++		close(pipefd[1]);
++		return RH_RESULT_INTERNAL;
++	}
++	if (!child) {
++		snprintf(fd_text, sizeof(fd_text), "%d", pipefd[1]);
++		snprintf(report_fd_text, sizeof(report_fd_text), "%d", report_fd);
++		snprintf(serial, sizeof(serial), "0x%016"PRIx64,
++			cli->expected_serial);
++		snprintf(record, sizeof(record), "%"PRIu64":%u",
++			cli->expected_record, cli->expected_sequence);
++		snprintf(dev_text, sizeof(dev_text), "%"PRIu64,
++			(uint64_t)device->resolved_stat.st_dev);
++		snprintf(ino_text, sizeof(ino_text), "%"PRIu64,
++			(uint64_t)device->resolved_stat.st_ino);
++		snprintf(rdev_text, sizeof(rdev_text), "%"PRIu64,
++			(uint64_t)device->resolved_stat.st_rdev);
++		snprintf(report_dev_text, sizeof(report_dev_text), "%"PRIu64,
++			(uint64_t)report_stat.st_dev);
++		snprintf(report_ino_text, sizeof(report_ino_text), "%"PRIu64,
++			(uint64_t)report_stat.st_ino);
++		close(pipefd[0]);
++		execl("/proc/self/exe", "roothealth", "--check",
++			"--require-t1os-root", "--expected-serial", serial,
++			"--expected-journal-uuid", cli->expected_uuid_text,
++			"--expected-journal-record", record, "--internal-rescan-fd",
++			fd_text, "--internal-parent-report-fd", report_fd_text,
++			"--internal-expected-st-dev", dev_text,
++			"--internal-expected-st-ino", ino_text,
++			"--internal-expected-st-rdev", rdev_text,
++			"--internal-report-st-dev", report_dev_text,
++			"--internal-report-st-ino", report_ino_text,
++			device->resolved, (char *)NULL);
++		_exit(127);
++	}
++	close(pipefd[1]);
++	scan->execution.pid = (uint64_t)child;
++	if (rh_read_all_before(pipefd[0], &packet, sizeof(packet), deadline) ||
++			rh_expect_eof_before(pipefd[0], deadline)) {
++		if (errno == ETIMEDOUT)
++			scan->execution.timed_out = 1;
++		rh_kill_and_reap_bounded(child, &status);
++		close(pipefd[0]);
++		return RH_RESULT_INTERNAL;
++	}
++	close(pipefd[0]);
++	if (rh_wait_before(child, &status, deadline)) {
++		if (errno == ETIMEDOUT)
++			scan->execution.timed_out = 1;
++		rh_kill_and_reap_bounded(child, &status);
++		return RH_RESULT_INTERNAL;
++	}
++	scan->execution.transport_status_known = 1;
++	scan->execution.transport_status = WIFEXITED(status) ?
++		WEXITSTATUS(status) : 128 + WTERMSIG(status);
++	scan->execution.pipe_payload_bytes = sizeof(packet);
++	if (!WIFEXITED(status) || WEXITSTATUS(status) ||
++			memcmp(packet.magic, rh_rescan_magic, sizeof(packet.magic)) ||
++			packet.version != RH_RESCAN_PACKET_VERSION ||
++			packet.size != sizeof(packet) ||
++			packet.pid != (uint64_t)child ||
++			packet.parent_pid != (uint64_t)getpid() ||
++			packet.device_dev != (uint64_t)device->resolved_stat.st_dev ||
++			packet.device_ino != (uint64_t)device->resolved_stat.st_ino ||
++			packet.device_rdev != (uint64_t)device->resolved_stat.st_rdev ||
++			(packet.device_size != device->size &&
++			 !(packet.result == RH_RESULT_IO && !packet.completed &&
++			   packet.device_size == 0)) ||
++			packet.device_fd_inherited != 0 ||
++			packet.report_fd_inherited != 0 ||
++			packet.scan_id[sizeof(packet.scan_id) - 1] != 0 ||
++			packet.exec_id[sizeof(packet.exec_id) - 1] != 0 ||
++			packet.binary_sha256[sizeof(packet.binary_sha256) - 1] != 0 ||
++			!rh_uuid_canonical_v4(packet.scan_id) ||
++			!rh_uuid_canonical_v4(packet.exec_id) ||
++			!strcmp(packet.scan_id, packet.exec_id) ||
++			!rh_hash_text_valid(packet.binary_sha256) ||
++			strcmp(packet.binary_sha256, binary_hash) ||
++			!rh_rescan_semantics_valid(packet.result, packet.completed,
++				packet.identity_valid, packet.logfile_clean_known,
++				packet.logfile_clean, packet.native_state))
++		return RH_RESULT_INTERNAL;
++	scan->completed = packet.completed;
++	scan->result = packet.result;
++	scan->identity_valid = packet.identity_valid;
++	scan->logfile_clean_known = packet.logfile_clean_known;
++	scan->logfile_clean = packet.logfile_clean;
++	scan->native_log.checked = packet.native_state != 0;
++	scan->native_log.state = packet.native_state > 0 ?
++		(enum rh_native_log_state)packet.native_state :
++		RH_NATIVE_LOG_UNKNOWN;
++	scan->native_refused = packet.native_state < 0;
++	strcpy(scan->scan_id, packet.scan_id);
++	strcpy(scan->execution.exec_id, packet.exec_id);
++	scan->execution.device_fd_inherited = packet.device_fd_inherited;
++	scan->execution.report_fd_inherited = packet.report_fd_inherited;
++	return scan->result;
++}
+diff --git a/src/roothealth_orchestrator.h b/src/roothealth_orchestrator.h
+new file mode 100644
+index 0000000..be0525d
+--- /dev/null
++++ b/src/roothealth_orchestrator.h
+@@ -0,0 +1,139 @@
++#ifndef ROOTHEALTH_ORCHESTRATOR_H
++#define ROOTHEALTH_ORCHESTRATOR_H
++
++#include <stddef.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <sys/stat.h>
++
++#include "roothealth_repair.h"
++#include "roothealth_wal.h"
++
++#define RH_FOUNDATION_MAX 4U
++#define RH_RESCAN_TIMEOUT_MS 30000U
++
++enum rh_cli_mode {
++	RH_CLI_NONE = 0,
++	RH_CLI_CHECK,
++	RH_CLI_REPAIR
++};
++
++struct rh_cli {
++	enum rh_cli_mode mode;
++	int require_root;
++	int quiet;
++	uint64_t expected_serial;
++	unsigned char expected_uuid[16];
++	char expected_uuid_text[37];
++	uint64_t expected_record;
++	uint16_t expected_sequence;
++	const char *report_path;
++	const char *device_path;
++	int internal_fd;
++	int internal_report_fd;
++	uint64_t internal_expected_dev;
++	uint64_t internal_expected_ino;
++	uint64_t internal_expected_rdev;
++	uint64_t internal_report_dev;
++	uint64_t internal_report_ino;
++};
++
++struct rh_device_evidence {
++	char requested[4096];
++	char resolved[4096];
++	int requested_was_symlink;
++	struct stat requested_stat;
++	struct stat resolved_stat;
++	uint64_t size;
++	int selection_proven;
++};
++
++struct rh_execution_evidence {
++	char role[24];
++	char transport[24];
++	char exec_id[37];
++	char binary_sha256[65];
++	uint64_t pid;
++	uint64_t parent_pid;
++	uint64_t pipe_payload_bytes;
++	int transport_status_known;
++	int transport_status;
++	int timeout_known;
++	uint32_t timeout_ms;
++	int timed_out_known;
++	int timed_out;
++	int device_fd_inherited;
++	int report_fd_inherited;
++};
++
++struct rh_scan_evidence {
++	int completed;
++	int result;
++	int safe_foundation_commit;
++	int identity_valid;
++	int dirty_known;
++	int dirty;
++	int logfile_clean_known;
++	int logfile_clean;
++	int native_refused;
++	char scan_id[37];
++	struct rh_execution_evidence execution;
++	struct rh_identity_result identity;
++	struct rh_boot_result boot;
++	struct rh_mirror_result mirror;
++	struct rh_log_result native_log;
++	struct rh_wal_observation wal;
++	int wal_degraded;
++};
++
++struct rh_foundation_action {
++	uint64_t ordinal;
++	uint32_t action_id;
++	enum rh_write_kind kind;
++	uint64_t offset;
++	uint64_t length;
++	char before_hash[65];
++	char after_hash[65];
++	uint64_t write_boundaries;
++	uint64_t sync_ordinal;
++	const char *source_peer;
++	const char *target_peer;
++	const char *target;
++};
++
++struct rh_foundation_evidence {
++	struct rh_foundation_action actions[RH_FOUNDATION_MAX];
++	size_t count;
++	uint64_t bytes;
++	uint64_t syncs;
++	uint64_t write_boundaries;
++	char plan_hash[65];
++	char repair_ledger_hash[65];
++};
++
++void rh_cli_usage(FILE *stream);
++int rh_cli_parse(int argc, char **argv, struct rh_cli *cli);
++int rh_device_resolve(const char *path, struct rh_device_evidence *device);
++int rh_binary_hash(char output[65]);
++int rh_uuid_text(char output[37]);
++const char *rh_public_result(int result);
++const char *rh_native_state(const struct rh_scan_evidence *scan);
++int rh_result_precedence(int first, int second);
++
++int rh_orchestrator_scan(const struct rh_cli *cli,
++		struct rh_device_evidence *device, struct rh_scan_evidence *scan,
++		struct rh_writer *writer, int keep_writer);
++int rh_orchestrator_capture_foundation(const struct rh_writer *writer,
++		struct rh_foundation_evidence *foundation);
++int rh_orchestrator_internal_rescan(const struct rh_cli *cli);
++int rh_orchestrator_self_rescan(const struct rh_cli *cli,
++		const struct rh_device_evidence *device,
++		struct rh_scan_evidence *scan, const char binary_hash[65], int report_fd);
++
++#ifdef ROOTHEALTH_RESCAN_TEST_HOOKS
++int rh_orchestrator_test_rescan_semantics(int result, int completed,
++	int identity_valid, int logfile_clean_known, int logfile_clean,
++	int native_state);
++#endif
++
++#endif
+diff --git a/src/roothealth_repair.h b/src/roothealth_repair.h
+index 46fcd7a..3d5882a 100644
+--- a/src/roothealth_repair.h
++++ b/src/roothealth_repair.h
+@@ -6,7 +6,7 @@
+ #include "roothealth_recover.h"
+ #include "roothealth_write.h"
+ 
+-#define ROOTHEALTH_REPAIR_VERSION "0.1.0"
++#define ROOTHEALTH_REPAIR_VERSION "0.3.0"
+ #define ROOTHEALTH_EXPECTED_LABEL_PREFIX "T1OS"
+ #define ROOTHEALTH_SUPPORTED_SECTOR_SIZE 512U
+ #define ROOTHEALTH_SUPPORTED_CLUSTER_SIZE 4096U
+diff --git a/src/roothealth_repair_main.c b/src/roothealth_repair_main.c
+index df121c5..e6ba242 100644
+--- a/src/roothealth_repair_main.c
++++ b/src/roothealth_repair_main.c
+@@ -1,533 +1,79 @@
+-/* ROOTHEALTH_IO_ROLE(REPORT) */
+-/* ROOTHEALTH_REPAIR_ROLE(DIAGNOSTIC) ROOTHEALTH_IO_ROLE(REPORT) */
++/* ROOTHEALTH_REPAIR_ROLE(ORCHESTRATOR) ROOTHEALTH_IO_ROLE(REPORT) */
+ #include "config.h"
+ 
+ #include <errno.h>
+-#include <fcntl.h>
+-#include <getopt.h>
+-#include <inttypes.h>
+-#include <signal.h>
+-#include <stdarg.h>
++#include <stdint.h>
+ #include <stdio.h>
+-#include <stdlib.h>
+ #include <string.h>
+-#include <sys/stat.h>
+-#include <sys/types.h>
+-#include <sys/wait.h>
+ #include <unistd.h>
+ 
+-#include "roothealth_repair.h"
+-
+-#ifndef O_CLOEXEC
+-#define O_CLOEXEC 0
+-#endif
+-#ifndef O_NOFOLLOW
+-#define O_NOFOLLOW 0
+-#endif
+-
+-struct reported_repair {
+-	enum rh_write_kind kind;
+-	uint64_t offset;
+-	size_t length;
+-	char before_sha256[65];
+-	char after_sha256[65];
+-	int verified;
+-};
+-
+-struct qualification_report {
+-	struct rh_identity_result identity;
+-	struct rh_boot_result boot;
+-	struct rh_mirror_result mirror;
+-	struct rh_log_result log;
+-	struct reported_repair *repairs;
+-	size_t repair_count;
+-	size_t repair_capacity;
+-	uint64_t plan_bytes;
+-	size_t commit_syncs;
+-	size_t last_verified;
+-	int commit_started;
+-	int commit_completed;
+-	int first_deep_exit;
+-	int first_phase2_exit;
+-	int final_deep_exit;
+-	int final_phase2_exit;
+-	int final_rescan_run;
+-	char plan_sha256[65];
+-};
+-
+-static void usage(FILE *stream)
+-{
+-	fprintf(stream,
+-		"roothealth-repair-core v%s\n\n"
+-		"Usage: roothealth-repair-core --repair --require-t1os-root "
+-		"--expected-serial SERIAL --report NEW [qualification options] DEVICE\n\n"
+-		"Qualification options:\n"
+-		"  --deep-checker PATH   pinned ntfs-next read-only checker\n"
+-		"  --phase2-checker PATH existing roothealth Phase-2 checker\n",
+-		ROOTHEALTH_REPAIR_VERSION);
+-}
+-
+-static int parse_serial(const char *text, uint64_t *serial)
+-{
+-	uint64_t value = 0;
+-	size_t digits = 0;
+-	const unsigned char *p;
+-	unsigned int nibble;
+-
+-	if (!text || !*text)
+-		return -1;
+-	p = (const unsigned char *)text;
+-	if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X'))
+-		p += 2;
+-	for (; *p; p++) {
+-		if (*p == '-')
+-			continue;
+-		if (*p >= '0' && *p <= '9')
+-			nibble = *p - '0';
+-		else if (*p >= 'a' && *p <= 'f')
+-			nibble = *p - 'a' + 10;
+-		else if (*p >= 'A' && *p <= 'F')
+-			nibble = *p - 'A' + 10;
+-		else
+-			return -1;
+-		if (digits++ >= 16)
+-			return -1;
+-		value = (value << 4) | nibble;
+-	}
+-	if (digits != 16 || !value)
+-		return -1;
+-	*serial = value;
+-	return 0;
+-}
+-
+-static int report_write_all(int fd, const void *buffer, size_t length)
+-{
+-	const unsigned char *p = buffer;
+-
+-	while (length) {
+-		ssize_t written = write(fd, p, length);
+-		if (written < 0) {
+-			if (errno == EINTR)
+-				continue;
+-			return -1;
+-		}
+-		if (!written) {
+-			errno = EIO;
+-			return -1;
+-		}
+-		p += written;
+-		length -= (size_t)written;
+-	}
+-	return 0;
+-}
+-
+-static int report_printf(int fd, const char *format, ...)
+-{
+-	va_list ap;
+-	char *buffer = NULL;
+-	int length;
+-
+-	va_start(ap, format);
+-	length = vasprintf(&buffer, format, ap);
+-	va_end(ap);
+-	if (length < 0)
+-		return -1;
+-	if (report_write_all(fd, buffer, (size_t)length)) {
+-		free(buffer);
+-		return -1;
+-	}
+-	free(buffer);
+-	return 0;
+-}
+-
+-static int report_json_string(int fd, const char *text)
+-{
+-	const unsigned char *p = (const unsigned char *)text;
+-	if (report_printf(fd, "\""))
+-		return -1;
+-	while (*p) {
+-		if (*p == '\\' || *p == '"') {
+-			if (report_printf(fd, "\\%c", *p++))
+-				return -1;
+-		} else if (*p < 0x20) {
+-			if (report_printf(fd, "\\u%04x", *p++))
+-				return -1;
+-		} else {
+-			unsigned char ch = *p++;
+-			if (report_write_all(fd, &ch, 1))
+-				return -1;
+-		}
+-	}
+-	return report_printf(fd, "\"");
+-}
+-
+-static const char *result_name(int code)
+-{
+-	switch (code) {
+-	case RH_RESULT_OK: return "clean";
+-	case RH_RESULT_UNSAFE: return "unsafe";
+-	case RH_RESULT_IO: return "io-error";
+-	case RH_RESULT_WRONG_ROOT: return "wrong-root";
+-	default: return "internal-error";
+-	}
+-}
+-
+-static int append_plan(struct qualification_report *report,
+-		const struct rh_writer *writer)
+-{
+-	size_t i;
+-	for (i = 0; i < writer->operation_count; i++) {
+-		const struct rh_write_operation *source = &writer->operations[i];
+-		struct reported_repair *target;
+-		if (report->repair_count == report->repair_capacity) {
+-			size_t capacity = report->repair_capacity ?
+-				report->repair_capacity * 2 : 32;
+-			void *grown = realloc(report->repairs,
+-				capacity * sizeof(*report->repairs));
+-			if (!grown)
+-				return -1;
+-			report->repairs = grown;
+-			report->repair_capacity = capacity;
+-		}
+-		target = &report->repairs[report->repair_count++];
+-		memset(target, 0, sizeof(*target));
+-		target->kind = source->kind;
+-		target->offset = source->offset;
+-		target->length = source->length;
+-		strcpy(target->before_sha256, source->before_sha256);
+-		strcpy(target->after_sha256, source->after_sha256);
+-		target->verified = source->verified;
+-		report->plan_bytes += source->length;
+-	}
+-	return 0;
+-}
+-
+-static int commit_plan(struct rh_writer *writer,
+-		struct qualification_report *report)
+-{
+-	int result;
+-	if (!writer->operation_count)
+-		return 0;
+-	result = rh_writer_commit(writer);
+-	report->commit_started |= writer->commit_started;
+-	report->commit_syncs += writer->sync_count;
+-	report->last_verified += writer->last_verified_ordinal;
+-	if (append_plan(report, writer))
+-		result = -1;
+-	if (result)
+-		report->commit_completed = 0;
+-	rh_writer_reset_plan(writer);
+-	return result;
+-}
+-
+-static void calculate_plan_hash(struct qualification_report *report)
+-{
+-	char *manifest;
+-	size_t capacity, used = 0, i;
+-
+-	if (!report->repair_count) {
+-		rh_sha256_hex("", 0, report->plan_sha256);
+-		return;
+-	}
+-	capacity = report->repair_count * 192 + 1;
+-	manifest = malloc(capacity);
+-	if (!manifest) {
+-		memset(report->plan_sha256, '0', 64);
+-		report->plan_sha256[64] = 0;
+-		return;
+-	}
+-	for (i = 0; i < report->repair_count; i++) {
+-		const struct reported_repair *op = &report->repairs[i];
+-		int length = snprintf(manifest + used, capacity - used,
+-			"%s:%"PRIu64":%zu:%s:%s\n",
+-			rh_write_kind_name(op->kind), op->offset, op->length,
+-			op->before_sha256, op->after_sha256);
+-		if (length < 0 || (size_t)length >= capacity - used)
+-			break;
+-		used += (size_t)length;
+-	}
+-	rh_sha256_hex(manifest, used, report->plan_sha256);
+-	free(manifest);
+-}
+-
+-static int run_child(const char *path, char *const arguments[])
+-{
+-	pid_t child;
+-	int status;
+-	if (!path || !*path)
+-		return RH_RESULT_INTERNAL;
+-	child = fork();
+-	if (child < 0)
+-		return RH_RESULT_INTERNAL;
+-	if (!child) {
+-		execv(path, arguments);
+-		_exit(127);
+-	}
+-	while (waitpid(child, &status, 0) < 0) {
+-		if (errno != EINTR)
+-			return RH_RESULT_INTERNAL;
+-	}
+-	if (!WIFEXITED(status))
+-		return RH_RESULT_IO;
+-	return WEXITSTATUS(status);
+-}
+-
+-static void run_rescan(const char *deep_checker, const char *phase2_checker,
+-		const char *device, int *deep_exit, int *phase2_exit)
+-{
+-	char *deep_argv[] = { (char *)deep_checker, "-n",
+-		(char *)device, NULL };
+-	char *phase2_argv[] = { (char *)phase2_checker, "--check", "--quiet",
+-		"--require-t1os-root", (char *)device, NULL };
+-	*deep_exit = run_child(deep_checker, deep_argv);
+-	*phase2_exit = run_child(phase2_checker, phase2_argv);
+-}
+-
+-static int write_report(int fd, int result, const char *device,
+-		const struct qualification_report *report)
+-{
+-	size_t i;
+-	if (report_printf(fd,
+-		"{\n  \"format\": 3,\n  \"tool\": \"roothealth-repair-core\",\n"
+-		"  \"version\": \"%s\",\n  \"mode\": \"repair\",\n"
+-		"  \"device\": ", ROOTHEALTH_REPAIR_VERSION) ||
+-		report_json_string(fd, device) || report_printf(fd,
+-		",\n  \"result\": \"%s\",\n  \"exit\": %d,\n",
+-		result_name(result), result))
+-		return -1;
+-	if (report_printf(fd,
+-		"  \"identity\": {\"prewrite_checked\": %s, "
+-		"\"prewrite_valid\": %s, \"expected_serial\": "
+-		"\"0x%016"PRIx64"\", \"observed_primary_serial\": "
+-		"\"0x%016"PRIx64"\", \"observed_backup_serial\": "
+-		"\"0x%016"PRIx64"\", \"required_paths_checked\":%u,"
+-		"\"forbidden_paths_checked\":%u, \"expected_label_prefix\": ",
+-		report->identity.prewrite_checked ? "true" : "false",
+-		report->identity.prewrite_valid ? "true" : "false",
+-		report->identity.expected_serial,
+-		report->identity.observed_primary_serial,
+-		report->identity.observed_backup_serial,
+-		report->identity.required_paths_checked,
+-		report->identity.forbidden_paths_checked) ||
+-		report_json_string(fd, report->identity.expected_label) ||
+-		report_printf(fd, ", \"observed_label\": ") ||
+-		report_json_string(fd, report->identity.observed_label) ||
+-		report_printf(fd, ", \"anchor\": ") ||
+-		report_json_string(fd, report->identity.anchor) ||
+-		report_printf(fd, "},\n"))
+-		return -1;
+-	if (report_printf(fd,
+-		"  \"passes\": [\n"
+-		"    {\"id\":\"identity\",\"checked\":%s,\"valid\":%s},\n"
+-		"    {\"id\":\"boot\",\"checked\":%s,\"geometry_supported\":%s,"
+-		"\"primary_valid\":%s,"
+-		"\"backup_valid\":%s},\n"
+-		"    {\"id\":\"mftmirr\",\"checked\":%s,"
+-		"\"records_examined\":%u},\n"
+-		"    {\"id\":\"logfile\",\"version\":\"%d.%d\","
+-		"\"actions_examined\":%u,\"redo_actions\":%u}\n  ],\n",
+-		report->identity.prewrite_checked ? "true" : "false",
+-		report->identity.prewrite_valid ? "true" : "false",
+-		report->boot.checked ? "true" : "false",
+-		report->boot.geometry_supported ? "true" : "false",
+-		report->boot.primary_valid ? "true" : "false",
+-		report->boot.backup_valid ? "true" : "false",
+-		report->mirror.checked ? "true" : "false",
+-		report->mirror.records_checked, report->log.major_version,
+-		report->log.minor_version, report->log.actions_seen,
+-		report->log.redo_actions))
+-		return -1;
+-	if (report_printf(fd,
+-		"  \"wal\": {\"checked\":false,\"present\":null,"
+-		"\"valid\":null,\"state\":null,\"generation\":null,"
+-		"\"recovery_required\":null,\"recovered\":false,"
+-		"\"journal_uuid\":null,\"volume_serial\":null,"
+-		"\"write_boundaries\":0},\n"
+-		"  \"plan\": {\"id\":\"%s\",\"operations\":%zu,"
+-		"\"bytes\":%"PRIu64"},\n"
+-		"  \"commit\": {\"started\":%s,\"completed\":%s,"
+-		"\"last_verified_ordinal\":%zu,\"syncs\":%zu},\n"
+-		"  \"repairs\": [",
+-		report->plan_sha256, report->repair_count, report->plan_bytes,
+-		report->commit_started ? "true" : "false",
+-		report->commit_completed ? "true" : "false",
+-		report->last_verified, report->commit_syncs))
+-		return -1;
+-	for (i = 0; i < report->repair_count; i++) {
+-		const struct reported_repair *op = &report->repairs[i];
+-		if (report_printf(fd,
+-			"%s\n    {\"kind\":\"%s\",\"offset\":%"PRIu64
+-			",\"length\":%zu,\"before_hash\":\"%s\","
+-			"\"after_hash\":\"%s\",\"verified\":%s}",
+-			i ? "," : "", rh_write_kind_name(op->kind), op->offset,
+-			op->length, op->before_sha256, op->after_sha256,
+-			op->verified ? "true" : "false"))
+-			return -1;
+-	}
+-	return report_printf(fd,
+-		"\n  ],\n  \"logfile\": {\"version\":\"%d.%d\","
+-		"\"restart_lsn\":%"PRIu64",\"synced_lsn\":%"PRIu64
+-		",\"latest_lsn\":%"PRIu64",\"actions_parsed\":%u,"
+-		"\"actions_planned\":%u,\"restart_pages_committed\":%u},\n"
+-		"  \"postcheck\": {\"first_deep_exit\":%d,"
+-		"\"first_fresh_exit\":%d,\"dirty_clear_attempted\":false,"
+-		"\"final_rescan_run\":%s,\"final_deep_exit\":%d,"
+-		"\"final_fresh_exit\":%d}\n}\n",
+-		report->log.major_version, report->log.minor_version,
+-		report->log.restart_lsn, report->log.synced_lsn,
+-		report->log.latest_lsn, report->log.actions_seen,
+-		report->log.redo_actions, report->log.restart_pages_planned,
+-		report->first_deep_exit, report->first_phase2_exit,
+-		report->final_rescan_run ? "true" : "false",
+-		report->final_deep_exit, report->final_phase2_exit);
+-}
++#include "roothealth_format3.h"
++#include "roothealth_orchestrator.h"
++#include "roothealth_report.h"
+ 
+ int main(int argc, char **argv)
+ {
+-	static const struct option options[] = {
+-		{ "repair", no_argument, NULL, 'r' },
+-		{ "require-t1os-root", no_argument, NULL, 'T' },
+-		{ "expected-serial", required_argument, NULL, 's' },
+-		{ "report", required_argument, NULL, 'J' },
+-		{ "deep-checker", required_argument, NULL, 1000 },
+-		{ "phase2-checker", required_argument, NULL, 1001 },
+-		{ "help", no_argument, NULL, 'h' },
+-		{ "version", no_argument, NULL, 'V' },
+-		{ NULL, 0, NULL, 0 }
+-	};
+-	struct qualification_report report;
++	struct rh_cli cli;
++	struct rh_report report;
++	struct rh_device_evidence device;
++	struct rh_scan_evidence initial, final;
++	struct rh_foundation_evidence foundation;
+ 	struct rh_writer writer;
+-	const char *report_path = NULL, *device = NULL;
+-	const char *deep_checker = NULL, *phase2_checker = NULL;
+-	uint64_t expected_serial = 0;
+-	int repair_mode = 0, require_root = 0;
+-	int report_fd = -1, report_created = 0;
+-	int code = RH_RESULT_INTERNAL;
+-	int option;
+-	struct stat report_stat;
++	char binary_hash[65], initial_exec_id[37];
++	int result, have_final = 0;
+ 
+-	memset(&report, 0, sizeof(report));
+-	report.commit_completed = 1;
+-	report.first_deep_exit = report.first_phase2_exit = -1;
+-	report.final_deep_exit = report.final_phase2_exit = -1;
+-	while ((option = getopt_long(argc, argv, "rTs:J:hV", options,
+-			NULL)) != -1) {
+-		switch (option) {
+-		case 'r': repair_mode = 1; break;
+-		case 'T': require_root = 1; break;
+-		case 's':
+-			if (parse_serial(optarg, &expected_serial))
+-				goto usage_error;
+-			break;
+-		case 'J': report_path = optarg; break;
+-		case 1000: deep_checker = optarg; break;
+-		case 1001: phase2_checker = optarg; break;
+-		case 'h': usage(stdout); return 0;
+-		case 'V':
+-			printf("roothealth-repair-core v%s (ntfs-next d4f481d)\n",
+-				ROOTHEALTH_REPAIR_VERSION);
+-			return 0;
+-		default: goto usage_error;
+-		}
+-	}
+-	if (!repair_mode || !require_root || !expected_serial || !report_path ||
+-		!deep_checker || !phase2_checker || optind + 1 != argc)
+-		goto usage_error;
+-	device = argv[optind];
+-	if (!lstat(report_path, &report_stat) || errno != ENOENT)
++	if (rh_cli_parse(argc, argv, &cli)) {
++		rh_cli_usage(stderr);
+ 		return RH_RESULT_INTERNAL;
+-	option = roothealth_refuse_mounted(device);
+-	if (option > 0) {
+-		code = RH_RESULT_UNSAFE;
+-		goto finish;
+-	}
+-	if (option < 0 || rh_writer_open(&writer, device)) {
+-		code = RH_RESULT_IO;
+-		goto finish;
+-	}
+-	code = roothealth_bootstrap_boot_plan(&writer, expected_serial,
+-		ROOTHEALTH_EXPECTED_LABEL_PREFIX, &report.identity, &report.boot);
+-	if (code != RH_RESULT_OK)
+-		goto close_writer;
+-	if (commit_plan(&writer, &report)) {
+-		code = RH_RESULT_IO;
+-		goto close_writer;
+-	}
+-	code = roothealth_mftmirr_plan(&writer, &report.boot.geometry,
+-		&report.mirror);
+-	if (code != RH_RESULT_OK)
+-		goto close_writer;
+-	if (commit_plan(&writer, &report)) {
+-		code = RH_RESULT_IO;
+-		goto close_writer;
+ 	}
+-	code = roothealth_verify_namespace_identity(&writer, device,
+-		&report.boot.geometry, expected_serial,
+-		ROOTHEALTH_EXPECTED_LABEL_PREFIX, &report.identity);
+-	if (code != RH_RESULT_OK)
+-		goto close_writer;
+-	if (roothealth_log_replay_plan(device, &writer, &report.log)) {
+-		code = errno == EIO ? RH_RESULT_IO : RH_RESULT_UNSAFE;
+-		rh_writer_reset_plan(&writer);
+-		goto close_writer;
+-	}
+-	if (commit_plan(&writer, &report)) {
+-		code = RH_RESULT_IO;
+-		goto close_writer;
+-	}
+-	code = RH_RESULT_OK;
+-close_writer:
+-	rh_writer_close(&writer);
+-	if (code == RH_RESULT_OK) {
+-		run_rescan(deep_checker, phase2_checker, device,
+-			&report.first_deep_exit, &report.first_phase2_exit);
+-		if (report.first_deep_exit || report.first_phase2_exit) {
+-			if (report.first_phase2_exit == RH_RESULT_IO)
+-				code = RH_RESULT_IO;
+-			else if (report.first_phase2_exit == RH_RESULT_WRONG_ROOT)
+-				code = RH_RESULT_WRONG_ROOT;
+-			else
+-				code = RH_RESULT_UNSAFE;
+-		} else {
+-			report.final_rescan_run = 1;
+-			run_rescan(deep_checker, phase2_checker, device,
+-				&report.final_deep_exit, &report.final_phase2_exit);
+-			if (report.final_deep_exit || report.final_phase2_exit)
+-				code = report.final_phase2_exit == RH_RESULT_IO ?
+-					RH_RESULT_IO : RH_RESULT_UNSAFE;
+-		}
+-	}
+-finish:
+-	calculate_plan_hash(&report);
+-	report_fd = open(report_path,
+-		O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+-	if (report_fd < 0) {
+-		free(report.repairs);
++	if (cli.internal_fd >= 0)
++		return rh_orchestrator_internal_rescan(&cli);
++	/*
++	 * Reserve the complete 4 MiB report arena before resolving or opening the
++	 * target.  O_EXCL/O_NOFOLLOW also makes target/report aliasing fail closed.
++	 */
++	if (rh_report_prepare(&report, cli.report_path))
+ 		return RH_RESULT_INTERNAL;
+-	}
+-	report_created = 1;
+-	if (fstat(report_fd, &report_stat) || !S_ISREG(report_stat.st_mode) ||
+-		report_stat.st_nlink != 1) {
+-		code = RH_RESULT_INTERNAL;
+-		goto report_failure;
+-	}
+-	if (write_report(report_fd, code, device ? device : "", &report) ||
+-		fsync(report_fd) || close(report_fd)) {
+-		report_fd = -1;
+-		code = RH_RESULT_INTERNAL;
+-	report_failure:
+-		if (report_fd >= 0) {
+-			close(report_fd);
+-			report_fd = -1;
+-		}
+-		if (report_created)
+-			unlink(report_path);
+-	} else {
+-		report_fd = -1;
+-	}
+-	free(report.repairs);
+-	return code;
+-usage_error:
+-	usage(stderr);
+-	return RH_RESULT_INTERNAL;
++	if (rh_device_resolve(cli.device_path, &device) ||
++			rh_binary_hash(binary_hash) || rh_uuid_text(initial_exec_id)) {
++		if (rh_report_abort(&report))
++			return RH_RESULT_INTERNAL;
++		return errno == ENOMEM ? RH_RESULT_INTERNAL : RH_RESULT_IO;
++	}
++	memset(&foundation, 0, sizeof(foundation));
++	memset(&writer, 0, sizeof(writer));
++	writer.read_fd = -1;
++	writer.write_fd = -1;
++
++	result = rh_orchestrator_scan(&cli, &device, &initial, &writer, 1);
++	/* rh_orchestrator_scan initializes the entire snapshot. */
++	strcpy(initial.execution.role, "INITIAL");
++	strcpy(initial.execution.transport, "DIRECT");
++	strcpy(initial.execution.exec_id, initial_exec_id);
++	strcpy(initial.execution.binary_sha256, binary_hash);
++	initial.execution.pid = (uint64_t)getpid();
++	initial.execution.parent_pid = (uint64_t)getppid();
++	if (writer.path && writer.device_id == device.resolved_stat.st_dev &&
++			writer.inode_id == device.resolved_stat.st_ino)
++		device.selection_proven = 1;
++	if (cli.mode == RH_CLI_CHECK) {
++		if (writer.path)
++			rh_writer_close(&writer);
++		final = initial; /* public check aliases its one read-only scan */
++		have_final = 1;
++	} else if (writer.path) {
++		/*
++		 * This merge slice does not link the complete post-write checker, so it
++		 * has no source-reachable target commit path.  The full-engine rebase
++		 * must add a presealed/captured commit and a fresh self-exec rescan as
++		 * one reviewed change; planning here remains diagnosis-only.
++		 */
++		rh_writer_close(&writer);
++	}
++	if (!device.selection_proven)
++		result = rh_result_precedence(result, RH_RESULT_IO);
++	if (rh_format3_publish(&report, &cli, &device, &initial,
++			have_final ? &final : NULL, &foundation, result))
++		return RH_RESULT_INTERNAL;
++	return result;
+ }
+diff --git a/src/roothealth_report.c b/src/roothealth_report.c
+new file mode 100644
+index 0000000..348d8da
+--- /dev/null
++++ b/src/roothealth_report.c
+@@ -0,0 +1,336 @@
++/* ROOTHEALTH_REPAIR_ROLE(REPORT) ROOTHEALTH_IO_ROLE(REPORT) */
++#include "config.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#include "roothealth_report.h"
++
++#ifdef ROOTHEALTH_REPORT_TEST_HOOKS
++static int rh_report_test_first_created_fstat_failure;
++
++void rh_report_test_fail_first_created_fstat(void)
++{
++	rh_report_test_first_created_fstat_failure = 1;
++}
++#endif
++
++#ifndef O_CLOEXEC
++#error "roothealth requires O_CLOEXEC"
++#endif
++#ifndef O_NOFOLLOW
++#error "roothealth requires O_NOFOLLOW"
++#endif
++
++static void rh_report_release(struct rh_report *report)
++{
++	if (!report)
++		return;
++	if (report->fd >= 0)
++		close(report->fd);
++	report->fd = -1;
++	if (report->directory_fd >= 0)
++		close(report->directory_fd);
++	report->directory_fd = -1;
++	free(report->buffer);
++	report->buffer = NULL;
++	free(report->path);
++	report->path = NULL;
++	free(report->name);
++	report->name = NULL;
++	report->capacity = 0;
++	report->used = 0;
++	report->created = 0;
++	report->identity_bound = 0;
++}
++
++static int rh_report_name_matches(const struct rh_report *report)
++{
++	struct stat st;
++
++	if (!report || report->directory_fd < 0 || !report->name ||
++			fstatat(report->directory_fd, report->name, &st,
++				AT_SYMLINK_NOFOLLOW))
++		return -1;
++	if (!S_ISREG(st.st_mode) || st.st_dev != report->created_dev ||
++			st.st_ino != report->created_ino || st.st_nlink != 1) {
++		errno = ESTALE;
++		return -1;
++	}
++	return 0;
++}
++
++static int rh_fstat_retry(int fd, struct stat *st)
++{
++	int result;
++	do {
++		result = fstat(fd, st);
++	} while (result && errno == EINTR);
++	return result;
++}
++
++static int rh_report_unlink_created(struct rh_report *report)
++{
++	struct stat st;
++
++	if (!report || !report->created)
++		return 0;
++	/*
++	 * O_EXCL proves that this descriptor created a new inode, but it does not
++	 * make the pathname safe to unlink after a rename/replacement race.  If
++	 * the first post-open fstat failed, bind the descriptor identity here
++	 * while it is still open, then use the same name/identity proof as every
++	 * other cleanup path.
++	 */
++	if (!report->identity_bound) {
++		if (report->fd < 0 || rh_fstat_retry(report->fd, &st))
++			return -1;
++		if (!S_ISREG(st.st_mode) || st.st_nlink != 1) {
++			errno = ESTALE;
++			return -1;
++		}
++		report->created_dev = st.st_dev;
++		report->created_ino = st.st_ino;
++		report->identity_bound = 1;
++	}
++	if (rh_report_name_matches(report))
++		return -1;
++	if (unlinkat(report->directory_fd, report->name, 0))
++		return -1;
++	report->created = 0;
++	return 0;
++}
++
++int rh_report_prepare(struct rh_report *report, const char *path)
++{
++	struct stat directory_st, st;
++	char *directory = NULL;
++	const char *slash;
++	int error;
++
++	if (!report || !path || path[0] != '/') {
++		errno = EINVAL;
++		return -1;
++	}
++	memset(report, 0, sizeof(*report));
++	report->fd = -1;
++	report->directory_fd = -1;
++	slash = strrchr(path, '/');
++	if (!slash || !slash[1] || !strcmp(slash + 1, ".") ||
++			!strcmp(slash + 1, "..")) {
++		errno = EINVAL;
++		return -1;
++	}
++	directory = slash == path ? strdup("/") :
++		strndup(path, (size_t)(slash - path));
++	/* All memory needed for publication is committed before the target opens. */
++	report->buffer = malloc(RH_REPORT_LIMIT);
++	report->path = strdup(path);
++	report->name = strdup(slash + 1);
++	if (!directory || !report->buffer || !report->path || !report->name)
++		goto fail;
++	report->directory_fd = open(directory,
++		O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
++	free(directory);
++	directory = NULL;
++	if (report->directory_fd < 0)
++		goto fail;
++	if (rh_fstat_retry(report->directory_fd, &directory_st))
++		goto fail;
++	if (!S_ISDIR(directory_st.st_mode) || directory_st.st_uid != 0 ||
++			(directory_st.st_mode & 022) != 0) {
++		errno = EPERM;
++		goto fail;
++	}
++	report->capacity = RH_REPORT_LIMIT;
++	report->fd = openat(report->directory_fd, report->name,
++		O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
++	if (report->fd < 0)
++		goto fail;
++	report->created = 1;
++#ifdef ROOTHEALTH_REPORT_TEST_HOOKS
++	if (rh_report_test_first_created_fstat_failure) {
++		rh_report_test_first_created_fstat_failure = 0;
++		errno = EIO;
++		goto fail;
++	}
++#endif
++	if (rh_fstat_retry(report->fd, &st))
++		goto fail;
++	if (!S_ISREG(st.st_mode) || st.st_nlink != 1) {
++		errno = EINVAL;
++		goto fail;
++	}
++	report->created_dev = st.st_dev;
++	report->created_ino = st.st_ino;
++	report->identity_bound = 1;
++	if (fchmod(report->fd, 0600) || rh_fstat_retry(report->fd, &st))
++		goto fail;
++	if (st.st_dev != report->created_dev ||
++			st.st_ino != report->created_ino || st.st_nlink != 1 ||
++			(st.st_mode & 0777) != 0600) {
++		errno = EINVAL;
++		goto fail;
++	}
++	/* A late ENOSPC after a committed repair is not an acceptable design. */
++	error = posix_fallocate(report->fd, 0, (off_t)RH_REPORT_LIMIT);
++	if (error) {
++		errno = error;
++		goto fail;
++	}
++	return 0;
++fail:
++	error = errno ? errno : EIO;
++	free(directory);
++	/* Keep the descriptor open until an unbound created inode is identified. */
++	if (report->created)
++		(void)rh_report_unlink_created(report);
++	rh_report_release(report);
++	errno = error;
++	return -1;
++}
++
++int rh_report_append(struct rh_report *report, const void *data, size_t length)
++{
++	if (!report || !report->buffer || (!data && length) ||
++		length > report->capacity - report->used) {
++		errno = EOVERFLOW;
++		return -1;
++	}
++	memcpy(report->buffer + report->used, data, length);
++	report->used += length;
++	return 0;
++}
++
++int rh_report_appendf(struct rh_report *report, const char *format, ...)
++{
++	va_list ap;
++	int length;
++	size_t available;
++
++	if (!report || !report->buffer || !format) {
++		errno = EINVAL;
++		return -1;
++	}
++	available = report->capacity - report->used;
++	va_start(ap, format);
++	length = vsnprintf(report->buffer + report->used, available, format, ap);
++	va_end(ap);
++	if (length < 0)
++		return -1;
++	if ((size_t)length >= available) {
++		errno = EOVERFLOW;
++		return -1;
++	}
++	report->used += (size_t)length;
++	return 0;
++}
++
++int rh_report_json_string(struct rh_report *report, const char *text)
++{
++	const unsigned char *p = (const unsigned char *)(text ? text : "");
++
++	if (rh_report_append(report, "\"", 1))
++		return -1;
++	while (*p) {
++		char escape[7];
++		if (*p == '\\' || *p == '"') {
++			escape[0] = '\\';
++			escape[1] = (char)*p++;
++			if (rh_report_append(report, escape, 2))
++				return -1;
++		} else if (*p < 0x20) {
++			int length = snprintf(escape, sizeof(escape), "\\u%04x", *p++);
++			if (length != 6 || rh_report_append(report, escape, 6))
++				return -1;
++		} else {
++			unsigned char ch = *p++;
++			if (rh_report_append(report, &ch, 1))
++				return -1;
++		}
++	}
++	return rh_report_append(report, "\"", 1);
++}
++
++static int rh_report_pwrite_all(int fd, const void *data, size_t length,
++		off_t offset)
++{
++	const unsigned char *p = data;
++
++	while (length) {
++		ssize_t result = pwrite(fd, p, length, offset);
++		if (result < 0) {
++			if (errno == EINTR)
++				continue;
++			return -1;
++		}
++		if (!result) {
++			errno = EIO;
++			return -1;
++		}
++		p += result;
++		length -= (size_t)result;
++		offset += result;
++	}
++	return 0;
++}
++
++int rh_report_publish(struct rh_report *report)
++{
++	int error;
++
++	if (!report) {
++		errno = EINVAL;
++		return -1;
++	}
++	if (report->fd < 0 || !report->created || !report->used ||
++			report->used > RH_REPORT_LIMIT) {
++		errno = EINVAL;
++		if (report->created)
++			goto fail;
++		return -1;
++	}
++	if (rh_report_name_matches(report) ||
++		rh_report_pwrite_all(report->fd, report->buffer, report->used, 0) ||
++		ftruncate(report->fd, (off_t)report->used) || fdatasync(report->fd) ||
++		rh_report_name_matches(report))
++		goto fail;
++	if (close(report->fd)) {
++		report->fd = -1;
++		goto fail;
++	}
++	report->fd = -1;
++	rh_report_release(report);
++	return 0;
++fail:
++	error = errno ? errno : EIO;
++	/* Identity-check and unlink while the created descriptor is still open. */
++	(void)rh_report_unlink_created(report);
++	rh_report_release(report);
++	errno = error;
++	return -1;
++}
++
++int rh_report_abort(struct rh_report *report)
++{
++	int cleanup_error = 0;
++	int primary_error = errno;
++
++	if (!report) {
++		errno = EINVAL;
++		return -1;
++	}
++	if (rh_report_unlink_created(report))
++		cleanup_error = errno ? errno : EIO;
++	rh_report_release(report);
++	errno = primary_error ? primary_error : cleanup_error;
++	return cleanup_error ? -1 : 0;
++}
+diff --git a/src/roothealth_report.h b/src/roothealth_report.h
+new file mode 100644
+index 0000000..012bdfb
+--- /dev/null
++++ b/src/roothealth_report.h
+@@ -0,0 +1,40 @@
++#ifndef ROOTHEALTH_REPORT_H
++#define ROOTHEALTH_REPORT_H
++
++#include <stddef.h>
++#include <sys/types.h>
++
++#define RH_REPORT_LIMIT (4U * 1024U * 1024U)
++
++/*
++ * The report is reserved before the target is opened.  Until publish succeeds
++ * it is deliberately a zero-filled, invalid JSON file.  This means an abrupt
++ * power loss can leave an incomplete file, but never a false success report.
++ */
++struct rh_report {
++	int fd;
++	int directory_fd;
++	char *path;
++	char *name;
++	char *buffer;
++	size_t capacity;
++	size_t used;
++	int created;
++	int identity_bound;
++	dev_t created_dev;
++	ino_t created_ino;
++};
++
++int rh_report_prepare(struct rh_report *report, const char *path);
++int rh_report_append(struct rh_report *report, const void *data, size_t length);
++int rh_report_appendf(struct rh_report *report, const char *format, ...)
++	__attribute__((format(printf, 2, 3)));
++int rh_report_json_string(struct rh_report *report, const char *text);
++int rh_report_publish(struct rh_report *report);
++int rh_report_abort(struct rh_report *report);
++
++#ifdef ROOTHEALTH_REPORT_TEST_HOOKS
++void rh_report_test_fail_first_created_fstat(void);
++#endif
++
++#endif
+diff --git a/src/roothealth_write.c b/src/roothealth_write.c
+index 87f4d80..c687af0 100644
+--- a/src/roothealth_write.c
++++ b/src/roothealth_write.c
+@@ -1468,6 +1468,7 @@ int rh_writer_commit(struct rh_writer *writer)
+ 		goto abort;
+ 	for (i = 0; i < writer->operation_count; i++) {
+ 		struct rh_write_operation *op = &writer->operations[i];
++		size_t first_boundary = writer->write_boundaries;
+ 		unsigned char *grown = realloc(check, op->length);
+ 		if (!grown)
+ 			goto abort;
+@@ -1498,6 +1499,9 @@ int rh_writer_commit(struct rh_writer *writer)
+ 		 */
+ 		if (rh_writer_sync(writer))
+ 			goto abort;
++		op->write_boundaries = writer->write_boundaries - first_boundary;
++		op->sync_ordinal = writer->sync_count;
++		op->sync_completed = 1;
+ 		if (writer->backend && writer->backend->after_write &&
+ 			writer->backend->after_write(writer->backend_opaque, i + 1, op))
+ 			goto abort;
+@@ -1507,6 +1511,7 @@ int rh_writer_commit(struct rh_writer *writer)
+ 			goto abort;
+ 		}
+ 		op->verified = 1;
++		op->readback_verified = 1;
+ 		writer->last_verified_ordinal = i + 1;
+ 		if (rh_fault("after-verify", i + 1))
+ 			goto abort;
+diff --git a/src/roothealth_write.h b/src/roothealth_write.h
+index 8db2a74..0d839ae 100644
+--- a/src/roothealth_write.h
++++ b/src/roothealth_write.h
+@@ -107,6 +107,10 @@ struct rh_write_operation {
+ 	char before_sha256[65];
+ 	char after_sha256[65];
+ 	struct rh_write_semantic_target target;
++	size_t write_boundaries;
++	size_t sync_ordinal;
++	int sync_completed;
++	int readback_verified;
+ 	int verified;
+ };
+ 
+diff --git a/tests/check_roothealth_format3_literals.py b/tests/check_roothealth_format3_literals.py
+new file mode 100644
+index 0000000..4ec98d2
+--- /dev/null
++++ b/tests/check_roothealth_format3_literals.py
+@@ -0,0 +1,80 @@
++#!/usr/bin/env python3
++"""Fail if the format-3 serializer reintroduces hand-counted JSON lengths."""
++
++from __future__ import annotations
++
++import pathlib
++import re
++import sys
++
++
++LITERAL_EXPRESSION = re.compile(
++    r'^(?:(?:"(?:\\.|[^"\\])*")|(?:name)|\s)+$', re.DOTALL
++)
++
++
++def call_arguments(source: str, start: int) -> list[str]:
++    depth = 0
++    quote = False
++    escape = False
++    argument_start = start
++    arguments: list[str] = []
++    for index in range(start, len(source)):
++        character = source[index]
++        if quote:
++            if escape:
++                escape = False
++            elif character == "\\":
++                escape = True
++            elif character == '"':
++                quote = False
++            continue
++        if character == '"':
++            quote = True
++        elif character == "(":
++            depth += 1
++        elif character == ")":
++            if depth == 0:
++                arguments.append(source[argument_start:index])
++                return arguments
++            depth -= 1
++        elif character == "," and depth == 0:
++            arguments.append(source[argument_start:index])
++            argument_start = index + 1
++    raise ValueError("unterminated RH_APPEND_LITERAL call")
++
++
++def main() -> int:
++    if len(sys.argv) != 2:
++        raise SystemExit("usage: check_roothealth_format3_literals.py SOURCE")
++    path = pathlib.Path(sys.argv[1])
++    source = path.read_text(encoding="utf-8")
++    if re.search(r"rh_report_append\s*\(\s*report\s*,", source):
++        raise SystemExit("direct hand-counted rh_report_append(report, ...) remains")
++    count = 0
++    marker = "RH_APPEND_LITERAL("
++    offset = 0
++    while True:
++        found = source.find(marker, offset)
++        if found < 0:
++            break
++        arguments = call_arguments(source, found + len(marker))
++        # The macro declaration names its second parameter; call sites must
++        # be C string-literal concatenations (plus the local `name` macro).
++        if arguments[1].strip() == "literal":
++            offset = found + len(marker)
++            continue
++        if len(arguments) != 2 or arguments[0].strip() != "report":
++            raise SystemExit(f"invalid RH_APPEND_LITERAL call at byte {found}")
++        if not LITERAL_EXPRESSION.fullmatch(arguments[1]):
++            raise SystemExit(f"non-literal RH_APPEND_LITERAL input at byte {found}")
++        count += 1
++        offset = found + len(marker)
++    if count < 80:
++        raise SystemExit(f"unexpectedly low checked literal count: {count}")
++    print(f"roothealth-format3-literals checked={count} mismatches=0")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/roothealth_format3_test.c b/tests/roothealth_format3_test.c
+new file mode 100644
+index 0000000..6f5ea9c
+--- /dev/null
++++ b/tests/roothealth_format3_test.c
+@@ -0,0 +1,198 @@
++#include "config.h"
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "roothealth_format3.h"
++
++const char *rh_public_result(int result)
++{
++	switch (result) {
++	case RH_RESULT_UNSAFE: return "unsafe";
++	case RH_RESULT_IO: return "io-error";
++	case RH_RESULT_WRONG_ROOT: return "wrong-root";
++	default: return "internal-error";
++	}
++}
++
++static void wal_unknown(struct rh_scan_evidence *scan)
++{
++	memset(&scan->wal, 0, sizeof(scan->wal));
++	scan->wal.present = -1;
++	scan->wal.valid = -1;
++	scan->wal.recovery_required = -1;
++	scan->wal.state = -1;
++	scan->wal.transaction_kind = -1;
++	scan->wal.max_entry_count = -1;
++}
++
++const char *rh_native_state(const struct rh_scan_evidence *scan)
++{
++	if (!scan->native_log.checked)
++		return NULL;
++	if (scan->native_refused)
++		return "UNSAFE";
++	switch (scan->native_log.state) {
++	case RH_NATIVE_LOG_EMPTY_T1OS: return "EMPTY_T1OS";
++	case RH_NATIVE_LOG_CLEAN_RESTART: return "CLEAN_RESTART";
++	case RH_NATIVE_LOG_REPLAY_PLANNED: return "REPLAY_PLANNED";
++	default: return "UNSAFE";
++	}
++}
++
++const char *rh_write_kind_name(enum rh_write_kind kind)
++{
++	static const char *const names[] = {
++		"boot-primary", "boot-backup", "mft-primary", "mft-mirror"
++	};
++	return kind >= 0 && kind < 4 ? names[kind] : "unsupported";
++}
++
++static void base_scan(struct rh_scan_evidence *scan)
++{
++	memset(scan, 0, sizeof(*scan));
++	scan->completed = 1;
++	scan->result = RH_RESULT_UNSAFE;
++	scan->identity_valid = 1;
++	strcpy(scan->scan_id, "11111111-2222-4333-8444-555555555555");
++	strcpy(scan->execution.role, "INITIAL");
++	strcpy(scan->execution.transport, "DIRECT");
++	strcpy(scan->execution.exec_id, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
++	memset(scan->execution.binary_sha256, 'a', 64);
++	scan->execution.binary_sha256[64] = 0;
++	scan->execution.pid = (uint64_t)getpid();
++	scan->execution.parent_pid = (uint64_t)getppid();
++	scan->identity.prewrite_checked = 1;
++	scan->identity.observed_primary_serial = UINT64_C(0x1122334455667788);
++	scan->identity.observed_backup_serial = UINT64_C(0x1122334455667788);
++	strcpy(scan->identity.observed_label, "T1OS-test");
++	strcpy(scan->identity.anchor, "the one");
++	scan->wal.checked = 1;
++	scan->wal.present = 1;
++	scan->wal.valid = 1;
++	scan->wal.recovery_required = 0;
++	scan->wal.fast_path_trusted = 1;
++	scan->wal.ownership_census_complete = 1;
++	scan->wal.write_safe = 1;
++	scan->wal.state = RH_WAL_EMPTY;
++	scan->wal.transaction_kind = RH_WAL_TX_NONE;
++	scan->wal.max_entry_count = RH_WAL_MAX_ENTRIES;
++	scan->wal.generation = 7;
++	strcpy(scan->wal.journal_uuid,
++		"01234567-89ab-4cde-8fab-0123456789ab");
++	scan->wal.volume_serial = UINT64_C(0x1122334455667788);
++}
++
++static void native_case(struct rh_scan_evidence *scan, const char *name)
++{
++	struct rh_log_result *log = &scan->native_log;
++	log->checked = 1;
++	log->logfile_bytes = 8192;
++	log->pages_expected = 2;
++	log->pages_examined = 2;
++	if (!strcmp(name, "empty")) {
++		log->state = RH_NATIVE_LOG_EMPTY_T1OS;
++		log->wiped_pages_scanned = 2;
++		scan->logfile_clean_known = 1;
++		scan->logfile_clean = 1;
++		return;
++	}
++	log->major_version = 1;
++	log->minor_version = 1;
++	log->restart_lsn = 100;
++	log->synced_lsn = 100;
++	log->committed_lsn = 100;
++	log->latest_lsn = 100;
++	if (!strcmp(name, "clean")) {
++		log->state = RH_NATIVE_LOG_CLEAN_RESTART;
++		scan->logfile_clean_known = 1;
++		scan->logfile_clean = 1;
++		return;
++	}
++	log->state = RH_NATIVE_LOG_REPLAY_PLANNED;
++	log->checkpoint_records_examined = 1;
++	log->control_records_examined = 1;
++	log->mutation_records_examined = 1;
++	log->transaction_tables = 1;
++	log->actions_seen = 2;
++	log->redo_actions = 1;
++	log->restart_pages_planned = 2;
++	log->planned_io_operations = 4;
++	log->planned_io_bytes = 10240;
++	scan->logfile_clean_known = 1;
++	if (!strcmp(name, "refused")) {
++		scan->native_refused = 1;
++		log->unsupported_actions = 1;
++	}
++}
++
++int main(int argc, char **argv)
++{
++	struct rh_report report;
++	struct rh_cli cli;
++	struct rh_device_evidence device;
++	struct rh_scan_evidence initial;
++	struct rh_foundation_evidence foundation;
++	const struct rh_scan_evidence *final;
++	int result = RH_RESULT_UNSAFE;
++
++	if (argc != 4)
++		return 1;
++	memset(&cli, 0, sizeof(cli));
++	cli.mode = RH_CLI_CHECK;
++	cli.expected_serial = UINT64_C(0x1122334455667788);
++	strcpy(cli.expected_uuid_text, "01234567-89ab-4cde-8fab-0123456789ab");
++	memset(&device, 0, sizeof(device));
++	if (lstat(argv[2], &device.requested_stat) ||
++			stat(argv[2], &device.resolved_stat))
++		return 2;
++	strcpy(device.requested, argv[2]);
++	strcpy(device.resolved, argv[2]);
++	device.selection_proven = 1;
++	base_scan(&initial);
++	final = &initial;
++	if (!strcmp(argv[3], "io")) {
++		cli.mode = RH_CLI_REPAIR;
++		initial.completed = 0;
++		initial.result = RH_RESULT_IO;
++		memset(&initial.identity, 0, sizeof(initial.identity));
++		initial.identity_valid = 0;
++		memset(&initial.native_log, 0, sizeof(initial.native_log));
++		initial.logfile_clean_known = 0;
++		wal_unknown(&initial);
++		result = RH_RESULT_IO;
++		final = NULL;
++	} else if (!strcmp(argv[3], "wrong")) {
++		cli.mode = RH_CLI_REPAIR;
++		initial.result = RH_RESULT_WRONG_ROOT;
++		initial.identity_valid = 0;
++		memset(&initial.native_log, 0, sizeof(initial.native_log));
++		initial.logfile_clean_known = 0;
++		wal_unknown(&initial);
++		result = RH_RESULT_WRONG_ROOT;
++		final = NULL;
++	} else {
++		native_case(&initial, argv[3]);
++	}
++	memset(&foundation, 0, sizeof(foundation));
++	if (rh_report_prepare(&report, argv[1]))
++		return 3;
++	if (!strcmp(argv[3], "overflow")) {
++		struct stat st;
++		if (setenv("ROOTHEALTH_FORMAT3_TEST_FORCE_BUILD_FAILURE", "1", 1) ||
++				!rh_format3_publish(&report, &cli, &device, &initial,
++					&initial, &foundation, RH_RESULT_UNSAFE) ||
++				!lstat(argv[1], &st))
++			return 4;
++		return 0;
++	}
++	if (
++			rh_format3_publish(&report, &cli, &device, &initial, final,
++				&foundation, result))
++		return 3;
++	return 0;
++}
+diff --git a/tests/roothealth_link_manifest.py b/tests/roothealth_link_manifest.py
+new file mode 100644
+index 0000000..cf3d095
+--- /dev/null
++++ b/tests/roothealth_link_manifest.py
+@@ -0,0 +1,89 @@
++#!/usr/bin/env python3
++"""Derive the exact project translation-unit/object closure from a GNU ld map."""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import pathlib
++import re
++import sys
++
++
++ARCHIVE_RE = re.compile(
++    r"\.\./libntfs/\.libs/libntfs\.a\(libntfs_la-([A-Za-z0-9_]+)\.o\)"
++)
++LOAD_RE = re.compile(r"^LOAD ([^\s]+\.o)$", re.MULTILINE)
++SYSTEM_OBJECT_PREFIXES = ("/usr/", "/lib/", "/opt/")
++
++
++def digest(path: pathlib.Path) -> str:
++    value = hashlib.sha256()
++    with path.open("rb") as stream:
++        for block in iter(lambda: stream.read(1024 * 1024), b""):
++            value.update(block)
++    return value.hexdigest()
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--tree", required=True, type=pathlib.Path)
++    parser.add_argument("--map", required=True, dest="map_path", type=pathlib.Path)
++    parser.add_argument("--sources", required=True, type=pathlib.Path)
++    parser.add_argument("--objects", required=True, type=pathlib.Path)
++    args = parser.parse_args()
++
++    tree = args.tree.resolve(strict=True)
++    link_map = args.map_path.read_text(encoding="utf-8", errors="strict")
++    records: dict[str, tuple[pathlib.Path, pathlib.Path]] = {}
++
++    archive_names = sorted(set(ARCHIVE_RE.findall(link_map)))
++    if not archive_names:
++        raise SystemExit("link map contains no source-built libntfs archive members")
++    for name in archive_names:
++        source_rel = pathlib.Path("libntfs") / f"{name}.c"
++        object_rel = pathlib.Path("libntfs/.libs") / f"libntfs_la-{name}.o"
++        records[source_rel.as_posix()] = (tree / source_rel, tree / object_rel)
++
++    for loaded in LOAD_RE.findall(link_map):
++        if loaded.startswith(SYSTEM_OBJECT_PREFIXES):
++            continue
++        if "/" in loaded or not loaded.endswith(".o"):
++            raise SystemExit(f"unmapped non-system link input: {loaded}")
++        name = loaded[:-2]
++        source_rel = pathlib.Path("src") / f"{name}.c"
++        object_rel = pathlib.Path("src") / loaded
++        key = source_rel.as_posix()
++        if key in records:
++            raise SystemExit(f"duplicate source link input: {key}")
++        records[key] = (tree / source_rel, tree / object_rel)
++
++    if len(records) != 49:
++        raise SystemExit(f"unexpected project link closure size: {len(records)} (expected 49)")
++    for source_rel, (source, obj) in records.items():
++        if source.suffix != ".c" or not source.is_file():
++            raise SystemExit(f"linked input has no unique C source: {source_rel}")
++        if not obj.is_file():
++            raise SystemExit(f"linked object missing: {obj}")
++
++    source_lines = ["# roothealth-linked-inputs-v1 complete-link-inputs=true"]
++    source_lines.extend(sorted(records))
++    args.sources.write_text("\n".join(source_lines) + "\n", encoding="ascii")
++
++    object_lines = [
++        "# roothealth-linked-objects-v1 complete-link-inputs=true",
++        "source\tsource_sha256\tobject\tobject_sha256",
++    ]
++    for source_rel in sorted(records):
++        source, obj = records[source_rel]
++        object_rel = obj.relative_to(tree).as_posix()
++        object_lines.append(
++            f"{source_rel}\t{digest(source)}\t{object_rel}\t{digest(obj)}"
++        )
++    args.objects.write_text("\n".join(object_lines) + "\n", encoding="ascii")
++    print(f"roothealth-link-closure sources={len(records)} objects={len(records)}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/roothealth_orchestration_test.sh b/tests/roothealth_orchestration_test.sh
+new file mode 100755
+index 0000000..28fb222
+--- /dev/null
++++ b/tests/roothealth_orchestration_test.sh
+@@ -0,0 +1,330 @@
++#!/bin/sh
++set -eu
++
++input_tree=${1:?source tree required}
++build=${2:?build directory required}
++validator_input=${3:?validate-report.py required}
++
++export PYTHONDONTWRITEBYTECODE=1
++cc=${CC:-gcc}
++validator="$build/validate-report.py"
++cp "$validator_input" "$validator"
++sha256sum "$validator" > "$build/validate-report.py.sha256"
++
++# Never qualify objects from the mutable/incremental source tree.  Copy the
++# complete source, prove distclean removed every prior object/archive, rerun
++# Autoconf, configure, and link in that fresh tree.
++tree="$build/source-tree"
++test ! -e "$tree"
++mkdir -m 0755 "$tree"
++cp -a "$input_tree/." "$tree/"
++(
++	cd "$tree"
++	make distclean >/dev/null
++	if find . -type f \( -name '*.o' -o -name '*.lo' -o -name '*.la' -o \
++		-name '*.a' -o -name '*.so' -o -name roothealth \) \
++		-print -quit | grep -q .; then
++		echo "distclean left a prebuilt link input" >&2
++		exit 1
++	fi
++	autoreconf -fi >/dev/null
++	./configure --disable-static --enable-shared \
++		CFLAGS="-O2 -g -ffile-prefix-map=$tree=. -fdebug-prefix-map=$tree=." \
++		LDFLAGS="-Wl,-Map,$build/roothealth.link.map" >/dev/null
++)
++common="-DHAVE_CONFIG_H -I$tree -I$tree/src -I$tree/include"
++binary="$tree/src/roothealth"
++
++python3 -B "$tree/tests/check_roothealth_format3_literals.py" \
++	"$tree/src/roothealth_format3.c"
++if grep -Eq 'rh_writer_commit[[:space:]]*\(' \
++	"$tree/src/roothealth_repair_main.c" \
++	"$tree/src/roothealth_orchestrator.c"; then
++	echo "partial orchestration main retains a target commit primitive" >&2
++	exit 1
++fi
++make -C "$tree/libntfs" libntfs.la >/dev/null
++make -C "$tree/src" roothealth >/dev/null
++
++test -x "$binary"
++
++# Bind the tested executable to this clean build and to the release libc ABI.
++file "$binary" | grep -q 'ELF 64-bit LSB pie executable, x86-64'
++test "$(readelf -W -l "$binary" | awk '$1 == "GNU_STACK" { print $7 }')" = RW
++readelf -W -l "$binary" | grep -q 'GNU_RELRO'
++readelf -d "$binary" | grep -Eq 'BIND_NOW|Flags:.*NOW'
++test "$(readelf -d "$binary" | \
++	sed -n 's/.*Shared library: \[\([^]]*\)\].*/\1/p')" = libc.so.6
++sha256sum "$binary" > "$build/roothealth.unstripped.sha256"
++cp "$binary" "$build/roothealth.stripped"
++strip --strip-all "$build/roothealth.stripped"
++sha256sum "$build/roothealth.stripped" > "$build/roothealth.stripped.sha256"
++objdump -T "$binary" | sed -n 's/.*(\(GLIBC_[0-9.]*\)).*/\1/p' | \
++	sort -Vu > "$build/roothealth.glibc-versions"
++cat > "$build/roothealth.glibc-versions.expected" <<'EOF'
++GLIBC_2.2.5
++GLIBC_2.3
++GLIBC_2.3.4
++GLIBC_2.4
++GLIBC_2.7
++GLIBC_2.14
++GLIBC_2.17
++GLIBC_2.25
++GLIBC_2.33
++GLIBC_2.34
++EOF
++cmp "$build/roothealth.glibc-versions.expected" \
++	"$build/roothealth.glibc-versions"
++if objdump -T "$binary" | grep -q '__isoc23_'; then
++	echo "roothealth imports an unapproved C23 libc symbol" >&2
++	exit 1
++fi
++python3 -B "$tree/tests/roothealth_link_manifest.py" \
++	--tree "$tree" --map "$build/roothealth.link.map" \
++	--sources "$build/roothealth-linked-inputs.manifest" \
++	--objects "$build/roothealth-linked-objects.tsv"
++test "$("$binary" --help | sed -n '1p')" = "roothealth v0.3.0"
++test "$("$binary" --version | sed -n '1p')" = \
++	"roothealth v0.3.0 (ntfs-next d4f481d)"
++if "$binary" --help | grep -Eq -- '--preen|--force|--yes|--auto|--clear-dirty'; then
++	echo "roothealth exposed an unqualified repair option" >&2
++	exit 1
++fi
++
++expect_cli_5()
++{
++	set +e
++	"$@" >"$build/cli.stdout" 2>"$build/cli.stderr"
++	status=$?
++	set -e
++	test "$status" -eq 5
++}
++
++expect_cli_5 "$binary" --check --repair --require-t1os-root \
++	--expected-serial 0x1122334455667788 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-journal-record 64:1 --report "$build/mutual.json" /dev/null
++test ! -e "$build/mutual.json"
++expect_cli_5 "$binary" --check --require-t1os-root \
++	--expected-serial 0x1122334455667788 --expected-journal-record 64:1 \
++	--report "$build/missing-uuid.json" /dev/null
++test ! -e "$build/missing-uuid.json"
++expect_cli_5 "$binary" --check --require-t1os-root \
++	--expected-serial 0x1122334455667788 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-journal-record 23:1 --report "$build/bad-record.json" /dev/null
++test ! -e "$build/bad-record.json"
++printf sentinel > "$build/existing-report.json"
++expect_cli_5 "$binary" --check --require-t1os-root \
++	--expected-serial 0x1122334455667788 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-journal-record 64:1 --report "$build/existing-report.json" /dev/null
++test "$(cat "$build/existing-report.json")" = sentinel
++
++printf '%s\n' "roothealth-cli cases=6 passed=1"
++
++$cc $common -DROOTHEALTH_REPORT_TEST_HOOKS -O1 -g -Wall -Wextra -Werror -fanalyzer \
++	"$tree/tests/roothealth_report_test.c" "$tree/src/roothealth_report.c" \
++	-o "$build/roothealth-report-test"
++"$build/roothealth-report-test"
++
++$cc $common -DROOTHEALTH_REPORT_TEST_HOOKS -O1 -g -Wall -Wextra -Werror \
++	-fsanitize=address,undefined -fno-omit-frame-pointer \
++	"$tree/tests/roothealth_report_test.c" "$tree/src/roothealth_report.c" \
++	-o "$build/roothealth-report-asan"
++ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
++	UBSAN_OPTIONS=halt_on_error=1 "$build/roothealth-report-asan"
++
++for source in roothealth_repair_main roothealth_orchestrator \
++	roothealth_format3 roothealth_report; do
++	$cc $common -O1 -g -Wall -Wextra -Werror -fanalyzer \
++		-Wno-address-of-packed-member -c "$tree/src/$source.c" \
++		-o "$build/$source.strict.o"
++done
++
++$cc $common -DROOTHEALTH_RESCAN_TEST_HOOKS -O1 -g -Wall -Wextra -Werror \
++	-ffunction-sections -fdata-sections -c "$tree/src/roothealth_orchestrator.c" \
++	-o "$build/roothealth-orchestrator-protocol.o"
++$cc $common -DROOTHEALTH_RESCAN_TEST_HOOKS -O1 -g -Wall -Wextra -Werror \
++	-Wl,--gc-sections \
++	"$tree/tests/roothealth_rescan_packet_test.c" \
++	"$build/roothealth-orchestrator-protocol.o" \
++	-o "$build/roothealth-rescan-packet-test"
++"$build/roothealth-rescan-packet-test"
++
++$cc $common -DROOTHEALTH_FORMAT3_TEST_HOOKS -O1 -g -Wall -Wextra -Werror -fanalyzer \
++	"$tree/tests/roothealth_format3_test.c" \
++	"$tree/src/roothealth_format3.c" "$tree/src/roothealth_report.c" \
++	"$tree/src/roothealth_hash_stream.c" \
++	-o "$build/roothealth-format3-test"
++
++$cc $common -DROOTHEALTH_FORMAT3_TEST_HOOKS -O1 -g -Wall -Wextra -Werror \
++	-fsanitize=address,undefined -fno-omit-frame-pointer \
++	"$tree/tests/roothealth_format3_test.c" \
++	"$tree/src/roothealth_format3.c" "$tree/src/roothealth_report.c" \
++	"$tree/src/roothealth_hash_stream.c" \
++	-o "$build/roothealth-format3-asan"
++
++: > "$build/device.img"
++for state in empty clean replay refused; do
++	report="$build/$state.json"
++	rm -f "$report"
++	"$build/roothealth-format3-test" "$report" "$build/device.img" "$state"
++	asan_report="$build/$state.asan.json"
++	rm -f "$asan_report"
++	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
++		UBSAN_OPTIONS=halt_on_error=1 \
++		"$build/roothealth-format3-asan" "$asan_report" \
++		"$build/device.img" "$state"
++	python3 -B - "$report" "$validator" "$state" <<'PY'
++import importlib.util
++import json
++import pathlib
++import sys
++
++report_path, validator_path, state = sys.argv[1:]
++payload = pathlib.Path(report_path).read_bytes()
++report = json.loads(payload)
++if report["report_budget"]["written_bytes"] != len(payload):
++    raise SystemExit("written_bytes mismatch")
++spec = importlib.util.spec_from_file_location("validate_report", validator_path)
++module = importlib.util.module_from_spec(spec)
++assert spec.loader is not None
++spec.loader.exec_module(module)
++module.validate_native_log(report["native_log"], f"generated.{state}")
++if state == "refused":
++    assert report["native_log"]["state"] == "UNSAFE"
++    assert report["native_log"]["planned_io_operations"] == 0
++elif state == "replay":
++    assert report["native_log"]["state"] == "REPLAY_PLANNED"
++    assert report["native_log"]["planned_io_operations"] == 4
++PY
++done
++
++overflow_report="$build/overflow.json"
++rm -f "$overflow_report"
++"$build/roothealth-format3-test" "$overflow_report" "$build/device.img" overflow
++test ! -e "$overflow_report"
++
++test "$(id -u)" -eq 0
++command -v losetup >/dev/null
++truncate -s 1M "$build/block.img"
++before_hash=$(sha256sum "$build/block.img" | cut -d ' ' -f 1)
++loop=$(losetup --find --show --read-only "$build/block.img")
++cleanup_loop()
++{
++	losetup -d "$loop" 2>/dev/null || true
++}
++trap cleanup_loop EXIT HUP INT TERM
++
++for state in empty clean refused; do
++	validated_report="$build/validated-$state.json"
++	rm -f "$validated_report"
++	"$build/roothealth-format3-test" "$validated_report" "$loop" "$state"
++	python3 -B "$validator" "$validated_report" --check-state EMPTY \
++		--expected-exit 2 \
++		--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++		--expected-volume-serial 0x1122334455667788 \
++		--expected-requested-path "$loop" --expected-resolved-path "$loop" \
++		--expected-requested-symlink false
++done
++
++# A diagnostic native plan with no bound ID5/ID6 repair/RHTXN evidence is not
++# a valid full document, and check mode can never carry REPLAY_PLANNED.
++unbound_replay="$build/validated-replay-unbound.json"
++rm -f "$unbound_replay"
++"$build/roothealth-format3-test" "$unbound_replay" "$loop" replay
++set +e
++python3 -B "$validator" "$unbound_replay" --check-state EMPTY \
++	--expected-exit 2 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-volume-serial 0x1122334455667788 \
++	--expected-requested-path "$loop" --expected-resolved-path "$loop" \
++	--expected-requested-symlink false
++unbound_replay_status=$?
++set -e
++test "$unbound_replay_status" -ne 0
++
++io_report="$build/validated-io.json"
++rm -f "$io_report"
++"$build/roothealth-format3-test" "$io_report" "$loop" io
++python3 -B "$validator" "$io_report" --early-io
++
++wrong_report="$build/validated-wrong.json"
++rm -f "$wrong_report"
++"$build/roothealth-format3-test" "$wrong_report" "$loop" wrong
++python3 -B "$validator" "$wrong_report" --rejection-exit 4 \
++	--rejection-wal unchecked \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-volume-serial 0x1122334455667788 \
++	--expected-requested-path "$loop" --expected-resolved-path "$loop" \
++	--expected-requested-symlink false
++
++real_check="$build/real-check.json"
++rm -f "$real_check"
++set +e
++"$binary" --check --require-t1os-root \
++	--expected-serial 0x1122334455667788 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-journal-record 64:1 --report "$real_check" "$loop"
++check_status=$?
++set -e
++test "$check_status" -eq 2
++python3 -B - "$real_check" "$validator" <<'PY'
++import importlib.util
++import json
++import pathlib
++import sys
++
++report_path, validator_path = sys.argv[1:]
++payload = pathlib.Path(report_path).read_bytes()
++report = json.loads(payload)
++spec = importlib.util.spec_from_file_location("validate_report", validator_path)
++module = importlib.util.module_from_spec(spec)
++assert spec.loader is not None
++spec.loader.exec_module(module)
++module.require_exact_fields(report, module.TOP_LEVEL_FIELDS, "report")
++module.validate_device(report)
++module.validate_identity(report)
++module.validate_issues(report)
++initial = module.validate_snapshot(report["initial"], "initial")
++final = module.validate_snapshot(report["final"], "final")
++module.validate_native_log(report["native_log"], "native_log")
++module.validate_batch_ledger(report)
++module.validate_report_budget(report)
++module.wal_object(report)
++execution = initial["execution"]
++assert report["mode"] == "check" and report["exit_code"] == 2
++assert execution["role"] == "INITIAL" and execution["transport"] == "DIRECT"
++assert execution["pid"] > 0 and execution["parent_pid"] > 0
++assert len(execution["binary_sha256"]) == 64
++assert final["execution"] == execution and final["scan_id"] == initial["scan_id"]
++assert report["foundation_repairs"] == [] and report["repairs"] == []
++assert report["batch_ledger"]["record_count"] == 0
++assert report["report_budget"]["written_bytes"] == len(payload)
++PY
++
++real_repair="$build/real-repair.json"
++rm -f "$real_repair"
++set +e
++"$binary" --repair --require-t1os-root \
++	--expected-serial 0x1122334455667788 \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-journal-record 64:1 --report "$real_repair" "$loop"
++repair_status=$?
++set -e
++test "$repair_status" -eq 2
++python3 -B "$validator" "$real_repair" --rejection-exit 2 \
++	--rejection-wal unchecked \
++	--expected-journal-uuid 01234567-89ab-4cde-8fab-0123456789ab \
++	--expected-volume-serial 0x1122334455667788 \
++	--expected-requested-path "$loop" --expected-resolved-path "$loop" \
++	--expected-requested-symlink false
++after_hash=$(sha256sum "$build/block.img" | cut -d ' ' -f 1)
++test "$before_hash" = "$after_hash"
++
++cleanup_loop
++trap - EXIT HUP INT TERM
++
++printf '%s\n' \
++	"roothealth-format3 native-cases=4 failure-cases=1 full-reports=7 passed=1"
+diff --git a/tests/roothealth_report_test.c b/tests/roothealth_report_test.c
+new file mode 100644
+index 0000000..e471de3
+--- /dev/null
++++ b/tests/roothealth_report_test.c
+@@ -0,0 +1,181 @@
++#include "config.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/stat.h>
++#include <sys/types.h>
++#include <unistd.h>
++
++#include "roothealth_report.h"
++
++static int read_exact_file(const char *path, const char *expected)
++{
++	char buffer[64];
++	int fd;
++	ssize_t got;
++
++	fd = open(path, O_RDONLY | O_CLOEXEC);
++	if (fd < 0)
++		return -1;
++	got = read(fd, buffer, sizeof(buffer) - 1);
++	if (got < 0 || close(fd))
++		return -1;
++	buffer[got] = 0;
++	return strcmp(buffer, expected) ? -1 : 0;
++}
++
++static int is_invalid_zero_reservation(const char *path)
++{
++	unsigned char buffer[32];
++	struct stat st;
++	ssize_t got;
++	int fd;
++
++	if (stat(path, &st) || !S_ISREG(st.st_mode) ||
++			st.st_size != (off_t)RH_REPORT_LIMIT)
++		return 0;
++	fd = open(path, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++	if (fd < 0)
++		return 0;
++	got = read(fd, buffer, sizeof(buffer));
++	if (got != (ssize_t)sizeof(buffer) || close(fd))
++		return 0;
++	for (size_t i = 0; i < sizeof(buffer); i++)
++		if (buffer[i] != 0)
++			return 0;
++	return 1;
++}
++
++int main(void)
++{
++	char directory[] = "/tmp/roothealth-report-test.XXXXXX";
++	char report_path[256], existing_path[256], link_path[256];
++	char victim_path[256], overflow_path[256], write_fail_path[256];
++	char empty_path[256], strict_path[256], race_path[256], moved_path[256];
++	char hard_path[256], hard_alias[256], cleanup_fail_path[256];
++	char first_fstat_path[256];
++	struct rh_report report;
++	struct stat st;
++	int fd;
++
++	umask(077);
++	if (!mkdtemp(directory))
++		return 1;
++	snprintf(report_path, sizeof(report_path), "%s/report.json", directory);
++	if (rh_report_prepare(&report, report_path) ||
++			rh_report_append(&report, "{}\n", 3) ||
++			rh_report_publish(&report) || stat(report_path, &st) ||
++			st.st_size != 3 || (st.st_mode & 0777) != 0600 ||
++			read_exact_file(report_path, "{}\n"))
++		return 2;
++
++	snprintf(existing_path, sizeof(existing_path), "%s/existing", directory);
++	fd = open(existing_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
++	if (fd < 0 || write(fd, "sentinel", 8) != 8 || close(fd) ||
++			!rh_report_prepare(&report, existing_path) ||
++			read_exact_file(existing_path, "sentinel"))
++		return 3;
++
++	snprintf(victim_path, sizeof(victim_path), "%s/victim", directory);
++	fd = open(victim_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
++	if (fd < 0 || write(fd, "victim", 6) != 6 || close(fd))
++		return 4;
++	snprintf(link_path, sizeof(link_path), "%s/link", directory);
++	if (symlink(victim_path, link_path) ||
++			!rh_report_prepare(&report, link_path) ||
++			read_exact_file(victim_path, "victim"))
++		return 5;
++
++	snprintf(overflow_path, sizeof(overflow_path), "%s/overflow", directory);
++	if (rh_report_prepare(&report, overflow_path))
++		return 6;
++	errno = 0;
++	if (!rh_report_append(&report, report.buffer, report.capacity + 1) ||
++			errno != EOVERFLOW)
++		return 7;
++	if (rh_report_abort(&report))
++		return 8;
++	errno = 0;
++	if (!lstat(overflow_path, &st) || errno != ENOENT)
++		return 9;
++
++	snprintf(write_fail_path, sizeof(write_fail_path), "%s/write-fail", directory);
++	if (rh_report_prepare(&report, write_fail_path) ||
++			rh_report_append(&report, "{}\n", 3))
++		return 10;
++	if (close(report.fd))
++		return 11;
++	errno = 0;
++	if (!rh_report_publish(&report))
++		return 12;
++	errno = 0;
++	if (!lstat(write_fail_path, &st) || errno != ENOENT)
++		return 13;
++	if (!rh_report_prepare(&report, "/dev/full"))
++		return 14;
++
++	snprintf(empty_path, sizeof(empty_path), "%s/empty", directory);
++	if (rh_report_prepare(&report, empty_path) || !rh_report_publish(&report))
++		return 15;
++	errno = 0;
++	if (!lstat(empty_path, &st) || errno != ENOENT)
++		return 16;
++
++	snprintf(strict_path, sizeof(strict_path), "%s/strict", directory);
++	umask(0777);
++	if (rh_report_prepare(&report, strict_path) ||
++			rh_report_append(&report, "{}\n", 3) ||
++			rh_report_publish(&report) || stat(strict_path, &st) ||
++			(st.st_mode & 0777) != 0600)
++		return 17;
++	umask(077);
++
++	snprintf(race_path, sizeof(race_path), "%s/race", directory);
++	snprintf(moved_path, sizeof(moved_path), "%s/race-moved", directory);
++	if (rh_report_prepare(&report, race_path) ||
++			rh_report_append(&report, "{}\n", 3) ||
++			rename(race_path, moved_path))
++		return 18;
++	fd = open(race_path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
++	if (fd < 0 || write(fd, "replacement", 11) != 11 || close(fd) ||
++			!rh_report_publish(&report) ||
++			read_exact_file(race_path, "replacement") ||
++			lstat(moved_path, &st))
++		return 19;
++
++	snprintf(hard_path, sizeof(hard_path), "%s/hard", directory);
++	snprintf(hard_alias, sizeof(hard_alias), "%s/hard-alias", directory);
++	if (rh_report_prepare(&report, hard_path) ||
++			rh_report_append(&report, "{}\n", 3) ||
++			link(hard_path, hard_alias) || !rh_report_publish(&report) ||
++			lstat(hard_path, &st) || lstat(hard_alias, &st))
++		return 20;
++
++	snprintf(first_fstat_path, sizeof(first_fstat_path), "%s/first-fstat",
++		directory);
++	rh_report_test_fail_first_created_fstat();
++	errno = 0;
++	if (!rh_report_prepare(&report, first_fstat_path) || errno != EIO)
++		return 21;
++	errno = 0;
++	if (!lstat(first_fstat_path, &st) || errno != ENOENT)
++		return 22;
++
++	snprintf(cleanup_fail_path, sizeof(cleanup_fail_path), "%s/cleanup-fail",
++		directory);
++	if (rh_report_prepare(&report, cleanup_fail_path) ||
++			close(report.directory_fd))
++		return 23;
++	report.directory_fd = -1;
++	errno = 0;
++	if (!rh_report_abort(&report) || !errno || lstat(cleanup_fail_path, &st))
++		return 24;
++	if (!is_invalid_zero_reservation(cleanup_fail_path))
++		return 25;
++
++	printf("roothealth-report cases=12 passed=1\n");
++	return 0;
++}
+diff --git a/tests/roothealth_rescan_packet_test.c b/tests/roothealth_rescan_packet_test.c
+new file mode 100644
+index 0000000..2df024b
+--- /dev/null
++++ b/tests/roothealth_rescan_packet_test.c
+@@ -0,0 +1,58 @@
++#include "config.h"
++
++#include <stdio.h>
++
++#include "roothealth_orchestrator.h"
++
++struct packet_case {
++	int result;
++	int completed;
++	int identity_valid;
++	int logfile_clean_known;
++	int logfile_clean;
++	int native_state;
++};
++
++int main(void)
++{
++	static const struct packet_case positive[] = {
++		{ RH_RESULT_OK, 1, 1, 1, 1, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_OK, 1, 1, 1, 1, RH_NATIVE_LOG_EMPTY_T1OS },
++		{ RH_RESULT_UNSAFE, 1, 1, 1, 0, -1 },
++		{ RH_RESULT_WRONG_ROOT, 1, 0, 0, 0, 0 },
++		{ RH_RESULT_UNSAFE, 1, 1, 1, 1, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_IO, 0, 1, 0, 0, 0 },
++	};
++	static const struct packet_case negative[] = {
++		{ RH_RESULT_OK, 0, 1, 1, 1, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_OK, 1, 0, 1, 1, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_OK, 1, 1, 0, 1, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_OK, 1, 1, 1, 0, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_OK, 1, 1, 1, 0, RH_NATIVE_LOG_REPLAY_PLANNED },
++		{ RH_RESULT_OK, 1, 1, 0, 0, 0 },
++		{ RH_RESULT_UNSAFE, 2, 0, 0, 0, 0 },
++		{ 99, 1, 0, 0, 0, 0 },
++		{ RH_RESULT_UNSAFE, 1, 0, 0, 0, 99 },
++		{ RH_RESULT_UNSAFE, 1, 0, 1, 0, 0 },
++		{ RH_RESULT_UNSAFE, 1, 0, 0, 0, RH_NATIVE_LOG_CLEAN_RESTART },
++		{ RH_RESULT_UNSAFE, 1, 0, 1, 1, RH_NATIVE_LOG_REPLAY_PLANNED },
++	};
++	size_t i;
++
++	for (i = 0; i < sizeof(positive) / sizeof(positive[0]); i++)
++		if (!rh_orchestrator_test_rescan_semantics(positive[i].result,
++				positive[i].completed, positive[i].identity_valid,
++				positive[i].logfile_clean_known, positive[i].logfile_clean,
++				positive[i].native_state))
++			return 1;
++	for (i = 0; i < sizeof(negative) / sizeof(negative[0]); i++)
++		if (rh_orchestrator_test_rescan_semantics(negative[i].result,
++				negative[i].completed, negative[i].identity_valid,
++				negative[i].logfile_clean_known, negative[i].logfile_clean,
++				negative[i].native_state))
++			return 2;
++	printf("roothealth-rescan-packet positives=%zu negatives=%zu passed=1\n",
++		sizeof(positive) / sizeof(positive[0]),
++		sizeof(negative) / sizeof(negative[0]));
++	return 0;
++}

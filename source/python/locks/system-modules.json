@@ -1,0 +1,66 @@
+{
+  "format": 1,
+  "component": "python-system-modules",
+  "python_abi": "cp313",
+  "packages": [
+    {
+      "name": "freetype-py",
+      "version": "2.5.1",
+      "filename": "freetype_py-2.5.1-py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_12_x86_64.manylinux2010_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/b6/36/853cad240ec63e21a37a512ee19c896b655ce1772d803a3dd80fccfe63fe/freetype_py-2.5.1-py3-none-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_12_x86_64.manylinux2010_x86_64.whl",
+      "size": 1043856,
+      "sha256": "289b443547e03a4f85302e3ac91376838e0d11636050166662a4f75e3087ed0b",
+      "placement": "runtime-site-packages",
+      "legacy_match": "all 39 wheel package payload files match exactly; the local tree adds 71 generated pyc files",
+      "provenance_confidence": "content-exact",
+      "native": true
+    },
+    {
+      "name": "pyroute2",
+      "version": "0.9.4",
+      "filename": "pyroute2-0.9.4-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/e2/89/c011b555ccde0e5846ad3bb5a091fd0fcac997156406a9ad107f81cf91c9/pyroute2-0.9.4-py3-none-any.whl",
+      "size": 467555,
+      "sha256": "4e12437d18f6f42912cbd3f870edf06896183a78fd0c8126ba7a72a81f28d6cf",
+      "placement": "runtime-site-packages",
+      "legacy_match": "all 223 wheel package payload files match exactly; the disk image adds 223 generated cp313 pyc files",
+      "provenance_confidence": "content-exact",
+      "native": false
+    },
+    {
+      "name": "Pillow",
+      "version": "12.3.0",
+      "filename": "pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/f7/62/de5bdd77d935331f4f802edc11e4d82950f642caad6cb2f949837b8560e2/pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+      "sha256": "0847a763afefb695bc912d7c131e7e0632d4edc1d8698f58ddabec8e46b8b6d3",
+      "placement": "/the one/catalogue/image",
+      "managed_by": "scripts/build image catalogue.ps1",
+      "native": true
+    },
+    {
+      "name": "pip",
+      "version": "25.1.1",
+      "filename": "pip-25.1.1-py3-none-any.whl",
+      "size": 1825227,
+      "sha256": "2913a38a2abf4ea6b64ab507bd9e967f3b53dc1ede74b01b0931e1ce548751af",
+      "placement": "bundled-with-portable-python",
+      "native": false
+    }
+  ],
+  "t1os_components": [
+    {
+      "name": "sitecustomize",
+      "version": "ae-time-legacy-1",
+      "path": "source/python/packages/sitecustomize.py",
+      "sha256": "aa7d7cb4980a979097d1919719e821ebb0395d33b9b5cb2e5aca622f33445397",
+      "protected": true
+    },
+    {
+      "name": "t1os-ca-certificates",
+      "version": "1",
+      "path": "source/python/packages/t1os-ca-certificates.pth",
+      "sha256": "b4c1ba9ffc917f8e1013b27555de17432198a94f7ccfe8871be5a82a7b490d93",
+      "protected": true
+    }
+  ]
+}

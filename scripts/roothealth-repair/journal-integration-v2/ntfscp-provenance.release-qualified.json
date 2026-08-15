@@ -1,0 +1,49 @@
+{
+  "format": "roothealth-ntfscp-provenance",
+  "format_version": 2,
+  "state": "release-qualified",
+  "tool": "ntfscp",
+  "upstream": {
+    "project": "ntfs-next",
+    "commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+    "archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5"
+  },
+  "binary": {
+    "sha256": "018bbc424a433b567410152686f145e42a3adf201f257dbc93fc763cdd971bb8",
+    "bytes": 348816
+  },
+  "artifacts": {
+    "archive": {
+      "path": "ntfsprogs-plus-d4f481df6926557f7b18b471a43313652dec6f7e.tar.gz",
+      "sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5",
+      "bytes": 662044
+    },
+    "source_manifest": {
+      "path": "ntfscp-source-sha256.tsv",
+      "sha256": "47079a351fd490ed9ce0f20bc4739e5e3bf0965ecc52b4a83133a62fdcca2262",
+      "bytes": 11607,
+      "records": 133
+    },
+    "link_manifest": {
+      "path": "ntfscp-linked-objects.tsv",
+      "sha256": "023414eba77297ad9c029fe621b3612df0495ceacd0a0e8e9ff62635f768a647",
+      "bytes": 5996,
+      "records": 32
+    },
+    "runtime_manifest": {
+      "path": "ntfscp-runtime.json",
+      "sha256": "f45da4d439a0e27ba0c12ce0d27fae92d30212d70f839eb80405f64be1554307",
+      "bytes": 906
+    },
+    "build_recipe": {
+      "path": "build-ntfscp-repro.sh",
+      "sha256": "9240e739f8a5722cfe0b2ecd0b5a10c8bedf1bc5bc05931b2d811067a1a05f3c",
+      "bytes": 3338
+    },
+    "qualification": {
+      "path": "ntfscp-qualification.json",
+      "sha256": "3bfffb7bdefe7917da77d56d10565496567c6bc1caa20919fb3d40483903d2ce",
+      "bytes": 1827
+    }
+  }
+}

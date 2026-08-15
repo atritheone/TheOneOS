@@ -1,0 +1,30 @@
+title-text: "The One OS"
+title-font: "GNU Unifont Regular 16"
+title-color: "#f4f6fb"
+desktop-image: "t1os-black.png"
+desktop-image-scale-method: "stretch"
+desktop-color: "#000000"
+terminal-border: "0"
+
++ boot_menu {
+    left = 30%
+    top = 34%
+    width = 40%
+    height = 30%
+    item_font = "GNU Unifont Regular 16"
+    selected_item_font = "GNU Unifont Regular 16"
+    item_color = "#aeb6c5"
+    selected_item_color = "#ffffff"
+}
+
++ label {
+    id = "__timeout__"
+    text = "booting in %d..."
+    left = 30%
+    top = 70%
+    width = 40%
+    height = 24
+    align = "center"
+    font = "GNU Unifont Regular 16"
+    color = "#7f899b"
+}

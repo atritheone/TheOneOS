@@ -1,0 +1,25 @@
+{
+  "format": 1,
+  "pip": {
+    "filename": "pip-26.1.2-py3-none-any.whl",
+    "size": 1813144,
+    "sha256": "382ff9f685ee3bc25864f820aa50505825f10f5458ffff07e30a6d96e5715cab",
+    "source": "https://files.pythonhosted.org/packages/5d/95/6b5cb3461ea5673ba0995989746db58eb18b91b54dbf331e72f569540946/pip-26.1.2-py3-none-any.whl"
+  },
+  "patchelf": {
+    "filename": "patchelf",
+    "size": 262241,
+    "sha256": "6891b6b47c02a3916fc2d8f3030a422fa8883185a68b0ee2710795871137f626",
+    "version": "0.18.0",
+    "source": "Debian Ubuntu 24.04 patchelf binary, relocated for T1OS",
+    "license": "patchelf licence.txt"
+  },
+  "command_launcher": {
+    "filename": "python-command",
+    "size": 14392,
+    "sha256": "e912cbc7365be26f7c68f35cde24515f3847b1caed2bc6667f169d291f50a9bf",
+    "source": "source/python/packages/python-command.c",
+    "source_sha256": "27713529a25fd2f5163bc5eaf3738c80f8697c622c604867a39036730d229f7f",
+    "build": "Ubuntu 24.04 gcc -Os -fPIE -pie -s, no build-id, T1OS PT_INTERP and RUNPATH"
+  }
+}

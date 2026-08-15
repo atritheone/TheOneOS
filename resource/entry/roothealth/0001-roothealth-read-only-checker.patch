@@ -1,0 +1,273 @@
+--- a/libntfs/index.c
++++ b/libntfs/index.c
+@@ -2281,6 +2281,12 @@
+ 		} else {
+ 
+ 			/* down from non-zero level */
++			if (ictx->pindex >= MAX_PARENT_VCN - 1) {
++				ntfs_log_error("Index tree depth exceeds the supported maximum (%d).\n",
++						MAX_PARENT_VCN);
++				errno = EIO;
++				return NULL;
++			}
+ 
+ 			ictx->pindex++;
+ 		}
+--- a/src/ntfsck.c
++++ b/src/ntfsck.c
+@@ -49,6 +49,8 @@
+ #define RETURN_FS_NOT_SUPPORT (64)	/* Not defined in fsck man page */
+ #define RETURN_SHARED_LIBRARY_ERROR (128)
+ 
++#define ROOTHEALTH_VERSION "0.2.0"
++
+ #define FILENAME_LOST_FOUND "lost+found"
+ #define FILENAME_PREFIX_LOST_FOUND "FSCK_#"
+ /* 'FSCK_#'(6) + u64 max string(20) + 1(for NULL) */
+@@ -114,6 +116,8 @@
+ static struct {
+ 	int verbose;
+ 	ntfs_mount_flags flags;
++	BOOL require_t1os_root;
++	const char *report_path;
+ } option;
+ 
+ struct dir {
+@@ -150,7 +154,10 @@
+ u64 checked_cnt;
+ u64 orphan_cnt;
+ 
+-#define NTFS_PROGS	"ntfsck"
++#define NTFS_PROGS	"roothealth"
++
++static BOOL t1os_identity_checked;
++static BOOL t1os_identity_valid;
+ /**
+  * usage
+  */
+@@ -182,7 +189,8 @@
+ __attribute__((noreturn))
+ static void version(void)
+ {
+-	ntfs_log_info("%s v%s\n\n", NTFS_PROGS, VERSION);
++	ntfs_log_info("%s v%s (ntfsprogs-plus %s)\n\n",
++			NTFS_PROGS, ROOTHEALTH_VERSION, VERSION);
+ 	exit(0);
+ }
+ 
+@@ -192,6 +200,8 @@
+ 	{"repair",		no_argument,		NULL,	'r' },
+ 	{"repair-yes",		no_argument,		NULL,	'y' },
+ 	{"quiet",		no_argument,		NULL,	'q' },
++	{"require-t1os-root",	no_argument,		NULL,	'T' },
++	{"report",		required_argument,	NULL,	'J' },
+ 	{"verbose",		no_argument,		NULL,	'v' },
+ 	{"version",		no_argument,		NULL,	'V' },
+ 	{NULL,			0,			NULL,	 0  }
+@@ -255,6 +265,129 @@
+ 	return STATUS_OK;
+ }
+ 
++struct t1os_required_path {
++	const char *path;
++	BOOL directory;
++};
++
++static int t1os_check_required_path(ntfs_volume *vol,
++		const struct t1os_required_path *required)
++{
++	ntfs_inode *ni;
++	BOOL is_directory;
++
++	ni = ntfs_pathname_to_inode(vol, NULL, required->path);
++	if (!ni) {
++		ntfs_log_error("Required T1OS path is missing or unreadable: %s\n",
++				required->path);
++		return STATUS_ERROR;
++	}
++	is_directory = !!(ni->mrec->flags & MFT_RECORD_IS_DIRECTORY);
++	if (is_directory != required->directory) {
++		ntfs_log_error("Required T1OS path has the wrong type: %s\n",
++				required->path);
++		ntfsck_close_inode(ni);
++		return STATUS_ERROR;
++	}
++	ntfsck_close_inode(ni);
++	return STATUS_OK;
++}
++
++static int t1os_check_forbidden_path(ntfs_volume *vol, const char *path)
++{
++	ntfs_inode *ni;
++
++	errno = 0;
++	ni = ntfs_pathname_to_inode(vol, NULL, path);
++	if (ni) {
++		ntfs_log_error("Forbidden Linux root path is present: %s\n", path);
++		ntfsck_close_inode(ni);
++		return STATUS_ERROR;
++	}
++	if (errno != ENOENT) {
++		ntfs_log_error("Could not prove that forbidden root path is absent: %s\n",
++				path);
++		return STATUS_ERROR;
++	}
++	return STATUS_OK;
++}
++
++static int t1os_check_root_identity(ntfs_volume *vol)
++{
++	static const struct t1os_required_path required[] = {
++		{ "the one", TRUE },
++		{ "the one/software/python/bin/python3.13", FALSE },
++		{ "the one/build/GODDESS/GODDESS.py", FALSE },
++		{ "the one/build/drivers/driverserver.py", FALSE },
++		{ "the one/drivers/tools/modprobe", FALSE },
++		{ "the one/drivers/settings/policy.json", FALSE },
++		{ "the one/drivers/modules/module-manifest.sha256", FALSE },
++	};
++	static const char *forbidden[] = {
++		"bin", "dev", "etc", "home", "lib", "lib64", "mnt", "opt",
++		"proc", "root", "run", "sbin", "srv", "sys", "tmp", "usr", "var",
++	};
++	size_t i;
++
++	t1os_identity_checked = TRUE;
++	for (i = 0; i < sizeof(required) / sizeof(required[0]); i++)
++		if (t1os_check_required_path(vol, &required[i]))
++			return STATUS_ERROR;
++	for (i = 0; i < sizeof(forbidden) / sizeof(forbidden[0]); i++)
++		if (t1os_check_forbidden_path(vol, forbidden[i]))
++			return STATUS_ERROR;
++	t1os_identity_valid = TRUE;
++	ntfs_log_info("Verified the raw T1OS root identity.\n");
++	return STATUS_OK;
++}
++
++static void t1os_write_report(int ret, BOOL dirty)
++{
++	FILE *report;
++	const char *result;
++
++	if (!option.report_path)
++		return;
++	if (ret == RETURN_FS_NO_ERRORS)
++		result = "clean";
++	else if (ret == RETURN_FS_ERRORS_CORRECTED)
++		result = "repaired";
++	else if (ret == RETURN_FS_ERRORS_LEFT_UNCORRECTED)
++		result = "errors";
++	else
++		result = "operational-error";
++	report = fopen(option.report_path, "w");
++	if (!report) {
++		ntfs_log_perror("Could not create T1OS NTFS report");
++		return;
++	}
++	fprintf(report,
++		"{\n"
++		"  \"format\": 1,\n"
++		"  \"checker\": \"roothealth\",\n"
++		"  \"checker_version\": \"%s\",\n"
++		"  \"engine\": \"ntfsprogs-plus\",\n"
++		"  \"engine_version\": \"%s\",\n"
++		"  \"mode\": \"check-only\",\n"
++		"  \"t1os_identity_required\": %s,\n"
++		"  \"t1os_identity_checked\": %s,\n"
++		"  \"t1os_identity_valid\": %s,\n"
++		"  \"dirty\": %s,\n"
++		"  \"errors\": %d,\n"
++		"  \"fixes\": %d,\n"
++		"  \"writes_attempted\": 0,\n"
++		"  \"result\": \"%s\",\n"
++		"  \"exit_code\": %d\n"
++		"}\n",
++		ROOTHEALTH_VERSION, VERSION,
++		option.require_t1os_root ? "true" : "false",
++		t1os_identity_checked ? "true" : "false",
++		t1os_identity_valid ? "true" : "false",
++		dirty ? "true" : "false", fsck_errors, fsck_fixes, result, ret);
++	if (fclose(report))
++		ntfs_log_perror("Could not finish T1OS NTFS report");
++}
++
+ static int ntfsck_close_inode_in_dir(ntfs_inode *ni, ntfs_inode *dir_ni)
+ {
+ 	int res = 0;
+@@ -4633,7 +4766,7 @@
+ 	const char *path = NULL;
+ 	int c, errors = 0, ret;
+ 	unsigned long mnt_flags;
+-	BOOL check_dirty_only = FALSE;
++	BOOL check_dirty_only = FALSE, dirty = FALSE;
+ 
+ 	ntfs_log_set_handler(ntfs_log_handler_outerr);
+ 
+@@ -4641,10 +4774,13 @@
+ 	ntfs_log_clear_levels(NTFS_LOG_LEVEL_TRACE|NTFS_LOG_LEVEL_ENTER|NTFS_LOG_LEVEL_LEAVE);
+ 	pb_flags = NTFS_PROGBAR;
+ 	option.verbose = 0;
++	option.require_t1os_root = FALSE;
++	option.report_path = NULL;
+ 	opterr = 0;
+-	option.flags = NTFS_MNT_FSCK | NTFS_MNT_IGNORE_HIBERFILE;
++	option.flags = NTFS_MNT_FSCK | NTFS_MNT_IGNORE_HIBERFILE |
++		NTFS_MNT_FS_NO_REPAIR | NTFS_MNT_RDONLY;
+ 
+-	while ((c = getopt_long(argc, argv, "aCnpqryhvV", opts, NULL)) != EOF) {
++	while ((c = getopt_long(argc, argv, "aCnpqryhvVTJ:", opts, NULL)) != EOF) {
+ 		switch (c) {
+ 		case 'a':
+ 		case 'p':
+@@ -4686,6 +4822,12 @@
+ 		case 'q':
+ 			pb_flags |= ~NTFS_PROGBAR;
+ 			break;
++		case 'T':
++			option.require_t1os_root = TRUE;
++			break;
++		case 'J':
++			option.report_path = optarg;
++			break;
+ 		case 'r':
+ 			if (option.flags & (NTFS_MNT_FS_AUTO_REPAIR |
+ 						NTFS_MNT_FS_NO_REPAIR |
+@@ -4788,6 +4930,13 @@
+ 		}
+ 	}
+ 
++	dirty = !!(vol->flags & VOLUME_IS_DIRTY);
++	if (option.require_t1os_root && t1os_check_root_identity(vol)) {
++		fsck_err_found();
++		ntfs_log_error("The candidate volume is not a valid T1OS root.\n");
++		goto err_out;
++	}
++
+ 	ntfsck_check_backup_boot(vol);
+ 
+ 	/* pass 1 */
+@@ -4822,6 +4971,11 @@
+ 	free(mrec_temp_buf);
+ 
+ err_out:
++	if (vol && dirty && NVolFsNoRepair(vol)) {
++		ntfs_log_error("The NTFS volume is dirty and requires journal recovery.\n");
++		fsck_err_found();
++	}
++
+ 	errors = fsck_errors - fsck_fixes;
+ 	if (errors) {
+ 		ntfs_log_info("%d errors left (errors:%d, fixed:%d)\n",
+@@ -4836,9 +4990,11 @@
+ 			ret = RETURN_FS_NO_ERRORS;
+ 	}
+ 
+-	if (!errors && vol)
++	if (!errors && vol && !NVolFsNoRepair(vol))
+ 		ntfsck_reset_dirty(vol);
+ 
++	t1os_write_report(ret, dirty);
++
+ 	if (vol)
+ 		ntfs_fsck_umount(vol);
+ 

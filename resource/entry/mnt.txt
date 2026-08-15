@@ -1,0 +1,7 @@
+
+
+mount storage.img mnt
+
+mount -o loop storage.img mnt
+
+umount mnt

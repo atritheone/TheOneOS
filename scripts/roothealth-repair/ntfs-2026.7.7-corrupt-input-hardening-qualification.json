@@ -1,0 +1,139 @@
+{
+  "schema": "t1os-roothealth-linked-parser-hardening-qualification-v1",
+  "status": "QUALIFIED_LINKED_PARSER_HARDENING",
+  "slice_qualified": true,
+  "release_qualified": false,
+  "repair_enabled_by_this_slice": false,
+  "created_utc": "2026-08-09T05:30:00Z",
+  "reference_release": {
+    "name": "ntfs-3g_ntfsprogs-2026.7.7",
+    "url": "https://tuxera.com/opensource/ntfs-3g_ntfsprogs-2026.7.7.tgz",
+    "sha512": "5b0a866c3c556f97b1c712fd09b148ecfd194429620e1b45f0630f6b4dee6a087496ff9bbe36bfa1a3e7c58483c43d45bb1e03956e0386aebe8b66522d90cdc2"
+  },
+  "baseline": {
+    "commit": "b7dfb3829a81cb3453e3524a7cfc5bf62bea2869",
+    "tree": "6b39b11a3946421cc112b4e5cc85268a4e15dfc5",
+    "description": "complete-census/op2 fail-closed checkpoint",
+    "source_sha256": {
+      "include/index.h": "045b1aebbef45a1f9434bb5b4b71ce3ce9c2ebb0600d6994e601dd64bf4e4da6",
+      "libntfs/attrib.c": "10a54e4f7e1c9a03f93072c615e7f7880ec0200dd3737e85d7cf643bbc89e7e6",
+      "libntfs/compress.c": "e98ea35e9cfce697eadfa3fbda41709791c5f34152c53f6ca57f111110d351c8",
+      "libntfs/index.c": "3465cae97754db0fda02c45a263d955e67a1d6598e02a65bcf20104f548ea332",
+      "libntfs/runlist.c": "dcb5d2acacd795090014b89bcac10da9e93b3ba26bbef02c2736b1ffff676ddd",
+      "src/ntfscat.c": "360d76af2fede6988defc3c182094929e5ca18d0512d8d51e24f63c9b9be2e18",
+      "src/ntfsck.c": "80f997d2ce187efc0b58332c3dac6b4b77eadd5b6981debfd0f7610ff138db9a"
+    }
+  },
+  "result_source_sha256": {
+    "include/index.h": "9713d6f1eb1dd8596d139c95031890563e4a4785c3f27812c1a74246db25055b",
+    "libntfs/attrib.c": "04fe422d352d9beb115a1af34188b8ac4a386a6ff90a488cbebdf6fe2fcf7e95",
+    "libntfs/compress.c": "c228f6a097340c094327bf16f43a411659db081f3373339c18f958f6c7f6576e",
+    "libntfs/index.c": "77f2e5bddeaee3db6f62f5add64796096bb92f435c89d382153d6c2292563da0",
+    "libntfs/runlist.c": "369dc9c3922ca85791171a64e652763f215568e2e42aeab92c0492143d4e733b",
+    "src/ntfscat.c": "79b2828e48b1243cf586db8f5d5d76d73bd596d4ace1726dc2d56021b9dbbcdf",
+    "src/ntfsck.c": "80f997d2ce187efc0b58332c3dac6b4b77eadd5b6981debfd0f7610ff138db9a",
+    "src/roothealth_repair.c": "b018e42b285808f2d95d0d4103597f87b1c56adb5a267514bf05731d667f1d40",
+    "src/Makefile.am": "7dec7cac9e91b9c06b73019cd67fd4cba97c0ddaa1514097b2aa461a4a92a875"
+  },
+  "assets_sha256": {
+    "ntfs-2026.7.7-corrupt-input-hardening.patch": "84e5015f8600257e3a077d627a28c03d2c23dd0acd4b7f0bf44e6cc98056a93d",
+    "ntfs-2026.7.7-corrupt-input-selftest.c": "f7264991674d0c5ac6bddda65536a9c624fb1ed8f0368b85d2e1b99ebf089f6f",
+    "check-ntfs-2026.7.7-corrupt-input-hardening.py": "79e2e47bcdf972d72532c6afb55511fefa2a1aae99281bf36177126754200230"
+  },
+  "clean_apply": {
+    "whitespace": "error-all",
+    "result": "PASS",
+    "patch_lines": 500,
+    "patch_bytes": 17310
+  },
+  "gates": {
+    "strict_werror_translation_units": 5,
+    "gcc_fanalyzer_translation_units": 5,
+    "asan_ubsan_translation_units": 4,
+    "malformed_boundary_checks_per_run": 30,
+    "malformed_runs": [
+      "strict",
+      "asan_ubsan"
+    ],
+    "clean_product_link": "PASS",
+    "linked_binary_sha256": "a3c9ad9a0b841173b80f206ff9c5bf60283accc32b17e3113337d40f22928183",
+    "linked_libntfs_archive_sha256": "29f262311f42744f664a5387cf183ab024391dd8403e49ec5d020147dda07b0a"
+  },
+  "qualified_behaviors": [
+    "complete bounded INDEX_ROOT and INDX entry-stream validation",
+    "INDEX_ROOT block-size minimum and power-of-two validation",
+    "node-entry VCN underflow protection without rejecting view-data payloads",
+    "INDEX_ROOT-to-INDX and split-tail copy bounds",
+    "fixed-depth index descent refusal before parent-array overflow",
+    "compressed sub-block header/token/source/destination bounds and full-output early completion",
+    "mapping-pair field-width and truncation checks",
+    "defined little-endian signed mapping-pair decoding",
+    "VCN and LCN signed-overflow refusal",
+    "dynamic ntfscat index-block buffer for source-tree completeness"
+  ],
+  "link_scope": {
+    "roothealth_direct_objects": [
+      "roothealth_repair_main",
+      "roothealth_repair",
+      "roothealth_write",
+      "roothealth_wal",
+      "roothealth_recover",
+      "roothealth_playlog",
+      "roothealth_replay_guard",
+      "roothealth_replay_analysis",
+      "roothealth_native_authority",
+      "roothealth_free_slot_authority",
+      "roothealth_census_device",
+      "roothealth_complete_census",
+      "roothealth_coverage",
+      "roothealth_raw_mft",
+      "roothealth_raw_mft_apply",
+      "roothealth_namespace",
+      "roothealth_recovery_namespace_authority",
+      "roothealth_system_indexes",
+      "roothealth_usn_fixed_system_authority",
+      "roothealth_bitmap",
+      "roothealth_bitmap_apply",
+      "roothealth_mft_bitmap",
+      "roothealth_mft_bitmap_apply",
+      "roothealth_index_bitmap",
+      "roothealth_index_bitmap_apply",
+      "roothealth_overlay",
+      "roothealth_dirty",
+      "roothealth_policy",
+      "roothealth_hash_stream",
+      "utils"
+    ],
+    "linked_library": "libntfs.a",
+    "required_linked_symbols": [
+      "ntfs_decompress",
+      "ntfs_ie_stream_inconsistent",
+      "ntfs_mapping_pairs_decompress_i"
+    ],
+    "legacy_ntfsck_linked": false,
+    "ntfscat_linked": false
+  },
+  "integration": {
+    "merged_into_advancing_full_engine": true,
+    "rebase_result": "zero-fuzz apply; strict, analyzer, sanitizer, malformed-input, and full-engine link gates passed",
+    "required_next_gate": "carry these exact linked sources into the final single roothealth binary and rerun the complete release qualification matrix",
+    "reason_release_qualified_is_false": "this qualifies the linked parser hardening inside the development full engine; it does not by itself authorize repair policy or complete the checker"
+  },
+  "legacy_bootstrap_pipeline": {
+    "patch": "resource/entry/roothealth/0002-ntfs-3g-2026.7.7-index-hardening.patch",
+    "patch_sha256": "b4c2b59b3115adeb422bb47f37ebf064b5440856f97404ba6f083e6432d8dfaa",
+    "apply_order": [
+      "0001-roothealth-read-only-checker.patch",
+      "0002-ntfs-3g-2026.7.7-index-hardening.patch",
+      "0003-roothealth-verdict-hardening.patch"
+    ],
+    "fuzz": 0,
+    "clean_build": "PASS",
+    "gcc_fanalyzer_translation_units": 4,
+    "strict_malformed_checks": 30,
+    "asan_ubsan_malformed_checks": 30,
+    "development_ntfsck_sha256": "5c1084682226cccc4f86662aca20cba568fffcbda89cae2dfa31aea8e5eaa7d0",
+    "development_libntfs_archive_sha256": "1651f3b58ef8273b362c51c087f7eb35cb532435e6fb7529c948586b22fd0152",
+    "note": "the legacy builder remains non-release while the final single-binary v0.3.0 engine and initramfs integration are unfinished"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "format": "roothealth-ntfscp-qualification",
+  "format_version": 1,
+  "state": "RELEASE_QUALIFIED",
+  "upstream_commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+  "archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5",
+  "binary_sha256": "018bbc424a433b567410152686f145e42a3adf201f257dbc93fc763cdd971bb8",
+  "binary_bytes": 348816,
+  "artifacts": {
+    "source_manifest_sha256": "47079a351fd490ed9ce0f20bc4739e5e3bf0965ecc52b4a83133a62fdcca2262",
+    "link_manifest_sha256": "023414eba77297ad9c029fe621b3612df0495ceacd0a0e8e9ff62635f768a647",
+    "runtime_manifest_sha256": "f45da4d439a0e27ba0c12ce0d27fae92d30212d70f839eb80405f64be1554307",
+    "build_recipe_sha256": "9240e739f8a5722cfe0b2ecd0b5a10c8bedf1bc5bc05931b2d811067a1a05f3c"
+  },
+  "toolchain": {
+    "gcc": "13.3.0",
+    "binutils": "2.42",
+    "make": "4.3",
+    "autoconf": "2.71",
+    "automake": "1.16.5",
+    "libtool": "2.4.7",
+    "build_glibc": "2.39",
+    "build_os": "Ubuntu 24.04",
+    "architecture": "x86_64"
+  },
+  "reproducibility": {
+    "independent_clean_builds": 2,
+    "binary_byte_identical": true,
+    "linked_objects_byte_identical": 32,
+    "linked_archive_members": 30,
+    "linked_archive_member_list_sha256": "988c6643dfbe24250c5eb9f7c0c6199d11d820fa24f5c09f2f7b15d8de3fd8d1",
+    "archive_regular_files": 133,
+    "source_date_epoch": 0,
+    "locale": "C",
+    "timezone": "UTC",
+    "canonical_source_prefix": "/usr/src/ntfs-next-d4",
+    "build_path_leaks": 0
+  },
+  "checks": {
+    "archive_exact": true,
+    "source_manifest_exact": true,
+    "link_closure_exact": true,
+    "binary_reproducible": true,
+    "elf_runtime_exact": true,
+    "only_libc_needed": true,
+    "pie": true,
+    "non_executable_stack": true,
+    "relro": true,
+    "bind_now": true,
+    "no_rpath_or_runpath": true
+  }
+}

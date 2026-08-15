@@ -1,0 +1,5583 @@
+--- a/src/roothealth_recover.c
++++ b/src/roothealth_recover.c
+@@ -53,9 +53,9 @@
+ #define BLOCKBITS 9 /* This is only used to read the restart page */
+ #define MAXEXCEPTION 10 /* Max number of exceptions (option -x) */
+ #define MINRECSIZE 48 /* Minimal log record size */
+-#define MAXRECSIZE 65536 /* Maximal log record size (seen > 56000) */
+-#define ROOTHEALTH_MAX_ACTIONS 1000000U
+-#define ROOTHEALTH_MAX_LOGFILE_SIZE (64U * 1024U * 1024U)
++#define MAXRECSIZE 65536 /* Legacy display path; repair gate is stricter. */
++#define ROOTHEALTH_MAX_ACTIONS RH_REPLAY_MAX_ACTIONS
++#define ROOTHEALTH_MAX_LOGFILE_SIZE RH_REPLAY_MAX_LOGFILE_SIZE
+ #define ROOTHEALTH_REPLAY_PAGE_SIZE 4096U
+ 
+ #include "config.h"
+@@ -108,6 +108,8 @@
+ #include "mst.h"
+ #include "logfile.h"
+ #include "roothealth_recover.h"
++#include "roothealth_replay_guard.h"
++#include "roothealth_replay_analysis.h"
+ #include "roothealth_write.h"
+ #include "utils.h"
+ #include "misc.h"
+@@ -176,6 +178,69 @@
+ struct rh_writer *rh_replay_writer;
+ static unsigned int rh_restart_pages_planned;
+ static BOOL rh_log_needs_replay;
++static unsigned char *rh_examined_pages;
++static unsigned int rh_pages_expected;
++static unsigned int rh_pages_examined;
++static unsigned int rh_wiped_pages_scanned;
++static unsigned int rh_unsupported_actions;
++static unsigned int rh_io_errors;
++static unsigned int rh_parse_errors;
++static struct rh_replay_analysis_result rh_analysis_evidence;
++
++static void roothealth_reset_log_evidence(void)
++{
++	free(rh_examined_pages);
++	rh_examined_pages = NULL;
++	rh_pages_expected = 0;
++	rh_pages_examined = 0;
++	rh_wiped_pages_scanned = 0;
++	rh_unsupported_actions = 0;
++	rh_io_errors = 0;
++	rh_parse_errors = 0;
++	memset(&rh_analysis_evidence, 0, sizeof(rh_analysis_evidence));
++}
++
++static int roothealth_prepare_log_evidence(void)
++{
++	if (logfilesz < RH_REPLAY_MIN_LOGFILE_SIZE ||
++		logfilesz > RH_REPLAY_MAX_LOGFILE_SIZE ||
++		(logfilesz & (RH_REPLAY_PAGE_SIZE - 1U)))
++		return -1;
++	rh_pages_expected = logfilesz / RH_REPLAY_PAGE_SIZE;
++	rh_examined_pages = (unsigned char *)calloc(rh_pages_expected, 1);
++	return rh_examined_pages ? 0 : -1;
++}
++
++static void roothealth_note_log_page(unsigned int page)
++{
++	if (!rh_examined_pages || page >= rh_pages_expected) {
++		++rh_parse_errors;
++		return;
++	}
++	if (!rh_examined_pages[page]) {
++		rh_examined_pages[page] = 1;
++		++rh_pages_examined;
++	}
++}
++
++static int roothealth_replay_geometry(CONTEXT *ctx,
++		struct rh_replay_geometry *geometry)
++{
++	if (!ctx || !ctx->vol || !geometry ||
++		bytespersect != RH_REPLAY_SECTOR_SIZE)
++		return -1;
++	memset(geometry, 0, sizeof(*geometry));
++	geometry->page_size = blocksz;
++	geometry->cluster_size = clustersz;
++	geometry->mft_record_size = mftrecsz;
++	geometry->index_record_size = ctx->vol->indx_record_size;
++	geometry->logfile_size = logfilesz;
++	geometry->volume_clusters = ctx->vol->nr_clusters;
++	geometry->sequence_bits = le32_to_cpu(restart.seq_number_bits);
++	geometry->client_sequence = le16_to_cpu(client.seq_number);
++	geometry->client_index = 0U;
++	return rh_replay_guard_profile(geometry);
++}
+ 
+ LCN roothealth_attr_vcn_to_lcn(ntfs_attr *na, VCN vcn)
+ {
+@@ -238,38 +303,77 @@
+ 
+ static int replaceusa(struct BUFFER *buffer, unsigned int lth)
+ {
+-	char *buf;
+-	RECORD_PAGE_HEADER *record;
+-	unsigned int j;
+-	BOOL err;
+-	unsigned int used;
+-	unsigned int xusa, nusa;
++	struct rh_replay_page_view view;
++	u64 last_end;
++	unsigned int i;
++	unsigned int sector;
++	u16 usn;
+ 
+-	err = FALSE;
+-			/* Restart blocks have no protection */
+-	if (buffer->num >= RSTBLKS) {
+-			/* Do not check beyond used sectors */
+-		record = &buffer->block.record;
+-		used = blocksz;
+-		xusa = le16_to_cpu(record->usa_ofs);
+-		nusa = le16_to_cpu(record->usa_count);
+-		if (xusa && nusa
+-		   && ((xusa + 1) < lth)
+-		   && ((nusa - 1)*NTFSBLKLTH == lth)) {
+-			buf = buffer->block.data;
+-			for (j=1; (j<nusa) && ((j-1)*NTFSBLKLTH<used); j++)
+-				if ((buf[xusa] == buf[j*NTFSBLKLTH - 2])
+-				   && (buf[xusa+1] == buf[j*NTFSBLKLTH - 1])) {
+-					buf[j*NTFSBLKLTH - 2] = buf[xusa + 2*j];
+-					buf[j*NTFSBLKLTH - 1] = buf[xusa + 2*j + 1];
+-				} else {
+-					printf("* Update sequence number %d does not match\n",j);
+-					err = TRUE;
+-				}
++	if (buffer->num < RSTBLKS) {
++		unsigned char *page = (unsigned char *)buffer->block.data;
++
++		if (lth != RH_REPLAY_PAGE_SIZE ||
++			getle16(page, 4) != sizeof(RESTART_PAGE_HEADER) ||
++			getle16(page, 6) != 9U)
++			return 1;
++		usn = getle16(page, sizeof(RESTART_PAGE_HEADER));
++		if (!usn)
++			return 1;
++		for (sector = 1; sector < 9U; ++sector) {
++			size_t tail = (size_t)sector * RH_REPLAY_SECTOR_SIZE - 2U;
++			size_t replacement = sizeof(RESTART_PAGE_HEADER) + 2U * sector;
++
++			if (getle16(page, tail) != usn)
++				return 1;
++			page[tail] = page[replacement];
++			page[tail + 1U] = page[replacement + 1U];
+ 		}
++		return 0;
++	}
++	if (lth != RH_REPLAY_PAGE_SIZE) {
++		fprintf(stderr, "** Invalid RCRD page size in logical block %u"
++			" (physical block %u)\n", buffer->num, buffer->rnum);
++		return 1;
++	}
++	for (i = 0; i < lth &&
++		((unsigned char *)buffer->block.data)[i] == 0xffU; ++i)
++		;
++	if (i == lth)
++		return 0;
++	if (
++		rh_replay_guard_unprotect_rcrd(
++			(unsigned char *)buffer->block.data, lth, &view)) {
++		fprintf(stderr, "** Invalid RCRD header or update sequence array"
++			" in logical block %u (physical block %u)\n",
++			buffer->num, buffer->rnum);
++		return 1;
+ 	}
+-   return (err);
+-   }
++	last_end = view.last_end_lsn;
++	if (!last_end)
++		return 1;
++	if (buffer->num < BASEBLKS) {
++		u32 sequence_bits = le32_to_cpu(restart.seq_number_bits);
++		u32 offset_bits;
++		u64 mask;
++		u64 record_page;
++
++		if (!sequence_bits || sequence_bits >= 64U)
++			return 1;
++		offset_bits = 64U - sequence_bits;
++		mask = offset_bits == 64U ? UINT64_MAX :
++			((((u64)1) << offset_bits) - 1U);
++		record_page = ((last_end & mask) << 3) &
++			~((u64)RH_REPLAY_PAGE_SIZE - 1U);
++		if ((view.copy_value & (RH_REPLAY_PAGE_SIZE - 1U)) ||
++			view.copy_value < (u64)BASEBLKS * RH_REPLAY_PAGE_SIZE ||
++			view.copy_value >= logfilesz || view.copy_value != record_page)
++			return 1;
++	} else if (view.copy_value != last_end) {
++		return 1;
++	}
++	buffer->headsz = 0x40;
++	return 0;
++}
+ 
+ /*
+  *		Dynamically allocate an attribute key.
+@@ -281,64 +385,72 @@
+ struct ATTR *getattrentry(unsigned int key, unsigned int lth)
+ {
+ 	struct ATTR *pa;
+-	struct ATTR **old;
++	struct ATTR **grown;
+ 	unsigned int low, mid, high;
+ 
+ 	low = 0;
+-	if (attrcount) {
+-		high = attrcount;
+-		while ((low + 1) < high) {
+-			mid = (low + high) >> 1;
+-			if (key < attrtable[mid]->key)
+-				high = mid;
+-			else
+-				if (key > attrtable[mid]->key)
+-					low = mid;
+-				else {
+-					low = mid;
+-					high = mid + 1;
+-				}
+-		}
++	high = attrcount;
++	while (low < high) {
++		mid = low + (high - low) / 2U;
++		if (attrtable[mid]->key < key)
++			low = mid + 1U;
++		else
++			high = mid;
+ 	}
+-	if ((low < attrcount) && (attrtable[low]->key == key)) {
+-		pa = attrtable[low];
++	mid = low;
++	if ((mid < attrcount) && (attrtable[mid]->key == key)) {
++		pa = attrtable[mid];
+ 		if (pa->namelen < lth) {
+-			pa = (struct ATTR*)realloc(pa,
++			struct ATTR *resized = (struct ATTR*)realloc(pa,
+ 					sizeof(struct ATTR) + lth);
+-			attrtable[low] = pa;
++			if (!resized)
++				return NULL;
++			pa = resized;
++			attrtable[mid] = resized;
+ 		}
+ 	} else {
+-		mid = low + 1;
+-                if (!low && attrcount && (attrtable[0]->key > key))
+-                   mid = 0;
+ 		pa = (struct ATTR*)malloc(sizeof(struct ATTR) + lth);
+ 		if (pa) {
+-			if (attrcount++) {
+-				old = attrtable;
+-				attrtable = (struct ATTR**)realloc(attrtable,
+-					attrcount*sizeof(struct ATTR*));
+-				if (attrtable) {
+-					high = attrcount;
+-					while (--high > mid)
+-						attrtable[high]
+-							= attrtable[high - 1];
+-					attrtable[mid] = pa;
+-				} else
+-					attrtable = old;
+-			} else {
+-				attrtable = (struct ATTR**)
+-						malloc(sizeof(struct ATTR*));
+-				attrtable[0] = pa;
+-			}
++			grown = (struct ATTR**)realloc(attrtable,
++				(attrcount + 1U) * sizeof(struct ATTR*));
++			if (!grown) {
++				free(pa);
++				return NULL;
++			}
++			attrtable = grown;
++			high = attrcount + 1U;
++			while (--high > mid)
++				attrtable[high] = attrtable[high - 1U];
++			attrtable[mid] = pa;
++			++attrcount;
+ 		pa->key = key;
+ 		pa->namelen = 0;
+ 		pa->type = const_cpu_to_le32(0);
+ 		pa->inode = 0;
++		pa->reference = 0;
++		pa->lsn = 0;
++		pa->bytes_per_index = 0;
+ 		}
+ 	}
+ 	return (pa);
+ }
+ 
++struct ATTR *findattrentry(unsigned int key)
++{
++	unsigned int low = 0, high = attrcount;
++
++	while (low < high) {
++		unsigned int mid = low + (high - low) / 2U;
++		if (attrtable[mid]->key < key)
++			low = mid + 1U;
++		else
++			high = mid;
++	}
++	if (low < attrcount && attrtable[low]->key == key)
++		return attrtable[low];
++	return NULL;
++}
++
+ /*
+  *		Read blocks in a circular buffer
+  *
+@@ -376,6 +488,8 @@
+ 	if (!buffer) {
+ 		buffer = (struct BUFFER*)
+ 			malloc(sizeof(struct BUFFER) + blocksz);
++		if (!buffer)
++			return (const struct BUFFER*)NULL;
+ 		buffer->size = blocksz;
+ 		buffer->rnum = num + 1; /* forced to being read */
+ 		buffer->safe = FALSE;
+@@ -402,11 +516,21 @@
+ 						1, ctx->file) == 1);
+ 		if (got) {
+ 			char *data = buffer->block.data;
+-			buffer->headsz = sizeof(RECORD_PAGE_HEADER)
+-				+ ((2*getle16(data,6) - 1) | 7) + 1;
++			roothealth_note_log_page(rnum);
++			buffer->headsz = 0;
+ 			buffer->safe = !replaceusa(buffer, blocksz);
++			if (buffer->safe && num < RSTBLKS) {
++				unsigned int usa_count = getle16(data, 6);
++
++				if (!usa_count || usa_count > 9U)
++					buffer->safe = FALSE;
++				else
++					buffer->headsz = sizeof(RECORD_PAGE_HEADER)
++						+ ((2U * usa_count - 1U) | 7U) + 1U;
++			}
+ 		} else {
+ 			buffer->safe = FALSE;
++			++rh_io_errors;
+ 			fprintf(stderr,"** Could not read block %d\n", rnum);
+ 		}
+ 	}
+@@ -664,14 +788,14 @@
+ 	case UpdateRecordDataAllocation :
+ 		p = "UpdateRecordDataAllocation";
+ 		break;
+-	case Win10Action35 :
+-		p = "Win10Action35";
++	case UpdateRelativeDataInIndex :
++		p = "UpdateRelativeDataInIndex";
+ 		break;
+-	case Win10Action36 :
+-		p = "Win10Action36";
++	case UpdateRelativeDataInIndex2 :
++		p = "UpdateRelativeDataInIndex2";
+ 		break;
+-	case Win10Action37 :
+-		p = "Win10Action37";
++	case ZeroEndOfFileRecord :
++		p = "ZeroEndOfFileRecord";
+ 		break;
+ 	default  :
+ 		sprintf(buffer,"*Unknown-Action-%d*",op);
+@@ -828,7 +952,7 @@
+ 	case DeleteIndexEntryRoot :
+ 	case UpdateFileNameRoot :
+ 	case WriteEndofFileRecordSegment :
+-	case Win10Action37 :
++	case ZeroEndOfFileRecord :
+ 		onmft = TRUE;
+ 		break;
+ 	default :
+@@ -872,9 +996,21 @@
+ 	return ((((uoffset > roffset ? uoffset : roffset) - 1) | 7) + 1);
+ }
+ 
+-static BOOL likelyop(const LOG_RECORD *logr)
++static BOOL likelyop(const LOG_RECORD *logr, size_t available)
+ {
+ 	BOOL likely;
++	u32 client_length;
++	size_t record_size;
++
++	if (!logr || available < LOG_RECORD_HEAD_SZ)
++		return FALSE;
++	client_length = le32_to_cpu(logr->client_data_length);
++	if (client_length > RH_REPLAY_MAX_ACTION_SIZE - LOG_RECORD_HEAD_SZ)
++		return FALSE;
++	record_size = (size_t)client_length + LOG_RECORD_HEAD_SZ;
++	if (record_size < sizeof(LOG_RECORD) ||
++		record_size > available || record_size > RH_REPLAY_MAX_ACTION_SIZE)
++		return FALSE;
+ 
+ 	switch (logr->record_type) {
+ 	case LOG_STANDARD : /* standard record */
+@@ -967,12 +1103,12 @@
+         data = buf->block.data;
+    	k = buf->headsz;
+ 	logr = (const LOG_RECORD*)&data[k];
+-	if (!likelyop(logr)) {
++	if (!likelyop(logr, blocksz - k)) {
+ 		do {
+ 			k += 8;
+ 			logr = (const LOG_RECORD*)&data[k];
+ 		} while ((k <= (blocksz - LOG_RECORD_HEAD_SZ))
+-		    && !likelyop(logr));
++		    && !likelyop(logr, blocksz - k));
+ 		if (k > (blocksz - LOG_RECORD_HEAD_SZ))
+ 			k = 0;
+ 	}
+@@ -1098,7 +1234,7 @@
+ 		logr = (const LOG_RECORD*)&data[k];
+ 			/* Accept reaching the end with no record beginning */
+ 		if ((k != le16_to_cpu(rph->next_record_offset))
+-		    && !likelyop(logr)) {
++		    && !likelyop(logr, blocksz - k)) {
+ 			if (opts) {
+ 				k = 0;
+ 				printf("** Could not wraparound\n");
+@@ -1209,14 +1345,16 @@
+ 			panew = (const ATTR_NEW*)buf;
+ 			pa->type = panew->type;
+ 			pa->lsn = sle64_to_cpu(panew->lsn);
+-			pa->inode = MREF(le64_to_cpu(panew->inode));
++			pa->reference = le64_to_cpu(panew->inode);
++			pa->inode = MREF(pa->reference);
+ 			break;
+ 		case sizeof(ATTR_OLD) :
+ 				/* Badly aligned, first realign */
+ 			memcpy(&old_aligned,buf,sizeof(old_aligned));
+ 			pa->type = old_aligned.type;
+ 			pa->lsn = sle64_to_cpu(old_aligned.lsn);
+-			pa->inode = MREF(le64_to_cpu(old_aligned.inode));
++			pa->reference = le64_to_cpu(old_aligned.inode);
++			pa->inode = MREF(pa->reference);
+ 			break;
+ 		default :
+ 			printf("** Unexpected attribute format, length %d\n",
+@@ -1225,94 +1363,173 @@
+ 	}
+ }
+ 
++static void roothealth_clear_attributes(void)
++{
++	unsigned int i;
++
++	for (i = 0; i < attrcount; ++i)
++		free(attrtable[i]);
++	free(attrtable);
++	attrtable = NULL;
++	attrcount = 0;
++}
++
++static int roothealth_load_open_attribute(struct ATTR *pa,
++		const unsigned char *entry, size_t length)
++{
++	u32 type;
++	u64 inode;
++	u64 lsn;
++
++	if (!pa || !entry)
++		return -1;
++	if (length == 40U) {
++		type = getle32((const char *)entry, 8);
++		inode = getle64((const char *)entry, 16);
++		lsn = getle64((const char *)entry, 24);
++	} else if (length == 44U) {
++		inode = getle64((const char *)entry, 8);
++		lsn = getle64((const char *)entry, 16);
++		type = getle32((const char *)entry, 28);
++	} else {
++		return -1;
++	}
++	if (!type || (type & 0xfU) || type > 0x100U || !inode)
++		return -1;
++	pa->type = cpu_to_le32(type);
++	pa->inode = MREF(inode);
++	pa->reference = inode;
++	pa->lsn = lsn;
++	pa->bytes_per_index = length == 40U ?
++		getle32((const char *)entry, 4) :
++		getle32((const char *)entry, 40);
++	return 0;
++}
++
++static int roothealth_refresh_open_table(const unsigned char *table,
++		size_t length)
++{
++	u16 step, slots, allocated;
++	unsigned int allocated_seen = 0;
++	u16 slot;
++
++	if (!table || length < 24U)
++		return -1;
++	step = getle16((const char *)table, 0);
++	slots = getle16((const char *)table, 2);
++	allocated = getle16((const char *)table, 4);
++	if ((step != 40U && step != 44U) || !slots || allocated > slots ||
++		(size_t)step * slots != length - 24U)
++		return -1;
++	for (slot = 0; slot < slots; ++slot) {
++		const unsigned char *entry = table + 24U + (size_t)slot * step;
++		u32 key = 24U + (u32)slot * step;
++		struct ATTR *pa;
++
++		if (getle32((const char *)entry, 0) != UINT32_MAX)
++			continue;
++		if (key > UINT16_MAX)
++			return -1;
++		pa = getattrentry(key, 0);
++		if (!pa || roothealth_load_open_attribute(pa, entry, step))
++			return -1;
++		++allocated_seen;
++	}
++	return allocated_seen == allocated ? 0 : -1;
++}
++
++static int roothealth_refresh_attribute_names(const unsigned char *names,
++		size_t length)
++{
++	size_t offset = 0;
++
++	while (offset + 4U <= length) {
++		u16 key = getle16((const char *)names, (int)offset);
++		u16 bytes = getle16((const char *)names, (int)offset + 2);
++		struct ATTR *pa;
++
++		if (!key) {
++			offset += 4U;
++			while (offset < length)
++				if (names[offset++])
++					return -1;
++			return 0;
++		}
++		if ((bytes & 1U) || bytes > 510U ||
++			bytes > length - offset - 4U || !findattrentry(key))
++			return -1;
++		pa = getattrentry(key, bytes);
++		if (!pa)
++			return -1;
++		pa->namelen = bytes;
++		memcpy(pa->name, names + offset + 4U, bytes);
++		offset += 4U + bytes;
++	}
++	return -1;
++}
++
+ static int refresh_attributes(const struct ACTION_RECORD *firstaction)
+ {
+ 	const struct ACTION_RECORD *action;
+-	const LOG_RECORD *logr;
+-	struct ATTR *pa;
+-	const char *buf;
+-	u32 extra;
+-	u32 length;
+-	u32 len;
+-	u32 key;
+-	u32 x;
+-	u32 i;
+-	u32 step;
+-	u32 used;
+-
+-	for (action=firstaction; action; action=action->next) {
+-		logr = &action->record;
+-		buf = ((const char*)logr) + get_redo_offset(logr);
+-		length = le16_to_cpu(logr->redo_length);
+-		switch (le16_to_cpu(action->record.redo_operation)) {
+-		case OpenNonResidentAttribute :
+-			extra = get_extra_offset(logr)
+-						- get_redo_offset(logr);
+-			if (logr->undo_length) {
+-				len = le32_to_cpu(logr->client_data_length)
+-					+ LOG_RECORD_HEAD_SZ
+-					- get_extra_offset(logr);
+-				/* this gives a length aligned modulo 8 */
+-				len = fixnamelen(&buf[extra], len);
+-			} else
+-				len = 0;
+-			pa = getattrentry(le16_to_cpu(logr->target_attribute),
+-						len);
+-			if (pa) {
+-				copy_attribute(pa, buf, length);
+-				pa->namelen = len;
+-				if (len) {
+-					memcpy(pa->name,&buf[extra],len);
+-				}
+-			}
++	int saw_table = 0;
++
++	roothealth_clear_attributes();
++	for (action = firstaction; action; action = action->next) {
++		const LOG_RECORD *logr = &action->record;
++		u16 op;
++		u32 record_size = le32_to_cpu(logr->client_data_length) +
++			LOG_RECORD_HEAD_SZ;
++		u32 redo_at = get_redo_offset(logr);
++		u32 undo_at = get_undo_offset(logr);
++		u16 redo_length = le16_to_cpu(logr->redo_length);
++		u16 undo_length = le16_to_cpu(logr->undo_length);
++		const unsigned char *bytes = (const unsigned char *)logr;
++		struct ATTR *pa;
++
++		if (logr->record_type == LOG_CHECKPOINT)
++			continue;
++		op = le16_to_cpu(logr->redo_operation);
++		if (record_size < 88U || redo_at > record_size ||
++			redo_length > record_size - redo_at || undo_at > record_size ||
++			undo_length > record_size - undo_at)
++			goto fail;
++		switch (op) {
++		case OpenNonResidentAttribute: {
++			u16 key = le16_to_cpu(logr->target_attribute);
++			if ((redo_length != 40U && redo_length != 44U) ||
++				(undo_length & 1U) || undo_length > 510U ||
++				findattrentry(key))
++				goto fail;
++			pa = getattrentry(key, undo_length);
++			if (!pa || roothealth_load_open_attribute(pa,
++					bytes + redo_at, redo_length))
++				goto fail;
++			pa->namelen = undo_length;
++			if (undo_length)
++				memcpy(pa->name, bytes + undo_at, undo_length);
+ 			break;
+-		case OpenAttributeTableDump :
+-			i = 24;
+-			step = getle16(buf, 8);
+-			used = getle16(buf, 12);
+-	    		/*
+-			 * Changed from Win10, formerly we got step = 44.
+-			 * The record layout has also changed
+-			 */
+-			for (x=0; (x<used) && (i<length); i+=step, x++) {
+-				pa = getattrentry(i,0);
+-				if (pa) {
+-					copy_attribute(pa, buf + i, step);
+-				}
+-			}
++		}
++		case OpenAttributeTableDump:
++			if (saw_table || roothealth_refresh_open_table(bytes + redo_at,
++					redo_length))
++				goto fail;
++			saw_table = 1;
+ 			break;
+-		case AttributeNamesDump :
+-			i = 8;
+-			if (i < length) {
+-				x = 0;
+-				do {
+-					len = getle16(buf, i + 2);
+-					key = getle16(buf, i);
+-					if (len > 510) {
+-						printf("** Error : bad"
+-							" attribute name"
+-							" length %d\n",
+-							len);
+-						key = 0;
+-					}
+-					if (key) { /* Apparently, may have to stop before reaching the end */
+-						pa = getattrentry(key,len);
+-						if (pa) {
+-							pa->namelen = len;
+-							memcpy(pa->name,
+-								&buf[i+4],len);
+-						}
+-						i += len + 6;
+-						x++;
+-					}
+-				} while (key && (i < length));
+-			}
++		case AttributeNamesDump:
++			/* Strict guard places the name list after the fixed 80 bytes. */
++			if (record_size < 80U ||
++				roothealth_refresh_attribute_names(bytes + 80U,
++					record_size - 80U))
++				goto fail;
+ 			break;
+-		default :
++		default:
+ 			break;
+ 		}
+ 	}
+-	return (0);
++	return 0;
++fail:
++	roothealth_clear_attributes();
++	return -1;
+ }
+ 
+ /*
+@@ -2249,81 +2466,108 @@
+ 	}
+ }
+ 
+-/*
+- *		Mark transactions which should be redone
+- */
+-
+-static void mark_transactions(struct ACTION_RECORD *lastaction)
++static int roothealth_analyze_transactions(CONTEXT *ctx,
++		struct ACTION_RECORD *firstaction)
+ {
++	struct rh_replay_analysis_record *records;
++	struct rh_replay_analysis_result analysis;
++	struct rh_replay_geometry geometry;
+ 	struct ACTION_RECORD *action;
+-	const LOG_RECORD *logr;
+-	le32 id;
+-	int actives;
+-	BOOL more;
+-	BOOL committed;
++	unsigned int action_count = 0;
++	unsigned int i = 0;
++	int err;
+ 
+-	actives = 0;
+-	do {
+-		more = FALSE;
+-		id = const_cpu_to_le32(0);
+-		for (action=lastaction; action; action=action->prev) {
+-			logr = &action->record;
+-			if ((logr->redo_operation
+-				== const_cpu_to_le16(ForgetTransaction))
+-			    && !(action->flags & ACTION_TO_REDO)
+-			    && !id) {
+-				id = logr->transaction_id;
+-				action->flags |= ACTION_TO_REDO;
+-				if (optv)
+-					printf("Marking transaction 0x%x\n",
+-						(int)le32_to_cpu(id));
+-			}
+-			committed = ((s64)(sle64_to_cpu(logr->this_lsn)
+-					- committed_lsn)) <= 0;
+-			if (!logr->transaction_id
+-			    && committed)
+-				action->flags |= ACTION_TO_REDO;
+-			if (id
+-			    && (logr->transaction_id == id)
+-			    && committed) {
++	for (action = firstaction; action; action = action->next)
++		if (++action_count > RH_REPLAY_MAX_ACTIONS)
++			return 1;
++	if (!action_count || !ctx || roothealth_replay_geometry(ctx, &geometry))
++		return 1;
++	records = (struct rh_replay_analysis_record *)calloc(action_count,
++		sizeof(*records));
++	if (!records)
++		return 1;
++	for (action = firstaction; action; action = action->next) {
++		records[i].bytes = (const unsigned char *)&action->record;
++		records[i].size = (size_t)le32_to_cpu(
++			action->record.client_data_length) + LOG_RECORD_HEAD_SZ;
++		++i;
++	}
++	err = rh_replay_analysis_plan(records, action_count, &geometry,
++		synced_lsn, latest_lsn, &analysis);
++	if (!err) {
++		rh_analysis_evidence = analysis;
++		i = 0;
++		for (action = firstaction; action; action = action->next) {
++			action->flags &= ~(ACTION_TO_REDO | ACTION_TO_UNDO);
++			if (records[i].plan_flags & RH_REPLAY_PLAN_REDO)
+ 				action->flags |= ACTION_TO_REDO;
+-				more = TRUE;
++			if (records[i].plan_flags & RH_REPLAY_PLAN_UNDO)
++				action->flags |= ACTION_TO_UNDO;
++			if (records[i].has_effective_lcn) {
++				if (!action->record.lcns_to_follow) {
++					err = 1;
++					break;
++				}
++				action->record.lcn_list[0] =
++					cpu_to_sle64(records[i].effective_lcn);
+ 			}
+-		}
+-	if (more)
+-		actives++;
+-	} while (more);
+-		/*
+-		 * Show unmarked (aborted) actions
+-		 */
+-	if (optv) {
+-		for (action=lastaction; action; action=action->prev) {
+-			logr = &action->record;
+-			if (logr->transaction_id
+-			   && !(action->flags & ACTION_TO_REDO))
+-				printf("** Action %d was aborted\n",
+-					(int)action->num);
++			++i;
+ 		}
+ 	}
+-	if (optv && (actives > 1))
+-		printf("%d active transactions in set\n",actives);
++	free(records);
++	return err;
+ }
+ 
+ /*
+  *		Enqueue an action and play the queued actions on end of set
+  */
+ 
++static int roothealth_guard_log_record(CONTEXT *ctx, const LOG_RECORD *logr,
++		int size, u64 source_byte_offset,
++		struct rh_replay_action_view *view)
++{
++	struct rh_replay_geometry geometry;
++
++	if (size < 0 || roothealth_replay_geometry(ctx, &geometry))
++		return -1;
++	if (rh_replay_guard_action((const unsigned char *)logr, (size_t)size,
++			&geometry, source_byte_offset, view)) {
++		if (size >= (int)sizeof(LOG_RECORD)) {
++			u16 operation = le16_to_cpu(logr->redo_operation);
++
++			if (operation == DeallocateFileRecordSegment ||
++				operation == UpdateRelativeDataInIndex ||
++				operation == UpdateRelativeDataInIndex2 ||
++				operation >= LastAction)
++				++rh_unsupported_actions;
++			else
++				++rh_parse_errors;
++		} else
++			++rh_parse_errors;
++		fprintf(stderr, "** Native action preflight rejected LSN 0x%llx"
++			" at byte offset 0x%llx\n",
++			(long long)sle64_to_cpu(logr->this_lsn),
++			(long long)source_byte_offset);
++		return -1;
++	}
++	return 0;
++}
++
+ static TRISTATE enqueue_action(CONTEXT *ctx, const LOG_RECORD *logr,
+-				int size, int num)
++				int size, int num, u64 source_byte_offset)
+ {
+ 	struct ACTION_RECORD *action;
++	struct rh_replay_action_view guarded;
+ 	TRISTATE state;
+ 	int err;
+ 
+ 	err = 1;
+ 	state = T_ERR;
+ 	if (num <= 0 || (unsigned int)num > ROOTHEALTH_MAX_ACTIONS ||
+-			size < (int)sizeof(LOG_RECORD) || size > MAXRECSIZE) {
++			size < (int)sizeof(LOG_RECORD) ||
++			size > (int)RH_REPLAY_MAX_ACTION_SIZE ||
++			roothealth_guard_log_record(ctx, logr, size,
++				source_byte_offset, &guarded)) {
+ 		printf("** Refusing an unbounded or malformed log action\n");
+ 		return T_ERR;
+ 	}
+@@ -2370,8 +2614,10 @@
+ 						(int)playedactions,
+ 						(int)ctx->firstaction->num,
+ 						(int)ctx->lastaction->num);
+-				mark_transactions(ctx->lastaction);
+-				err = play_redos(ctx->vol, ctx->firstaction);
++				err = roothealth_analyze_transactions(ctx,
++					ctx->firstaction);
++				if (!err)
++					err = play_redos(ctx->vol, ctx->firstaction);
+ 				if (err)
+ 					printf("* Redoing transaction"
+ 							" set failed\n");
+@@ -2395,7 +2641,9 @@
+ 				printf("* Refreshing attributes\n");
+ // should refresh backward ?
+ 			err = refresh_attributes(ctx->firstaction);
+-			mark_transactions(ctx->lastaction);
++			if (!err)
++				err = roothealth_analyze_transactions(ctx,
++					ctx->firstaction);
+ 			if (!err) {
+ 				if (optv)
+ 					printf("* Syncing actions %d->%d\n",
+@@ -2403,6 +2651,8 @@
+ 						(int)ctx->lastaction->num);
+ 				err = play_redos(ctx->vol, ctx->firstaction);
+ 			}
++			if (!err)
++				err = play_undos(ctx->vol, ctx->lastaction);
+ 			if (err) {
+ 				printf("* Syncing actions failed\n");
+ 				state = T_ERR;
+@@ -2512,7 +2762,7 @@
+ 				memcpy(&fullrec[space],
+ 					nextdata + blkheadsz,
+ 					size - space);
+-				likely = likelyop((LOG_RECORD*)fullrec);
++				likely = likelyop((LOG_RECORD*)fullrec, size);
+ 				actionnum++;
+ 				if (optv) {
+ 					printf("\nOverlapping record %u at 0x%x"
+@@ -2578,7 +2828,7 @@
+ 						size - pos);
+ 				else
+ 					likely = FALSE;
+-				if (!likelyop((LOG_RECORD*)fullrec))
++				if (!likelyop((LOG_RECORD*)fullrec, size))
+ 					likely = FALSE;
+ 				actionnum++;
+ 				if (optv) {
+@@ -2662,7 +2912,7 @@
+ // TODO check bad start > blocksz - 48
+ 		logr = (const LOG_RECORD*)&data[k];
+ 		stop = FALSE;
+-		if (!likelyop(logr)) {
++		if (!likelyop(logr, blocksz - k)) {
+ 			if (optv)
+ 				printf("* Bad start 0x%x for block %d\n",
+ 					(int)pos,(int)blk);
+@@ -2936,19 +3186,53 @@
+ 	return (dirty);
+ }
+ 
++static int roothealth_bytes_zero(const unsigned char *bytes, size_t length)
++{
++	while (length--)
++		if (*bytes++)
++			return 0;
++	return 1;
++}
++
++static int roothealth_restart_lsn_valid(uint64_t lsn, uint32_t sequence_bits,
++		uint64_t file_size, int allow_zero)
++{
++	uint32_t offset_bits;
++	uint64_t mask;
++
++	if (!lsn)
++		return allow_zero;
++	if (!sequence_bits || sequence_bits >= 64U)
++		return 0;
++	offset_bits = 64U - sequence_bits;
++	mask = offset_bits == 64U ? UINT64_MAX :
++		((((uint64_t)1) << offset_bits) - 1U);
++	return (lsn & ~mask) && (lsn & mask) < file_size / 8U;
++}
++
+ static int roothealth_restart_profile_valid(const RESTART_PAGE_HEADER *header)
+ {
+ 	const unsigned char *raw = (const unsigned char *)header;
+ 	const RESTART_AREA *area;
++	const LOG_CLIENT_RECORD *client_record;
++	uint64_t current_lsn, oldest_lsn, client_restart_lsn, size_for_bits;
+ 	uint32_t page_size, log_page_size, sequence_bits;
+ 	uint32_t area_offset, area_length, client_offset;
++	uint16_t free_client, in_use_client, flags;
++	uint32_t expected_sequence_bits = 67U;
+ 
+ 	if (!header)
+ 		return 0;
+ 	page_size = le32_to_cpu(header->system_page_size);
+ 	log_page_size = le32_to_cpu(header->log_page_size);
+ 	area_offset = le16_to_cpu(header->restart_area_offset);
+-	if (page_size != ROOTHEALTH_REPLAY_PAGE_SIZE ||
++	if (header->magic != magic_RSTR ||
++		le16_to_cpu(header->usa_ofs) != sizeof(*header) ||
++		le16_to_cpu(header->usa_count) != 9U ||
++		sle64_to_cpu(header->chkdsk_lsn) ||
++		le16_to_cpu(header->major_ver) != 1U ||
++		le16_to_cpu(header->minor_ver) != 1U ||
++		page_size != ROOTHEALTH_REPLAY_PAGE_SIZE ||
+ 		log_page_size != ROOTHEALTH_REPLAY_PAGE_SIZE ||
+ 		(area_offset & 7) || area_offset > page_size - sizeof(*area))
+ 		return 0;
+@@ -2956,14 +3240,65 @@
+ 	area_length = le16_to_cpu(area->restart_area_length);
+ 	client_offset = le16_to_cpu(area->client_array_offset);
+ 	sequence_bits = le32_to_cpu(area->seq_number_bits);
++	current_lsn = sle64_to_cpu(area->current_lsn);
++	free_client = le16_to_cpu(area->client_free_list);
++	in_use_client = le16_to_cpu(area->client_in_use_list);
++	flags = le16_to_cpu(area->flags);
+ 	if (area_length < sizeof(*area) || area_length > page_size - area_offset ||
+-		client_offset > area_length || sizeof(LOG_CLIENT_RECORD) >
++		(client_offset & 7U) || client_offset < 64U ||
++		client_offset > area_length || sizeof(LOG_CLIENT_RECORD) !=
+ 			area_length - client_offset ||
+-		le16_to_cpu(area->log_clients) != 1 || !sequence_bits ||
+-		sequence_bits >= 64 || sle64_to_cpu(area->file_size) <= 0 ||
++		le16_to_cpu(area->log_clients) != 1U ||
++		!((free_client == 0U && in_use_client == LOGFILE_NO_CLIENT_CPU) ||
++		  (free_client == LOGFILE_NO_CLIENT_CPU && in_use_client == 0U)) ||
++		(flags & ~3U) || !current_lsn || !sequence_bits ||
++		sequence_bits >= 64 ||
++		sle64_to_cpu(area->file_size) < RH_REPLAY_MIN_LOGFILE_SIZE ||
++		(uint64_t)sle64_to_cpu(area->file_size) >
++			RH_REPLAY_MAX_LOGFILE_SIZE ||
++		((uint64_t)sle64_to_cpu(area->file_size) %
++			RH_REPLAY_PAGE_SIZE) ||
+ 		(uint64_t)sle64_to_cpu(area->file_size) != logfilesz ||
+ 		le16_to_cpu(area->log_record_header_length) != LOG_RECORD_HEAD_SZ ||
+-		le16_to_cpu(area->log_page_data_offset) != 0x40)
++		le16_to_cpu(area->log_page_data_offset) != 0x40 ||
++		le32_to_cpu(area->reserved) ||
++		le32_to_cpu(area->last_lsn_data_length) >
++			RH_REPLAY_MAX_ACTION_SIZE - LOG_RECORD_HEAD_SZ ||
++		!roothealth_bytes_zero(raw + area_offset + sizeof(*area),
++			client_offset - sizeof(*area)))
++		return 0;
++	size_for_bits = (uint64_t)sle64_to_cpu(area->file_size);
++	while (size_for_bits) {
++		size_for_bits >>= 1;
++		--expected_sequence_bits;
++	}
++	if (sequence_bits != expected_sequence_bits)
++		return 0;
++	size_for_bits = (uint64_t)sle64_to_cpu(area->file_size);
++	client_record = (const LOG_CLIENT_RECORD *)(raw + area_offset + client_offset);
++	oldest_lsn = sle64_to_cpu(client_record->oldest_lsn);
++	client_restart_lsn = sle64_to_cpu(client_record->client_restart_lsn);
++	if (!roothealth_restart_lsn_valid(current_lsn, sequence_bits,
++			size_for_bits, 0) ||
++		!roothealth_restart_lsn_valid(oldest_lsn, sequence_bits,
++			size_for_bits, 1) ||
++		!roothealth_restart_lsn_valid(client_restart_lsn, sequence_bits,
++			size_for_bits, 1) ||
++		oldest_lsn > current_lsn || client_restart_lsn > current_lsn ||
++		(client_restart_lsn && oldest_lsn > client_restart_lsn) ||
++		!le16_to_cpu(client_record->seq_number) ||
++		le16_to_cpu(client_record->seq_number) == UINT16_MAX ||
++		le16_to_cpu(client_record->prev_client) != LOGFILE_NO_CLIENT_CPU ||
++		le16_to_cpu(client_record->next_client) != LOGFILE_NO_CLIENT_CPU ||
++		!roothealth_bytes_zero(client_record->reserved,
++			sizeof(client_record->reserved)) ||
++		le32_to_cpu(client_record->client_name_length) != 8U ||
++		le16_to_cpu(client_record->client_name[0]) != 'N' ||
++		le16_to_cpu(client_record->client_name[1]) != 'T' ||
++		le16_to_cpu(client_record->client_name[2]) != 'F' ||
++		le16_to_cpu(client_record->client_name[3]) != 'S' ||
++		!roothealth_bytes_zero((const unsigned char *)&client_record->client_name[4],
++			sizeof(client_record->client_name) - 4U * sizeof(ntfschar)))
+ 		return 0;
+ 	return 1;
+ }
+@@ -3118,6 +3453,7 @@
+ 	if (buffer) {
+ 		memset(buffer, 0, blocksz);
+ 		restart.client_in_use_list = LOGFILE_NO_CLIENT;
++		restart.client_free_list = const_cpu_to_le16(0);
+ 		restart.flags |= RESTART_VOLUME_IS_CLEAN;
+ 		client.oldest_lsn = cpu_to_sle64(restart_lsn);
+ 		memcpy(buffer, &log_header,
+@@ -3128,7 +3464,9 @@
+ 		off += le16_to_cpu(restart.client_array_offset);
+ 		memcpy(&buffer[off], &client,
+ 					sizeof(LOG_CLIENT_RECORD));
+-		if (!ntfs_mst_pre_write_fixup((NTFS_RECORD*)buffer, blocksz) &&
++		if (roothealth_restart_profile_valid(
++				(RESTART_PAGE_HEADER *)buffer) &&
++				!ntfs_mst_pre_write_fixup((NTFS_RECORD*)buffer, blocksz) &&
+ 				!roothealth_plan_attr_write(log_na, 0, blocksz,
+ 					(const unsigned char *)buffer,
+ 					RH_WRITE_LOGFILE_RESTART) &&
+@@ -3244,8 +3582,10 @@
+ 		log_na = ntfs_attr_open(log_ni, AT_DATA, AT_UNNAMED, 0);
+ 		if (log_na) {
+ 			size = log_na->data_size;
+-			if (size > 0 && size <= ROOTHEALTH_MAX_LOGFILE_SIZE &&
+-				size <= UINT32_MAX && !(size % NTFSBLKLTH)) {
++			if (size >= RH_REPLAY_MIN_LOGFILE_SIZE &&
++				size <= ROOTHEALTH_MAX_LOGFILE_SIZE &&
++				size <= UINT32_MAX &&
++				!(size % RH_REPLAY_PAGE_SIZE)) {
+ 				logfilesz = (u32)size;
+ 				err = 0;
+ 			}
+@@ -3312,7 +3652,9 @@
+ 	ctx->vol = ntfs_mount(device_name, NTFS_MNT_RDONLY |
+ 		NTFS_MNT_FORENSIC | NTFS_MNT_FS_NO_REPAIR);
+ 	if (ctx->vol) {
+-		if (NDevReadOnly(ctx->vol->dev))
++		if (NDevReadOnly(ctx->vol->dev) &&
++			ntfs_pread(ctx->vol->dev, 0, sizeof(boot.buf), boot.buf) ==
++				(s64)sizeof(boot.buf))
+ 			ok = getvolumedata(ctx, boot.buf);
+ 		if (!ok) {
+ 			ntfs_umount(ctx->vol, TRUE);
+@@ -3354,6 +3696,12 @@
+ 	TRISTATE state;
+ 	u16 blkheadsz;
+ 
++	if (opts) {
++		fprintf(stderr,
++			"** Multi-page native log actions are outside the T1OS profile\n");
++		return T_ERR;
++	}
++
+ 	logr = (const LOG_RECORD*)&data[k];
+ 	state = T_ERR;
+ 	size = le32_to_cpu(logr->client_data_length) + LOG_RECORD_HEAD_SZ;
+@@ -3363,8 +3711,10 @@
+ 	nextspace = blocksz - blkheadsz;
+ 	if ((space >= LOG_RECORD_HEAD_SZ)
+ 	    && (size > space)
+-	    && (size < MAXRECSIZE)) {
++	    && (size <= (s32)RH_REPLAY_MAX_ACTION_SIZE)) {
+ 		fullrec = (char*)malloc(size);
++		if (!fullrec)
++			return T_ERR;
+ 		memcpy(fullrec,&data[k],space);
+ 		if (size <= (space + nextspace))
+ 			memcpy(&fullrec[space], nextdata + blkheadsz,
+@@ -3388,17 +3738,19 @@
+ 				if (more > nextspace)
+ 					more = nextspace;
+ 				morebuf = read_buffer(ctx, mblk);
+-				if (morebuf) {
+-					moredata = morebuf->block.data;
+-					memcpy(&fullrec[total],
+-						moredata + blkheadsz, more);
++				if (!morebuf) {
++					free(fullrec);
++					return T_ERR;
+ 				}
++				moredata = morebuf->block.data;
++				memcpy(&fullrec[total],
++					moredata + blkheadsz, more);
+ 				total += more;
+ 				mblk++;
+ 			}
+ 		}
+ 
+-		state = (likelyop((LOG_RECORD*)fullrec) ? T_OK : T_ERR);
++		state = (likelyop((LOG_RECORD*)fullrec, size) ? T_OK : T_ERR);
+ 		actionnum++;
+ 		if (optv) {
+ 			printf("\nOverlapping backward action %d at 0x%x"
+@@ -3414,7 +3766,8 @@
+ 			if (optp || optu || opts)
+ 				state = enqueue_action(ctx,
+ 						(LOG_RECORD*)fullrec,
+-						size, actionnum);
++						size, actionnum,
++						((u64)blk << blockbits) + k);
+ 		} else {
+ 			/* Try to go on unless playing actions */
+ 			if (optb && (state == T_ERR))
+@@ -3455,6 +3808,7 @@
+ 	u16 k;
+ 	u16 endoff;
+ 	int j;
++	u64 prior_lsn;
+ 
+ 	state = T_ERR;
+ 	rph = &buf->block.record;
+@@ -3485,13 +3839,20 @@
+ 			k = buf->headsz;
+ 		else
+ 			k = firstrecord(skipped, buf, prevbuf);
++		if (k > blocksz - LOG_RECORD_HEAD_SZ)
++			return T_ERR;
+ 		logr = (const LOG_RECORD*)&data[k];
+ 		cnt = 0;
+ 	   /* check whether there is at least one beginning of record */
+ 		endoff = le16_to_cpu(rph->next_record_offset);
+ 		if (k && ((k < endoff) || !endoff)) {
+ 			logr = (const LOG_RECORD*)&data[k];
+-			if (likelyop(logr)) {
++			size = (blocksz - k >= LOG_RECORD_HEAD_SZ) ?
++				le32_to_cpu(logr->client_data_length) +
++				LOG_RECORD_HEAD_SZ : 0;
++			if (likelyop(logr, blocksz - k) &&
++			    (!opts || !roothealth_guard_log_record(ctx, logr, size,
++					((u64)buf->num << blockbits) + k, NULL))) {
+ 				stop = FALSE;
+ 				state = T_OK;
+ 				if (optv)
+@@ -3519,26 +3880,34 @@
+ 				logr = (const LOG_RECORD*)&data[k];
+ 				size = le32_to_cpu(logr->client_data_length)
+ 						+ LOG_RECORD_HEAD_SZ;
+-				if ((size < MINRECSIZE)
+-				    || (size > MAXRECSIZE)
++				if ((size < (s32)sizeof(LOG_RECORD))
++				    || (size > (s32)RH_REPLAY_MAX_ACTION_SIZE)
+ 				    || (size & 7)) {
+ 					printf("** Bad size %ld in block %ld"
+ 						" offset 0x%x, stopping\n",
+ 						(long)size,(long)blk,(int)k);
+ 					stop = TRUE;
++					state = T_ERR;
+ 				} else {
+ 					if (((u32)(k + size) <= blocksz)
+-					    && ((u32)(k + size) <= endoff)) {
++					    && ((u32)(k + size) <= endoff)
++					    && cnt < (int)(sizeof(poslist) /
++							sizeof(poslist[0]))
++					    && (!opts || !roothealth_guard_log_record(
++						ctx, logr, size,
++						((u64)buf->num << blockbits) + k,
++						NULL))) {
+ 						poslist[cnt++] = k;
+ 						if (!logr->client_data_length)
+ 							stop = TRUE;
+ 						k += size;
+-						if ((u32)(k
++						if (k >= endoff || (u32)(k
+ 						    + LOG_RECORD_HEAD_SZ)
+ 						    > blocksz)
+ 							stop = TRUE;
+ 					} else {
+ 						stop = TRUE;
++						state = T_ERR;
+ 					}
+ 				}
+ 			}
+@@ -3546,7 +3915,27 @@
+ 			stop = TRUE;
+ 			state = (k ? T_OK : T_ERR);
+ 		}
+-		      /* Now examine an overlapping record */
++		prior_lsn = 0;
++		for (j = 0; j < cnt && state == T_OK; ++j) {
++			const LOG_RECORD *checked =
++				(const LOG_RECORD *)&data[poslist[j]];
++			u64 checked_lsn = sle64_to_cpu(checked->this_lsn);
++
++			if (prior_lsn && checked_lsn <= prior_lsn)
++				state = T_ERR;
++			prior_lsn = checked_lsn;
++		}
++		if (cnt && state == T_OK) {
++			const LOG_RECORD *last =
++				(const LOG_RECORD *)&data[poslist[cnt - 1]];
++			u32 last_size = le32_to_cpu(last->client_data_length) +
++				LOG_RECORD_HEAD_SZ;
++
++			if ((u32)poslist[cnt - 1] + last_size == endoff &&
++				last->this_lsn != rph->last_end_lsn)
++				state = T_ERR;
++		}
++	      /* Now examine an overlapping record */
+ 		if (k
+ 		    && ((k == endoff) || !endoff)
+ 		    && ((u32)(k + LOG_RECORD_HEAD_SZ) <= blocksz)) {
+@@ -3583,7 +3972,8 @@
+ 			}
+ 		showlogr(ctx, k, logr);
+ 		if (optp || optu || opts)
+-			state = enqueue_action(ctx, logr, size, actionnum);
++			state = enqueue_action(ctx, logr, size, actionnum,
++					((u64)buf->num << blockbits) + k);
+ 		}
+ 	}
+ 	return (state);
+@@ -3923,7 +4313,20 @@
+ 			magic = record->magic;
+ 			switch (magic) {
+ 			case magic_CHKD :
++				fprintf(stderr,
++					"** Obsoleted alternate restart page\n");
++				err = 1;
++				done = TRUE;
++				break;
+ 			case magic_RSTR :
++				if (!roothealth_restart_profile_valid(
++						&nextbuf->block.restart)) {
++					fprintf(stderr,
++						"** Invalid alternate restart page\n");
++					err = 1;
++					done = TRUE;
++				}
++				break;
+ 			case magic_RCRD :
+ 				break;
+ 			default :
+@@ -4410,14 +4813,39 @@
+ 
+ static int roothealth_logfile_is_wiped(void)
+ {
+-	RESTART_PAGE_HEADER *restart_page = NULL;
+-
+-	if (!ntfs_check_logfile(log_na, &restart_page))
++	unsigned char *page;
++	u64 offset;
++	int result = 1;
++
++	if (!log_na || logfilesz < RH_REPLAY_MIN_LOGFILE_SIZE ||
++		logfilesz > RH_REPLAY_MAX_LOGFILE_SIZE ||
++		log_na->data_size != logfilesz)
+ 		return -1;
+-	if (!restart_page)
+-		return 1;
+-	free(restart_page);
+-	return 0;
++	page = (unsigned char *)malloc(RH_REPLAY_PAGE_SIZE);
++	if (!page)
++		return -1;
++	for (offset = 0; offset < logfilesz; offset += RH_REPLAY_PAGE_SIZE) {
++		size_t i;
++
++		if (ntfs_attr_pread(log_na, offset, RH_REPLAY_PAGE_SIZE, page) !=
++				RH_REPLAY_PAGE_SIZE) {
++			errno = EIO;
++			++rh_io_errors;
++			result = -1;
++			break;
++		}
++		roothealth_note_log_page((unsigned int)(offset / RH_REPLAY_PAGE_SIZE));
++		++rh_wiped_pages_scanned;
++		for (i = 0; i < RH_REPLAY_PAGE_SIZE; ++i)
++			if (page[i] != 0xffU) {
++				result = 0;
++				break;
++			}
++		if (!result)
++			break;
++	}
++	free(page);
++	return result;
+ }
+ 
+ int roothealth_log_replay_plan(const char *device_name,
+@@ -4428,17 +4856,28 @@
+ 	int err;
+ 	int saved_errno;
+ 
+-	if (!device_name || !writer || !result || !writer->path ||
++	if (!result) {
++		errno = EINVAL;
++		return -1;
++	}
++	memset(result, 0, sizeof(*result));
++	roothealth_reset_log_evidence();
++	if (!device_name || !writer || !writer->path ||
+ 		strcmp(device_name, writer->path) || writer->read_fd < 0 ||
+-		writer->write_fd >= 0) {
++		writer->write_fd >= 0 || writer->operation_count ||
++		writer->planned_bytes || writer->commit_started) {
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
+ 	memset(&ctx, 0, sizeof(ctx));
+-	memset(result, 0, sizeof(*result));
++	memset(&log_header, 0, sizeof(log_header));
++	memset(&restart, 0, sizeof(restart));
++	memset(&client, 0, sizeof(client));
++	log_major = 0;
++	logfilesz = 0;
+ 	err = 1;
+ 	if (checkstructs()) {
+-			/* Fixed qualification policy: native sync replay, no undo. */
++			/* Fixed qualification policy; analysis selects winner redo/loser undo. */
+ 			optb = FALSE;
+ 			optc = FALSE;
+ 			optd = TRUE;
+@@ -4475,22 +4914,39 @@
+ 				if (ctx.vol) {
+ 					int wiped;
+ 
+-					if (ntfs_volume_check_hiberfile(ctx.vol, 1) < 0)
++					if (roothealth_prepare_log_evidence())
+ 						err = 1;
+-					else if (NVolLogFileEmpty(ctx.vol))
+-						err = 0;
+ 					else {
+-						wiped = roothealth_logfile_is_wiped();
+-						if (wiped > 0 &&
+-							!(ctx.vol->flags & VOLUME_IS_DIRTY))
+-							err = 0;
+-						else if (wiped)
++						result->checked = 1;
++						result->logfile_bytes = logfilesz;
++						if (ntfs_volume_check_hiberfile(ctx.vol, 1) < 0)
+ 							err = 1;
+-						else
+-							err = walk(&ctx);
++						else if (NVolLogFileEmpty(ctx.vol)) {
++							wiped = roothealth_logfile_is_wiped();
++							if (wiped > 0) {
++								err = 0;
++								result->state =
++									(ctx.vol->flags & VOLUME_IS_DIRTY) ?
++									RH_NATIVE_LOG_EMPTY_T1OS :
++									RH_NATIVE_LOG_CLEAN_RESTART;
++							} else
++								err = 1;
++						} else {
++							wiped = roothealth_logfile_is_wiped();
++							if (wiped > 0) {
++								err = 0;
++								result->state =
++									(ctx.vol->flags & VOLUME_IS_DIRTY) ?
++									RH_NATIVE_LOG_EMPTY_T1OS :
++									RH_NATIVE_LOG_CLEAN_RESTART;
++							} else if (!wiped)
++								err = walk(&ctx);
++							else
++								err = 1;
++						}
++						if (!err && rh_log_needs_replay)
++							err = roothealth_plan_clean_restart_pages(&ctx);
+ 					}
+-					if (!err && rh_log_needs_replay)
+-						err = roothealth_plan_clean_restart_pages(&ctx);
+ 					ntfs_attr_close(log_na);
+ 					ntfs_inode_close(log_ni);
+ 					ntfs_umount(ctx.vol, TRUE);
+@@ -4504,13 +4960,46 @@
+ 							device_name);
+ 			result->major_version = log_major;
+ 			result->minor_version = le16_to_cpu(log_header.minor_ver);
++			result->pages_expected = rh_pages_expected;
++			result->pages_examined = rh_pages_examined;
++			result->wiped_pages_scanned = rh_wiped_pages_scanned;
+ 			result->restart_lsn = restart_lsn;
+ 			result->synced_lsn = synced_lsn;
+ 			result->committed_lsn = committed_lsn;
+ 			result->latest_lsn = latest_lsn;
+ 			result->actions_seen = actionnum;
++			result->checkpoint_records_examined =
++				rh_analysis_evidence.checkpoint_records;
++			result->mutation_records_examined =
++				rh_analysis_evidence.mutation_records;
++			result->control_records_examined = actionnum >=
++				rh_analysis_evidence.mutation_records ? actionnum -
++				rh_analysis_evidence.mutation_records : 0;
++			result->open_attribute_tables =
++				rh_analysis_evidence.open_attribute_tables;
++			result->attribute_name_tables =
++				rh_analysis_evidence.attribute_name_tables;
++			result->dirty_page_tables =
++				rh_analysis_evidence.dirty_page_tables;
++			result->transaction_tables =
++				rh_analysis_evidence.transaction_tables;
+ 			result->redo_actions = redocount;
++			result->undo_actions = undocount;
+ 			result->restart_pages_planned = rh_restart_pages_planned;
++			result->unsupported_actions = rh_unsupported_actions;
++			result->io_errors = rh_io_errors;
++			result->parse_errors = rh_parse_errors;
++			if (!err && result->state == RH_NATIVE_LOG_UNKNOWN)
++				result->state = writer->operation_count ?
++					RH_NATIVE_LOG_REPLAY_PLANNED :
++					RH_NATIVE_LOG_CLEAN_RESTART;
++			while (ctx.firstaction) {
++				struct ACTION_RECORD *next = ctx.firstaction->next;
++
++				free(ctx.firstaction);
++				ctx.firstaction = next;
++			}
++			ctx.lastaction = (struct ACTION_RECORD *)NULL;
+ 			for (i=0; i<(BUFFERCNT + BASEBLKS); i++)
+ 				free(buffer_table[i]);
+ 			for (i=0; i<attrcount; i++)
+@@ -4523,6 +5012,19 @@
+ 	}
+ 	saved_errno = errno;
+ 	rh_replay_writer = NULL;
++	if (err) {
++		if (!rh_io_errors && !rh_parse_errors && !rh_unsupported_actions)
++			++rh_parse_errors;
++		rh_writer_reset_plan(writer);
++		result->state = RH_NATIVE_LOG_UNKNOWN;
++		result->io_errors = rh_io_errors;
++		result->parse_errors = rh_parse_errors;
++		result->unsupported_actions = rh_unsupported_actions;
++	}
++	result->planned_io_operations = writer->operation_count;
++	result->planned_io_bytes = writer->planned_bytes;
++	free(rh_examined_pages);
++	rh_examined_pages = NULL;
+ 	errno = saved_errno;
+ 	return err ? -1 : 0;
+ }
+--- a/src/roothealth_playlog.c
++++ b/src/roothealth_playlog.c
+@@ -71,6 +71,7 @@
+ #include "logfile.h"
+ #include "roothealth_repair.h"
+ #include "roothealth_recover.h"
++#include "roothealth_replay_guard.h"
+ #include "roothealth_write.h"
+ #include "misc.h"
+ 
+@@ -84,6 +85,15 @@
+ #define dump hexdump
+ 
+ struct STORE *cluster_door = (struct STORE*)NULL;
++static int roothealth_semantic_preflight;
++
++static int roothealth_all_zero(const unsigned char *bytes, size_t length)
++{
++	while (length--)
++		if (*bytes++)
++			return 0;
++	return 1;
++}
+ 
+ /* check whether a MFT or INDX record is older than action */
+ #define older_record(rec, logr) ((s64)(sle64_to_cpu((rec)->lsn) \
+@@ -424,6 +434,40 @@
+  *	With option -n reading is first attempted from the memory store
+  */
+ 
++static int roothealth_guard_storage(ntfs_volume *vol, const LOG_RECORD *logr,
++		u32 protected_size, struct rh_replay_action_view *view)
++{
++	struct rh_replay_geometry geometry;
++	struct rh_replay_action_view local_view;
++	u32 client_length;
++	size_t record_size;
++
++	if (!vol || !logr)
++		return -1;
++	client_length = le32_to_cpu(logr->client_data_length);
++	if (client_length > RH_REPLAY_MAX_ACTION_SIZE - LOG_RECORD_HEAD_SZ)
++		return -1;
++	record_size = (size_t)client_length + LOG_RECORD_HEAD_SZ;
++	memset(&geometry, 0, sizeof(geometry));
++	geometry.page_size = blocksz;
++	geometry.cluster_size = clustersz;
++	geometry.mft_record_size = mftrecsz;
++	geometry.index_record_size = vol->indx_record_size;
++	geometry.logfile_size = logfilesz;
++	geometry.volume_clusters = vol->nr_clusters;
++	geometry.sequence_bits = le32_to_cpu(restart.seq_number_bits);
++	geometry.client_sequence = le16_to_cpu(client.seq_number);
++	geometry.client_index = 0U;
++	if (!view)
++		view = &local_view;
++	if (rh_replay_guard_action((const unsigned char *)logr, record_size,
++			&geometry, RH_REPLAY_SOURCE_UNKNOWN, view))
++		return -1;
++	if (protected_size && protected_size != view->target_object_size)
++		return -1;
++	return 0;
++}
++
+ static char *read_raw(ntfs_volume *vol, const LOG_RECORD *logr)
+ {
+ 	char *buffer;
+@@ -433,13 +477,18 @@
+ 	int count;
+ 	int i;
+ 	BOOL fail;
++	struct rh_replay_action_view guarded;
+ 
+-	count = le16_to_cpu(logr->lcns_to_follow);
+-	if (!count) {
++	if (roothealth_guard_storage(vol, logr, 0, &guarded)) {
++		printf("** Error : raw target failed native replay preflight\n");
++		return NULL;
++	}
++	count = guarded.lcn_count;
++	if (count != 1) {
+ 		printf("** Error : no lcn to read from\n");
+ 		buffer = (char*)NULL;
+ 	} else
+-		buffer = (char*)malloc(clustersz*count);
++		buffer = (char*)malloc((size_t)clustersz * (size_t)count);
+ // TODO error messages
+ 	if (buffer) {
+ 		fail = FALSE;
+@@ -501,9 +550,14 @@
+ 	char *source;
+ 	int count;
+ 	int i;
++	struct rh_replay_action_view guarded;
+ 
++	if (!buffer || roothealth_guard_storage(vol, logr, 0, &guarded))
++		return 1;
++	if (roothealth_semantic_preflight)
++		return 0;
+ 	err = 0;
+-	count = le16_to_cpu(logr->lcns_to_follow);
++	count = guarded.lcn_count;
+ 	if (!count)
+ 		printf("** Error : no lcn to write to\n");
+ 	if (optn) {
+@@ -550,25 +604,40 @@
+ {
+ 	int err;
+ 	LCN lcn;
+-	char *source;
++	char *mirror;
+ 	int count;
+ 	int i;
++	struct rh_replay_action_view guarded;
+ 
++	if (!buffer || roothealth_guard_storage(vol, logr, 0, &guarded))
++		return 1;
++	if (roothealth_semantic_preflight)
++		return 0;
+ 	err = 0;
+-	count = le16_to_cpu(logr->lcns_to_follow);
++	mirror = (char *)malloc(clustersz);
++	if (!mirror)
++		return 1;
++	count = guarded.lcn_count;
+ 	if (!count)
+ 		printf("** Error : no lcn to write to\n");
+ 	if (!optn || rh_replay_writer) {
+ 		for (i=0; (i<count) && !err; i++) {
+ 			lcn = roothealth_attr_vcn_to_lcn(vol->mftmirr_na,
+ 				sle64_to_cpu(logr->target_vcn) + i);
+-			source = buffer + clustersz*i;
+ 			if (lcn < 0) {
+ 				err = 1;
+ 			} else if (rh_replay_writer) {
+-				err = rh_writer_plan(rh_replay_writer,
++				err = rh_writer_read(rh_replay_writer,
++					(u64)lcn << clusterbits, clustersz, mirror);
++				if (!err) {
++					memcpy(mirror + guarded.target_slice_offset,
++						buffer + (size_t)i * clustersz +
++						guarded.target_slice_offset,
++						guarded.target_object_size);
++					err = rh_writer_plan(rh_replay_writer,
+ 					RH_WRITE_LOGFILE_REDO,
+-					(u64)lcn << clusterbits, clustersz, source);
++					(u64)lcn << clusterbits, clustersz, mirror);
++				}
+ 			} else {
+ 				printf("** Direct mirror replay writes are forbidden\n");
+ 				err = 1;
+@@ -578,6 +647,7 @@
+ 					(long long)lcn);
+ 		}
+ 	}
++	free(mirror);
+ 	return (err);
+ }
+ 
+@@ -592,6 +662,12 @@
+ 	char *full;
+ 	u32 pos;
+ 	LCN lcn;
++	struct rh_replay_action_view guarded;
++
++	if (roothealth_guard_storage(vol, logr, size, &guarded) ||
++		guarded.target_slice_offset > clustersz ||
++		size > clustersz - guarded.target_slice_offset)
++		return NULL;
+ 
+ 		/* read full clusters */
+ 	buffer = read_raw(vol, logr);
+@@ -603,8 +679,7 @@
+ 		full = buffer;
+ 		buffer = (char*)malloc(size);
+ 		if (buffer) {
+-			pos = le16_to_cpu(logr->cluster_index)
+-					<< NTFS_BLOCK_SIZE_BITS;
++			pos = (u32)guarded.target_slice_offset;
+ 			memcpy(buffer, full + pos, size);
+ 		}
+ 		free(full);
+@@ -643,7 +718,12 @@
+ 	BOOL mftmirr;
+ 	BOOL checked;
+ 	int err;
++	struct rh_replay_action_view guarded;
+ 
++	if (!buffer || roothealth_guard_storage(vol, logr, size, &guarded) ||
++		guarded.target_slice_offset > clustersz ||
++		size > clustersz - guarded.target_slice_offset)
++		return 1;
+ 	err = 0;
+ 	mftmirr = FALSE;
+ 	checked = FALSE;
+@@ -664,7 +744,7 @@
+ 				(int)le16_to_cpu(logr->cluster_index));
+ 		err = sanity_mft(buffer);
+ 			/* Should set to some previous lsn for undos */
+-		if (opts)
++		if (opts && !roothealth_semantic_preflight)
+ 			record->lsn = logr->this_lsn;
+ 		/* Duplicate on mftmirr if not overflowing its size */
+ 		mftmirr = (((u64)sle64_to_cpu(logr->target_vcn)
+@@ -685,7 +765,7 @@
+ 				(long long)sle64_to_cpu(logr->this_lsn));
+ 		err = sanity_indx(vol, buffer);
+ 			/* Should set to some previous lsn for undos */
+-		if (opts)
++		if (opts && !roothealth_semantic_preflight)
+ 			indx->lsn = logr->this_lsn;
+ 		checked = TRUE;
+ 	}
+@@ -693,6 +773,8 @@
+ 		printf("** Error : writing protected record of unknown type\n");
+ 		err = 1;
+ 	}
++	if (!err && roothealth_semantic_preflight)
++		return 0;
+ 	if (!err) {
+ 		if (!ntfs_mst_pre_write_fixup((NTFS_RECORD*)buffer, size)) {
+ 			/*
+@@ -702,8 +784,7 @@
+ 			if (size < clustersz) {
+ 				full = read_raw(vol, logr);
+ 				if (full) {
+-					pos = le16_to_cpu(logr->cluster_index)
+-						<< NTFS_BLOCK_SIZE_BITS;
++					pos = (u32)guarded.target_slice_offset;
+ 					memcpy(full + pos, buffer, size);
+ 					err = write_raw(vol, logr, full);
+ 					if (!err && mftmirr && (!optn || rh_replay_writer))
+@@ -1172,7 +1253,7 @@
+ 	int err;
+ 
+ 	printf("** add_non_resident() not implemented\n");
+-	err = 0;
++	err = 1;
+ 	return (err);
+ }
+ 
+@@ -1860,7 +1941,6 @@
+ 			(int)target,(int)length,(int)(target + length));
+ 		dump(buffer,mftrecsz);
+ 	}
+-	err = 0;
+ 	return (err);
+ }
+ 
+@@ -2309,8 +2389,7 @@
+ 		wanted = 1;
+ 	else
+ 		wanted = 0;
+-// TODO consistency undo_offset == redo_offset, etc.
+-// firstbit + count < 8*clustersz (multiple clusters possible ?)
++	/* Pair identity and bitmap-range bounds were proved by replay preflight. */
+ 	if (optv > 1) {
+ 		lcn = sle64_to_cpu(action->record.lcn_list[0]);
+ 		printf("-> lcn 0x%llx firstbit %d count %d wanted %d\n",
+@@ -2473,6 +2552,47 @@
+ 	return (err);
+ }
+ 
++static int update_record_data(ntfs_volume *vol,
++		const struct ACTION_RECORD *action, char *buffer, BOOL undo,
++		BOOL allocation)
++{
++	const LOG_RECORD *record = &action->record;
++	const char *data = (const char *)record + (undo ?
++		get_undo_offset(record) : get_redo_offset(record));
++	const char *expected = (const char *)record + (undo ?
++		get_redo_offset(record) : get_undo_offset(record));
++	u32 entry_at = le16_to_cpu(record->record_offset) +
++		le16_to_cpu(record->attribute_offset);
++	INDEX_ENTRY *entry;
++	u32 entry_length, data_offset, length, target;
++
++	if (!buffer || entry_at > (allocation ? vol->indx_record_size : mftrecsz) -
++			sizeof(INDEX_ENTRY_HEADER))
++		return 1;
++	entry = (INDEX_ENTRY *)(buffer + entry_at);
++	entry_length = le16_to_cpu(entry->length);
++	data_offset = le16_to_cpu(entry->data_offset);
++	length = undo ? le16_to_cpu(record->undo_length) :
++		le16_to_cpu(record->redo_length);
++	if (entry_length < sizeof(INDEX_ENTRY_HEADER) ||
++		data_offset > entry_length || length > entry_length - data_offset)
++		return 1;
++	target = entry_at + data_offset;
++	/*
++	 * View-index record data is not required to be eight-byte sized.  Do not
++	 * route it through the legacy resident-value helper, which rejects valid
++	 * four-byte view data and treats an unexpected before-image as success.
++	 * The hardened path accepts only the exact logged before or after image.
++	 */
++	if (!memcmp(buffer + target, data, length))
++		return 0;
++	if (memcmp(buffer + target, expected, length))
++		return 1;
++	memcpy(buffer + target, data, length);
++	return write_protected(vol, &action->record, buffer,
++		allocation ? vol->indx_record_size : mftrecsz);
++}
++
+ static int redo_update_mapping(ntfs_volume *vol,
+ 			const struct ACTION_RECORD *action, char *buffer)
+ {
+@@ -2913,27 +3033,12 @@
+ 				const struct ACTION_RECORD *action,
+ 				char *buffer __attribute__((unused)))
+ {
+-/*
+-	const char *data;
+-	u32 target;
+-	u32 length;
+-*/
+-	int err;
+-
+ 	if (optv > 1)
+ 		printf("-> %s()\n",__func__);
+-	err = 1;
+-/*
+-	data = ((const char*)&action->record)
+-			+ get_redo_offset(&action->record);
+-	length = le16_to_cpu(action->record.redo_length);
+-	target = le16_to_cpu(action->record.record_offset)
+-		+ le16_to_cpu(action->record.attribute_offset);
+-*/
+-	printf("* Ignored action-37, inode %lld record :\n",
++	fprintf(stderr, "** ZeroEndOfFileRecord has no native before-image; "
++		"refusing undo for inode %lld\n",
+ 			(long long)inode_number(&action->record));
+-	err = 0;
+-	return (err);
++	return 1;
+ }
+ 
+ static int undo_add_index(ntfs_volume *vol,
+@@ -3038,9 +3143,15 @@
+ 	    && !(length & 7)
+ 	    && ((target + length) <= mftrecsz)) {
+ 		/* This has to be an idempotent action */
+-		found = index_match_undo(buffer + target, data, length);
++		/*
++		 * Hardened replay requires the exact entry image logged by the
++		 * corresponding AddIndexEntryRoot action.  The legacy relaxed name
++		 * comparison is intentionally not sufficient for an inverse mutation.
++		 */
++		found = !memcmp(buffer + target, data, length);
+ 		err = 0;
+-		if (found && !older_record(entry, &action->record)) {
++		if (found && (roothealth_semantic_preflight ||
++				!older_record(entry, &action->record))) {
+ 			/* Remove the entry */
+ 			memmove(buffer + target,
+ 				buffer + target + length,
+@@ -3390,7 +3501,7 @@
+ 		wanted = 0;
+ 	else
+ 		wanted = 1;
+-// TODO consistency undo_offset == redo_offset, etc.
++	/* Pair identity and bitmap-range bounds were proved by replay preflight. */
+ // firstbit + count < 8*clustersz (multiple clusters possible ?)
+ 	if (optv > 1) {
+ 		lcn = sle64_to_cpu(action->record.lcn_list[0]);
+@@ -3988,7 +4099,7 @@
+ 			printf("-> existing record :\n");
+ 			dump(&buffer[target], length);
+ 		}
+-		if ((target + length) <= mftrecsz) {
++		if ((target + length) <= vol->indx_record_size) {
+ 			changed = memcmp(buffer + target, data, length);
+ 			err = 0;
+ 			if (changed) {
+@@ -4106,7 +4217,8 @@
+ 	int rop, uop;
+ 	int err;
+ 
+-	err = 0;
++	/* A branch must explicitly prove its pair and assign success. */
++	err = 1;
+ 	rop = le16_to_cpu(action->record.redo_operation);
+ 	uop = le16_to_cpu(action->record.undo_operation);
+ 	switch (rop) {
+@@ -4221,16 +4333,19 @@
+ 			err = redo_update_mapping(vol, action, buffer);
+ 		break;
+ 	case UpdateNonResidentValue :
+-		switch (get_action_kind(action)) {
+-		case ON_INDX :
+-			err = redo_update_index_value(vol, action, buffer);
+-			break;
+-		case ON_RAW :
+-			err = redo_update_value(vol, action, buffer);
+-			break;
+-		default :
+-			printf("** Bad attribute type\n");
+-			err = 1;
++		if (uop == UpdateNonResidentValue ||
++			uop == CompensationlogRecord) {
++			switch (get_action_kind(action)) {
++			case ON_INDX :
++				err = redo_update_index_value(vol, action, buffer);
++				break;
++			case ON_RAW :
++				err = redo_update_value(vol, action, buffer);
++				break;
++			default :
++				printf("** Bad attribute type\n");
++				break;
++			}
+ 		}
+ 		break;
+ 	case UpdateResidentValue :
+@@ -4240,7 +4355,15 @@
+ 			== const_cpu_to_le16(CompensationlogRecord)))
+ 			err = redo_update_resident(vol, action, buffer);
+ 		break;
+-	case Win10Action37 :
++	case UpdateRecordDataRoot :
++		if (uop == UpdateRecordDataRoot)
++			err = update_record_data(vol, action, buffer, FALSE, FALSE);
++		break;
++	case UpdateRecordDataAllocation :
++		if (uop == UpdateRecordDataAllocation)
++			err = update_record_data(vol, action, buffer, FALSE, TRUE);
++		break;
++	case ZeroEndOfFileRecord :
+ 		if (action->record.undo_operation
+ 		    == const_cpu_to_le16(Noop))
+ 			err = redo_action37(vol, action, buffer);
+@@ -4257,24 +4380,33 @@
+ 			== const_cpu_to_le16(CompensationlogRecord)))
+ 			err = redo_write_index(vol, action, buffer);
+ 		break;
+-	case AttributeNamesDump :
+-	case DirtyPageTableDump :
+ 	case ForgetTransaction :
++		if (uop == Noop)
++			err = 0;
++		break;
+ 	case Noop :
+-	case OpenAttributeTableDump :
++		if (uop == Noop)
++			err = 0;
+ 		break;
++	case AttributeNamesDump :
++	case DirtyPageTableDump :
++	case OpenAttributeTableDump :
++	case TransactionTableDump :
+ 	default :
+ 		printf("** Unsupported redo %s\n", actionname(rop));
+-		err = 1;
+ 		break;
+ 	}
+-	redos_met |= ((u64)1) << rop;
++	if (rop >= 0 && rop < 64)
++		redos_met |= ((u64)1) << rop;
+ 	if (err)
+ 		printf("* Redoing action %d %s (%s) failed\n",
+ 			action->num,actionname(rop), actionname(uop));
+ 	return (err);
+ }
+ 
++static int distribute_undos(ntfs_volume *vol,
++		const struct ACTION_RECORD *action, char *buffer);
++
+ /*
+  *		Redo a single action
+  *
+@@ -4325,8 +4457,9 @@
+ 	case UpdateFileNameRoot :
+ 	case UpdateMappingPairs :
+ 	case UpdateResidentValue :
+-	case Win10Action37 :
++	case ZeroEndOfFileRecord :
+ 	case WriteEndofFileRecordSegment :
++	case UpdateRecordDataRoot :
+ 		kind = ON_MFT;
+ 		break;
+ 			/* Actions always acting on INDX */
+@@ -4335,6 +4468,7 @@
+ 	case SetIndexEntryVcnAllocation :
+ 	case UpdateFileNameAllocation :
+ 	case WriteEndOfIndexBuffer :
++	case UpdateRecordDataAllocation :
+ 		kind = ON_INDX;
+ 		break;
+ 			/* Actions never acting on MFT or INDX */
+@@ -4372,10 +4506,8 @@
+ 	case EndTopLevelAction :
+ 	case HotFix :
+ 	case PrepareTransaction :
+-	case UpdateRecordDataAllocation :
+-	case UpdateRecordDataRoot :
+-	case Win10Action35 :
+-	case Win10Action36 :
++	case UpdateRelativeDataInIndex :
++	case UpdateRelativeDataInIndex2 :
+ 	default :
+ 		err = 1;
+ 		kind = ON_NONE;
+@@ -4499,6 +4631,632 @@
+ }
+ 
+ 
++struct roothealth_attr_view {
++	size_t offset;
++	size_t length;
++	size_t value_offset;
++	size_t value_length;
++	size_t mapping_offset;
++	u32 type;
++	int nonresident;
++};
++
++static u16 roothealth_load_u16(const unsigned char *p)
++{
++	return (u16)p[0] | ((u16)p[1] << 8);
++}
++
++static u32 roothealth_load_u32(const unsigned char *p)
++{
++	return (u32)p[0] | ((u32)p[1] << 8) |
++		((u32)p[2] << 16) | ((u32)p[3] << 24);
++}
++
++static u64 roothealth_load_u64(const unsigned char *p)
++{
++	return (u64)roothealth_load_u32(p) |
++		((u64)roothealth_load_u32(p + 4) << 32);
++}
++
++static int roothealth_range(size_t size, size_t offset, size_t length)
++{
++	return offset <= size && length <= size - offset;
++}
++
++static int roothealth_validate_mapping_pairs(const unsigned char *bytes,
++		size_t length)
++{
++	size_t offset = 0;
++
++	while (offset < length) {
++		u8 header = bytes[offset++];
++		size_t run_bytes = header & 0xfU;
++		size_t lcn_bytes = header >> 4;
++		u64 run = 0;
++		size_t i;
++
++		if (!header)
++			return roothealth_all_zero(bytes + offset, length - offset) ? 0 : -1;
++		if (!run_bytes || run_bytes > 8U || lcn_bytes > 8U ||
++			!roothealth_range(length, offset, run_bytes + lcn_bytes))
++			return -1;
++		for (i = 0; i < run_bytes; ++i)
++			run |= (u64)bytes[offset + i] << (8U * i);
++		if (!run)
++			return -1;
++		offset += run_bytes + lcn_bytes;
++	}
++	return -1;
++}
++
++static int roothealth_validate_attribute(const unsigned char *attribute,
++		size_t available, int exact, struct roothealth_attr_view *view)
++{
++	u32 type, length;
++	u8 nonresident, name_length;
++	u16 name_offset;
++	size_t minimum;
++
++	if (!attribute || available < 24U)
++		return -1;
++	type = roothealth_load_u32(attribute);
++	length = roothealth_load_u32(attribute + 4);
++	nonresident = attribute[8];
++	name_length = attribute[9];
++	name_offset = roothealth_load_u16(attribute + 10);
++	if (!type || type == 0xffffffffU || (type & 0xfU) || type > 0x100U ||
++		(nonresident != 0U && nonresident != 1U) || length < 24U ||
++		(length & 7U) || length > available || (exact && length != available))
++		return -1;
++	minimum = nonresident ? 64U : 24U;
++	if (length < minimum || (name_length &&
++		(name_offset < minimum ||
++		 !roothealth_range(length, name_offset, (size_t)name_length * 2U))))
++		return -1;
++	if (view) {
++		memset(view, 0, sizeof(*view));
++		view->length = length;
++		view->type = type;
++		view->nonresident = nonresident;
++	}
++	if (nonresident) {
++		u64 lowest = roothealth_load_u64(attribute + 16);
++		u64 highest = roothealth_load_u64(attribute + 24);
++		u16 mapping = roothealth_load_u16(attribute + 32);
++		u64 allocated = roothealth_load_u64(attribute + 40);
++		u64 data = roothealth_load_u64(attribute + 48);
++		u64 initialized = roothealth_load_u64(attribute + 56);
++
++		if (highest < lowest || mapping < minimum || mapping >= length ||
++			initialized > data || data > allocated ||
++			roothealth_validate_mapping_pairs(attribute + mapping,
++				length - mapping))
++			return -1;
++		if (view)
++			view->mapping_offset = mapping;
++	} else {
++		u32 value_length = roothealth_load_u32(attribute + 16);
++		u16 value_offset = roothealth_load_u16(attribute + 20);
++
++		if (value_offset < minimum ||
++			!roothealth_range(length, value_offset, value_length))
++			return -1;
++		if (view) {
++			view->value_offset = value_offset;
++			view->value_length = value_length;
++		}
++	}
++	return 0;
++}
++
++static int roothealth_validate_mft(const unsigned char *record,
++		size_t available, size_t storage_size, u64 expected_record,
++		int require_in_use, size_t requested_attribute,
++		struct roothealth_attr_view *requested)
++{
++	size_t offset, bytes_in_use;
++	u16 usa_offset, usa_count;
++	int found = requested_attribute == SIZE_MAX;
++
++	if (!record || available < 48U || memcmp(record, "FILE", 4) ||
++		roothealth_load_u32(record + 28) != storage_size ||
++		(expected_record != UINT64_MAX &&
++		 roothealth_load_u32(record + 44) != expected_record) ||
++		!roothealth_load_u16(record + 16) ||
++		(require_in_use && !(roothealth_load_u16(record + 22) & 1U)))
++		return -1;
++	usa_offset = roothealth_load_u16(record + 4);
++	usa_count = roothealth_load_u16(record + 6);
++	if (usa_count != storage_size / bytespersect + 1U ||
++		!roothealth_range(available, usa_offset, (size_t)usa_count * 2U))
++		return -1;
++	offset = roothealth_load_u16(record + 20);
++	bytes_in_use = roothealth_load_u32(record + 24);
++	if ((offset & 7U) || offset < 48U || bytes_in_use > available ||
++		bytes_in_use > storage_size || bytes_in_use < offset + 8U)
++		return -1;
++	while (roothealth_range(bytes_in_use, offset, 8U)) {
++		struct roothealth_attr_view local;
++		u32 type = roothealth_load_u32(record + offset);
++
++		if (type == 0xffffffffU) {
++			if (offset + 8U != bytes_in_use || !found)
++				return -1;
++			return 0;
++		}
++		if (roothealth_validate_attribute(record + offset,
++				bytes_in_use - offset, 0, &local))
++			return -1;
++		local.offset = offset;
++		if (offset == requested_attribute) {
++			if (requested)
++				*requested = local;
++			found = 1;
++		}
++		offset += local.length;
++	}
++	return -1;
++}
++
++static int roothealth_validate_index_entry(const unsigned char *entry,
++		size_t available, size_t *entry_length, int require_node)
++{
++	u16 length, key_length, flags;
++	size_t payload;
++
++	if (!entry || available < 16U)
++		return -1;
++	length = roothealth_load_u16(entry + 8);
++	key_length = roothealth_load_u16(entry + 10);
++	flags = roothealth_load_u16(entry + 12);
++	if (length < 16U || (length & 7U) || length > available ||
++		(flags & ~3U))
++		return -1;
++	payload = length - 16U;
++	if (flags & 1U) {
++		if (payload < 8U)
++			return -1;
++		payload -= 8U;
++	} else if (require_node) {
++		return -1;
++	}
++	if (key_length > payload)
++		return -1;
++	if (entry_length)
++		*entry_length = length;
++	return 0;
++}
++
++static int roothealth_validate_index(const unsigned char *index, size_t size,
++		size_t requested_entry, size_t *requested_length)
++{
++	size_t offset, end;
++	u32 entries_offset, index_length, allocated;
++	u16 usa_offset, usa_count;
++	int found = requested_entry == SIZE_MAX;
++
++	if (!index || size != RH_REPLAY_PAGE_SIZE || memcmp(index, "INDX", 4))
++		return -1;
++	usa_offset = roothealth_load_u16(index + 4);
++	usa_count = roothealth_load_u16(index + 6);
++	if (usa_count != size / bytespersect + 1U ||
++		!roothealth_range(size, usa_offset, (size_t)usa_count * 2U))
++		return -1;
++	entries_offset = roothealth_load_u32(index + 24);
++	index_length = roothealth_load_u32(index + 28);
++	allocated = roothealth_load_u32(index + 32);
++	if (allocated != size - 24U || entries_offset > index_length ||
++		index_length > allocated || (entries_offset & 7U) ||
++		(index_length & 7U) || !roothealth_range(size, 24U, index_length))
++		return -1;
++	offset = 24U + entries_offset;
++	end = 24U + index_length;
++	while (offset < end) {
++		size_t length;
++		u16 flags;
++
++		if (roothealth_validate_index_entry(index + offset, end - offset,
++				&length, 0))
++			return -1;
++		flags = roothealth_load_u16(index + offset + 12);
++		if (offset == requested_entry) {
++			if (requested_length)
++				*requested_length = length;
++			found = 1;
++		}
++		offset += length;
++		if (flags & 2U)
++			return (offset == end && found) ? 0 : -1;
++	}
++	return -1;
++}
++
++struct roothealth_index_root_view {
++	size_t attribute_offset;
++	size_t value_offset;
++	size_t entries_offset;
++	size_t entries_end;
++	u32 indexed_type;
++};
++
++static int roothealth_validate_index_root(const unsigned char *record,
++		size_t record_size, u64 record_number, size_t attribute_offset,
++		size_t requested_entry, size_t *requested_length,
++		struct roothealth_index_root_view *view)
++{
++	struct roothealth_attr_view attr;
++	size_t root_at, header_at, offset, end;
++	u32 entries_offset, index_length, allocated, indexed_type;
++	u8 flags;
++	int found = requested_entry == SIZE_MAX;
++
++	if (roothealth_validate_mft(record, record_size, record_size,
++			record_number, 1, attribute_offset, &attr) || attr.nonresident ||
++		attr.type != 0x90U || attr.value_length < 32U)
++		return -1;
++	root_at = attr.offset + attr.value_offset;
++	if (!roothealth_range(record_size, root_at, attr.value_length))
++		return -1;
++	indexed_type = roothealth_load_u32(record + root_at);
++	if ((indexed_type && ((indexed_type & 0xfU) || indexed_type > 0x100U)) ||
++		roothealth_load_u32(record + root_at + 8U) != RH_REPLAY_PAGE_SIZE ||
++		record[root_at + 12U] != 1U ||
++		!roothealth_all_zero(record + root_at + 13U, 3U))
++		return -1;
++	header_at = root_at + 16U;
++	entries_offset = roothealth_load_u32(record + header_at);
++	index_length = roothealth_load_u32(record + header_at + 4U);
++	allocated = roothealth_load_u32(record + header_at + 8U);
++	flags = record[header_at + 12U];
++	if (entries_offset < 16U || (entries_offset & 7U) ||
++		index_length < entries_offset || (index_length & 7U) ||
++		allocated != index_length || flags > 1U ||
++		!roothealth_all_zero(record + header_at + 13U, 3U) ||
++		attr.value_length != 16U + index_length)
++		return -1;
++	offset = header_at + entries_offset;
++	end = header_at + index_length;
++	if (end > root_at + attr.value_length)
++		return -1;
++	while (offset < end) {
++		size_t length;
++		u16 entry_flags;
++
++		if (roothealth_validate_index_entry(record + offset, end - offset,
++				&length, 0))
++			return -1;
++		entry_flags = roothealth_load_u16(record + offset + 12U);
++		if ((entry_flags & 2U) && roothealth_load_u16(record + offset + 10U))
++			return -1;
++		if (offset == requested_entry) {
++			if (requested_length)
++				*requested_length = length;
++			found = 1;
++		}
++		offset += length;
++		if (entry_flags & 2U) {
++			if (offset != end || !found)
++				return -1;
++			if (view) {
++				view->attribute_offset = attr.offset;
++				view->value_offset = root_at;
++				view->entries_offset = header_at + entries_offset;
++				view->entries_end = end;
++				view->indexed_type = indexed_type;
++			}
++			return 0;
++		}
++	}
++	return -1;
++}
++
++static int roothealth_validate_sizes(const unsigned char *data, size_t length)
++{
++	u64 allocated, file_size, initialized;
++
++	if (!data || (length != 24U && length != 32U))
++		return -1;
++	allocated = roothealth_load_u64(data);
++	file_size = roothealth_load_u64(data + 8);
++	initialized = roothealth_load_u64(data + 16);
++	return (initialized <= file_size && file_size <= allocated) ? 0 : -1;
++}
++
++static int roothealth_validate_mft_tail(const unsigned char *bytes,
++		size_t length)
++{
++	size_t offset = 0;
++
++	if (!bytes || length < 8U || (length & 7U))
++		return -1;
++	while (roothealth_range(length, offset, 8U)) {
++		u32 type = roothealth_load_u32(bytes + offset);
++		struct roothealth_attr_view attr;
++
++		if (type == 0xffffffffU)
++			return offset + 8U == length &&
++				roothealth_all_zero(bytes + offset + 4U, 4U) ? 0 : -1;
++		if (roothealth_validate_attribute(bytes + offset, length - offset,
++				0, &attr))
++			return -1;
++		offset += attr.length;
++	}
++	return -1;
++}
++
++static u64 roothealth_action_record_number(
++		const struct rh_replay_action_view *guarded)
++{
++	return guarded->target_vcn * ((u64)clustersz / mftrecsz) +
++		guarded->target_slice_offset / mftrecsz;
++}
++
++static int roothealth_validate_semantic_target(const struct ACTION_RECORD *action,
++		const unsigned char *target,
++		const struct rh_replay_action_view *guarded, int allow_blank_initialize,
++		int validate_operation)
++{
++	const unsigned char *record = (const unsigned char *)&action->record;
++	const unsigned char *redo = record + guarded->redo_data_offset;
++	const unsigned char *undo = record + guarded->undo_data_offset;
++	struct roothealth_attr_view attr;
++	struct roothealth_index_root_view root_view;
++	size_t target_at = (size_t)guarded->record_offset +
++		guarded->attribute_offset;
++	size_t entry_length;
++	u64 record_number;
++
++	if (!action || !target || !guarded)
++		return -1;
++	switch (guarded->action_class) {
++	case RH_REPLAY_ACTION_MFT_WRITE:
++		record_number = roothealth_action_record_number(guarded);
++		if (allow_blank_initialize && guarded->redo_operation ==
++				InitializeFileRecordSegment &&
++			roothealth_all_zero(target, guarded->target_object_size)) {
++			if (roothealth_validate_mft(redo, guarded->redo_length,
++					guarded->target_object_size, record_number, 0,
++					SIZE_MAX, NULL))
++				return -1;
++		} else if (roothealth_validate_mft(target,
++				guarded->target_object_size, guarded->target_object_size,
++				record_number, 1, SIZE_MAX, NULL)) {
++			return -1;
++		}
++		break;
++	case RH_REPLAY_ACTION_INDX_WRITE:
++		if (roothealth_validate_index(target, guarded->target_object_size,
++				SIZE_MAX, NULL))
++			return -1;
++		break;
++	case RH_REPLAY_ACTION_RAW_WRITE:
++	case RH_REPLAY_ACTION_BITMAP_WRITE:
++		break;
++	default:
++		return -1;
++	}
++	switch (guarded->redo_operation) {
++	case AddIndexEntryRoot:
++	case DeleteIndexEntryRoot:
++	case SetIndexEntryVcnRoot:
++	case UpdateFileNameRoot:
++	case UpdateRecordDataRoot:
++		if (roothealth_validate_index_root(target,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded),
++				guarded->record_offset, SIZE_MAX, NULL, NULL))
++			return -1;
++		break;
++	default:
++		break;
++	}
++	if (!validate_operation)
++		return 0;
++
++	switch (guarded->redo_operation) {
++	case InitializeFileRecordSegment:
++		return 0;
++	case WriteEndofFileRecordSegment: {
++		size_t used = roothealth_load_u32(target + 24U);
++
++		if (guarded->attribute_offset || (guarded->record_offset & 7U) ||
++			guarded->record_offset < roothealth_load_u16(target + 20U) ||
++			guarded->record_offset > used - 8U ||
++			roothealth_validate_mft_tail(target + guarded->record_offset,
++				used - guarded->record_offset) ||
++			roothealth_validate_mft_tail(redo, guarded->redo_length) ||
++			roothealth_validate_mft_tail(undo, guarded->undo_length))
++			return -1;
++		return 0;
++	}
++	case CreateAttribute:
++	case DeleteAttribute: {
++		const unsigned char *payload = guarded->redo_operation ==
++			CreateAttribute ? redo : undo;
++		size_t payload_length = guarded->redo_operation ==
++			CreateAttribute ? guarded->redo_length : guarded->undo_length;
++		size_t bytes_in_use = roothealth_load_u32(target + 24);
++
++		if ((target_at & 7U) || target_at < roothealth_load_u16(target + 20) ||
++			target_at > bytes_in_use - 8U ||
++			roothealth_validate_attribute(payload, payload_length, 1, NULL))
++			return -1;
++		if (guarded->redo_operation == DeleteAttribute &&
++			(roothealth_validate_mft(target, guarded->target_object_size,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded), 1,
++				target_at, &attr) || attr.length != payload_length))
++			return -1;
++		return 0;
++	}
++	case UpdateResidentValue:
++		if (roothealth_validate_mft(target, guarded->target_object_size,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded), 1,
++				guarded->record_offset, &attr) || attr.nonresident ||
++			target_at < attr.offset + attr.value_offset ||
++			!roothealth_range(attr.offset + attr.length, target_at,
++				guarded->redo_length) ||
++			target_at + guarded->redo_length >
++				attr.offset + attr.value_offset + attr.value_length)
++			return -1;
++		return 0;
++	case UpdateNonResidentValue:
++		return 0;
++	case UpdateMappingPairs:
++		if (roothealth_validate_mft(target, guarded->target_object_size,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded), 1,
++				guarded->record_offset, &attr) || !attr.nonresident ||
++				guarded->attribute_offset != attr.mapping_offset ||
++			roothealth_validate_mapping_pairs(redo, guarded->redo_length) ||
++			roothealth_validate_mapping_pairs(undo, guarded->undo_length))
++			return -1;
++		return 0;
++	case SetNewAttributeSizes:
++		if (guarded->attribute_offset ||
++			roothealth_validate_mft(target, guarded->target_object_size,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded), 1,
++				guarded->record_offset, &attr) || !attr.nonresident ||
++			roothealth_validate_sizes(redo, guarded->redo_length) ||
++			roothealth_validate_sizes(undo, guarded->undo_length))
++			return -1;
++		return 0;
++	case AddIndexEntryAllocation:
++	case DeleteIndexEntryAllocation: {
++		const unsigned char *payload = guarded->redo_operation ==
++			AddIndexEntryAllocation ? redo : undo;
++		size_t payload_length = guarded->redo_operation ==
++			AddIndexEntryAllocation ? guarded->redo_length :
++			guarded->undo_length;
++
++		if (guarded->record_offset ||
++			roothealth_validate_index(target, guarded->target_object_size,
++				guarded->attribute_offset, &entry_length) ||
++			roothealth_validate_index_entry(payload, payload_length,
++				&entry_length, 0) || entry_length != payload_length)
++			return -1;
++		return 0;
++	}
++	case AddIndexEntryRoot:
++	case DeleteIndexEntryRoot: {
++		const unsigned char *payload = guarded->redo_operation ==
++			AddIndexEntryRoot ? redo : undo;
++		size_t payload_length = guarded->redo_operation ==
++			AddIndexEntryRoot ? guarded->redo_length : guarded->undo_length;
++		size_t current_length;
++
++		if (roothealth_validate_index_root(target,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded),
++				guarded->record_offset, target_at, &current_length,
++				&root_view) ||
++			roothealth_validate_index_entry(payload, payload_length,
++				&entry_length, 0) || entry_length != payload_length ||
++			(roothealth_load_u16(payload + 12U) & 2U))
++			return -1;
++		if (guarded->redo_operation == DeleteIndexEntryRoot &&
++			current_length != payload_length)
++			return -1;
++		return 0;
++	}
++	case WriteEndOfIndexBuffer:
++		if (guarded->record_offset || (target_at & 7U) ||
++			!roothealth_range(guarded->target_object_size, target_at,
++				guarded->redo_length))
++			return -1;
++		return 0;
++	case SetIndexEntryVcnAllocation:
++		if (guarded->record_offset ||
++			roothealth_validate_index(target, guarded->target_object_size,
++				guarded->attribute_offset, &entry_length) ||
++			roothealth_validate_index_entry(target + guarded->attribute_offset,
++				entry_length, NULL, 1))
++			return -1;
++		return 0;
++	case SetIndexEntryVcnRoot:
++		if (roothealth_validate_index_root(target,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded),
++				guarded->record_offset, target_at, &entry_length,
++				&root_view) ||
++			roothealth_validate_index_entry(target + target_at,
++				entry_length, NULL, 1))
++			return -1;
++		return 0;
++	case UpdateFileNameRoot:
++		if (guarded->redo_length != 56U || guarded->undo_length != 56U ||
++			roothealth_validate_index_root(target,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded),
++				guarded->record_offset, target_at, &entry_length,
++				&root_view) || root_view.indexed_type != 0x30U ||
++			(roothealth_load_u16(target + target_at + 12U) & 2U) ||
++			roothealth_load_u16(target + target_at + 10U) < 66U ||
++			!roothealth_range(entry_length, 24U, 56U))
++			return -1;
++		return 0;
++	case UpdateFileNameAllocation:
++		if (guarded->redo_length != 56U || guarded->undo_length != 56U ||
++			guarded->record_offset ||
++			roothealth_validate_index(target, guarded->target_object_size,
++				guarded->attribute_offset, &entry_length) ||
++			(roothealth_load_u16(target + guarded->attribute_offset + 12U) & 2U) ||
++			roothealth_load_u16(target + guarded->attribute_offset + 10U) < 66U ||
++			!roothealth_range(entry_length, 24U, 56U))
++			return -1;
++		return 0;
++	case SetBitsInNonResidentBitMap:
++	case ClearBitsInNonResidentBitMap:
++		return 0;
++	case UpdateRecordDataAllocation:
++	{
++		u16 data_offset, data_length;
++
++		if (guarded->record_offset ||
++			roothealth_validate_index(target, guarded->target_object_size,
++				guarded->attribute_offset, &entry_length) ||
++			guarded->redo_length != guarded->undo_length ||
++			!guarded->redo_length)
++			return -1;
++		data_offset = roothealth_load_u16(target + guarded->attribute_offset);
++		data_length = roothealth_load_u16(target + guarded->attribute_offset + 2U);
++		if (data_offset < 16U || data_offset > entry_length ||
++			data_length > entry_length - data_offset ||
++			guarded->redo_length > data_length)
++			return -1;
++		return 0;
++	}
++	case UpdateRecordDataRoot: {
++		u16 data_offset, data_length;
++
++		if (roothealth_validate_index_root(target,
++				guarded->target_object_size,
++				roothealth_action_record_number(guarded),
++				guarded->record_offset, target_at, &entry_length,
++				&root_view) || root_view.indexed_type ||
++			(guarded->redo_length != guarded->undo_length) ||
++			!guarded->redo_length)
++			return -1;
++		data_offset = roothealth_load_u16(target + target_at);
++		data_length = roothealth_load_u16(target + target_at + 2U);
++		if (data_offset < 16U || data_offset > entry_length ||
++			data_length > entry_length - data_offset ||
++			guarded->redo_length > data_length)
++			return -1;
++		return 0;
++	}
++	case ZeroEndOfFileRecord:
++		if (target_at < roothealth_load_u32(target + 24U) ||
++			target_at + guarded->redo_length != guarded->target_object_size)
++			return -1;
++		return 0;
++	default:
++		return -1;
++	}
++}
++
+ /*
+  *		Play the redo actions from earliest to latest
+  *
+@@ -4506,90 +5264,458 @@
+  *	otherwise the attribute table would be out of phase.
+  */
+ 
+-static int roothealth_preflight_resident_redo(ntfs_volume *vol,
+-		const struct ACTION_RECORD *action)
++static int roothealth_semantic_cycle(ntfs_volume *vol,
++		const struct ACTION_RECORD *action, unsigned char *target,
++		const struct rh_replay_action_view *guarded)
++{
++	unsigned char *work = NULL;
++	const unsigned char *redo_data;
++	size_t value_offset;
++	int err = -1;
++
++	if (!target || !guarded || !guarded->target_object_size ||
++		roothealth_validate_semantic_target(action, target, guarded, 1, 1))
++		return -1;
++	redo_data = (const unsigned char *)&action->record +
++		guarded->redo_data_offset;
++	value_offset = (size_t)guarded->record_offset + guarded->attribute_offset;
++	if (guarded->redo_operation == InitializeFileRecordSegment) {
++		const MFT_RECORD *record = (const MFT_RECORD *)target;
++
++		if (guarded->action_class != RH_REPLAY_ACTION_MFT_WRITE ||
++			guarded->undo_operation != Noop ||
++			((record->flags & MFT_RECORD_IN_USE) &&
++			 memcmp(target + value_offset, redo_data,
++				guarded->redo_length)))
++			return -1;
++		work = (unsigned char *)malloc(guarded->target_object_size);
++		if (!work)
++			return -1;
++		memcpy(work, target, guarded->target_object_size);
++		roothealth_semantic_preflight = 1;
++		err = distribute_redos(vol, action, (char *)work) ||
++			roothealth_validate_semantic_target(action, work, guarded, 0, 0);
++		roothealth_semantic_preflight = 0;
++		free(work);
++		return err ? -1 : 0;
++	}
++	if (guarded->redo_operation == ZeroEndOfFileRecord) {
++		if (guarded->action_class != RH_REPLAY_ACTION_MFT_WRITE ||
++			guarded->undo_operation != Noop)
++			return -1;
++		work = (unsigned char *)malloc(guarded->target_object_size);
++		if (!work)
++			return -1;
++		memcpy(work, target, guarded->target_object_size);
++		roothealth_semantic_preflight = 1;
++		err = distribute_redos(vol, action, (char *)work) ||
++			roothealth_validate_semantic_target(action, work, guarded, 0, 0) ||
++			memcmp(work, target, value_offset) ||
++			!roothealth_all_zero(work + value_offset,
++				guarded->target_object_size - value_offset);
++		roothealth_semantic_preflight = 0;
++		free(work);
++		return err ? -1 : 0;
++	}
++	if (guarded->undo_operation == Noop ||
++		guarded->undo_operation == CompensationlogRecord)
++		return -1;
++	work = (unsigned char *)malloc(guarded->target_object_size);
++	if (!work)
++		return -1;
++
++	/* Before image: redo followed by inverse undo must restore every byte. */
++	memcpy(work, target, guarded->target_object_size);
++	roothealth_semantic_preflight = 1;
++	if (!distribute_redos(vol, action, (char *)work) &&
++		!roothealth_validate_semantic_target(action, work, guarded, 0, 0) &&
++		!distribute_undos(vol, action, (char *)work) &&
++		!roothealth_validate_semantic_target(action, work, guarded, 0, 0) &&
++		!memcmp(work, target, guarded->target_object_size))
++		err = 0;
++	roothealth_semantic_preflight = 0;
++	if (!err)
++		goto out;
++
++	/* After image: inverse undo followed by redo must restore every byte. */
++	memcpy(work, target, guarded->target_object_size);
++	roothealth_semantic_preflight = 1;
++	if (!distribute_undos(vol, action, (char *)work) &&
++		!roothealth_validate_semantic_target(action, work, guarded, 0, 0) &&
++		!distribute_redos(vol, action, (char *)work) &&
++		!roothealth_validate_semantic_target(action, work, guarded, 0, 0) &&
++		!memcmp(work, target, guarded->target_object_size))
++		err = 0;
++	roothealth_semantic_preflight = 0;
++out:
++	free(work);
++	return err;
++}
++
++struct roothealth_preflight_target {
++	struct roothealth_preflight_target *next;
++	enum rh_replay_action_class action_class;
++	uint64_t first_lcn;
++	size_t target_slice_offset;
++	size_t target_object_size;
++	unsigned char *bytes;
++};
++
++static void roothealth_free_preflight_targets(
++		struct roothealth_preflight_target *target)
+ {
+-	const LOG_RECORD *record = &action->record;
+-	uint64_t client_end = (uint64_t)le32_to_cpu(record->client_data_length) +
+-		LOG_RECORD_HEAD_SZ;
+-	uint64_t redo = get_redo_offset(record);
+-	uint64_t undo = get_undo_offset(record);
+-	uint64_t redo_length = le16_to_cpu(record->redo_length);
+-	uint64_t undo_length = le16_to_cpu(record->undo_length);
+-	uint64_t record_offset = le16_to_cpu(record->record_offset);
+-	uint64_t attribute_offset = le16_to_cpu(record->attribute_offset);
+-	uint64_t target_vcn;
+-	uint64_t cluster_index = le16_to_cpu(record->cluster_index);
+-	LCN expected_lcn;
++	while (target) {
++		struct roothealth_preflight_target *next = target->next;
++		free(target->bytes);
++		free(target);
++		target = next;
++	}
++}
++
++static int roothealth_attribute_target_matches(ntfs_volume *vol,
++		const struct ACTION_RECORD *action,
++		const struct rh_replay_action_view *guarded)
++{
++	struct ATTR *pa;
++	ntfs_inode *ni = NULL;
++	ntfs_attr *na = NULL;
++	ATTR_TYPES type;
++	LCN expected;
++	uint64_t stream_at;
++	uint64_t stream_bytes;
++	int result = -1;
++	int is_i30;
+ 
+-	if (record->record_type != LOG_STANDARD || !record->transaction_id ||
+-		record->undo_operation != const_cpu_to_le16(UpdateResidentValue) ||
+-		record->attribute_flags != ACTS_ON_MFT ||
+-		le16_to_cpu(record->lcns_to_follow) != 1 ||
+-		le16_to_cpu(record->target_attribute) != 0 ||
+-		!redo_length || redo_length != undo_length ||
+-		redo > client_end || redo_length > client_end - redo ||
+-		undo > client_end || undo_length > client_end - undo ||
+-		record_offset > UINT64_MAX - attribute_offset ||
+-		record_offset + attribute_offset > mftrecsz ||
+-		redo_length > mftrecsz - (record_offset + attribute_offset) ||
+-		clustersz != ROOTHEALTH_SUPPORTED_CLUSTER_SIZE ||
+-		mftrecsz > clustersz || cluster_index >
+-			(clustersz - mftrecsz) / NTFS_BLOCK_SIZE)
++	if (!vol || !action || !guarded || guarded->lcn_count != 1U)
+ 		return -1;
+-	if (sle64_to_cpu(record->target_vcn) < 0 ||
+-		sle64_to_cpu(record->lcn_list[0]) < 0)
++	pa = findattrentry(le16_to_cpu(action->record.target_attribute));
++	if (!pa || !pa->type || !pa->reference || (pa->namelen & 1U))
+ 		return -1;
+-	target_vcn = (uint64_t)sle64_to_cpu(record->target_vcn);
+-	expected_lcn = roothealth_attr_vcn_to_lcn(vol->mft_na, (VCN)target_vcn);
+-	if (expected_lcn < 0 || expected_lcn !=
+-			sle64_to_cpu(record->lcn_list[0]) ||
+-		(uint64_t)expected_lcn >= (uint64_t)vol->nr_clusters)
++	type = (ATTR_TYPES)pa->type;
++	is_i30 = pa->namelen == 8U &&
++		le16_to_cpu(pa->name[0]) == '$' &&
++		le16_to_cpu(pa->name[1]) == 'I' &&
++		le16_to_cpu(pa->name[2]) == '3' &&
++		le16_to_cpu(pa->name[3]) == '0';
++	if (guarded->action_class == RH_REPLAY_ACTION_MFT_WRITE) {
++		if (type != AT_DATA || MREF(pa->reference) != FILE_MFT ||
++			pa->namelen || pa->bytes_per_index)
++			return -1;
++	} else if (guarded->action_class == RH_REPLAY_ACTION_INDX_WRITE) {
++		if (type != AT_INDEX_ALLOCATION ||
++			pa->bytes_per_index != vol->indx_record_size)
++			return -1;
++		if ((guarded->redo_operation == UpdateFileNameAllocation && !is_i30) ||
++			(guarded->redo_operation == UpdateRecordDataAllocation && is_i30))
++			return -1;
++	} else if (guarded->action_class != RH_REPLAY_ACTION_RAW_WRITE &&
++		guarded->action_class != RH_REPLAY_ACTION_BITMAP_WRITE) {
+ 		return -1;
+-	return 0;
++	} else if (type == AT_INDEX_ALLOCATION) {
++		return -1;
++	}
++	if (guarded->action_class == RH_REPLAY_ACTION_RAW_WRITE &&
++		(type == AT_BITMAP || MREF(pa->reference) == FILE_MFT ||
++		 MREF(pa->reference) == FILE_MFTMirr ||
++		 MREF(pa->reference) == FILE_Bitmap))
++		return -1;
++	if (guarded->action_class == RH_REPLAY_ACTION_BITMAP_WRITE &&
++		type != AT_BITMAP &&
++		!(type == AT_DATA && MREF(pa->reference) == FILE_Bitmap))
++		return -1;
++	/* $LogFile may never be a replay mutation target. */
++	if (MREF(pa->reference) == FILE_LogFile)
++		return -1;
++	ni = ntfs_inode_open(vol, (MFT_REF)pa->reference);
++	if (!ni)
++		goto out;
++	na = ntfs_attr_open(ni, type,
++		pa->namelen ? pa->name : AT_UNNAMED, pa->namelen / 2U);
++	if (!na || !NAttrNonResident(na))
++		goto out;
++	if (na->allocated_size < 0 || na->data_size < 0 ||
++		guarded->target_vcn > UINT64_MAX / clustersz)
++		goto out;
++	stream_at = guarded->target_vcn * clustersz;
++	if (stream_at > (uint64_t)na->allocated_size ||
++		clustersz > (uint64_t)na->allocated_size - stream_at)
++		goto out;
++	expected = roothealth_attr_vcn_to_lcn(na, (VCN)guarded->target_vcn);
++	if (expected < 0 || expected != (LCN)guarded->first_lcn)
++		goto out;
++	if (guarded->action_class == RH_REPLAY_ACTION_BITMAP_WRITE) {
++		const unsigned char *record =
++			(const unsigned char *)&action->record;
++		uint64_t first = getle32((const char *)record,
++			(int)guarded->redo_data_offset);
++		uint64_t count = getle32((const char *)record,
++			(int)guarded->redo_data_offset + 4);
++
++		if (stream_at >= (uint64_t)na->data_size)
++			goto out;
++		stream_bytes = (uint64_t)na->data_size - stream_at;
++		if (stream_bytes > clustersz)
++			stream_bytes = clustersz;
++		if (first >= stream_bytes * 8U ||
++			count > stream_bytes * 8U - first)
++			goto out;
++	}
++	result = 0;
++out:
++	if (na)
++		ntfs_attr_close(na);
++	if (ni)
++		ntfs_inode_close(ni);
++	return result;
++}
++
++static struct roothealth_preflight_target *roothealth_get_preflight_target(
++		ntfs_volume *vol, const struct ACTION_RECORD *action,
++		const struct rh_replay_action_view *guarded,
++		struct roothealth_preflight_target **targets)
++{
++	struct roothealth_preflight_target *target;
++	const LOG_RECORD *record = &action->record;
++	LCN expected_lcn;
++
++	/* Bind every action, including cache hits, to its owning open attribute. */
++	switch (guarded->action_class) {
++	case RH_REPLAY_ACTION_MFT_WRITE:
++	case RH_REPLAY_ACTION_INDX_WRITE:
++	case RH_REPLAY_ACTION_RAW_WRITE:
++	case RH_REPLAY_ACTION_BITMAP_WRITE:
++		if (roothealth_attribute_target_matches(vol, action, guarded))
++			return NULL;
++		break;
++	default:
++		return NULL;
++	}
++	for (target = *targets; target; target = target->next)
++		if (target->action_class == guarded->action_class &&
++			target->first_lcn == guarded->first_lcn &&
++			target->target_slice_offset == guarded->target_slice_offset &&
++			target->target_object_size == guarded->target_object_size)
++			return target;
++	target = (struct roothealth_preflight_target *)calloc(1, sizeof(*target));
++	if (!target)
++		return NULL;
++	target->action_class = guarded->action_class;
++	target->first_lcn = guarded->first_lcn;
++	target->target_slice_offset = guarded->target_slice_offset;
++	target->target_object_size = guarded->target_object_size;
++	switch (guarded->action_class) {
++	case RH_REPLAY_ACTION_MFT_WRITE: {
++		uint64_t record_number;
++		unsigned char *raw = NULL;
++		const MFT_RECORD *entry;
++
++		expected_lcn = roothealth_attr_vcn_to_lcn(vol->mft_na,
++			(VCN)guarded->target_vcn);
++		if (expected_lcn < 0 || expected_lcn != (LCN)guarded->first_lcn)
++			goto fail;
++		record_number = guarded->target_vcn *
++			((uint64_t)clustersz / mftrecsz) +
++			guarded->target_slice_offset / mftrecsz;
++		if (vol->mft_na->initialized_size < 0 ||
++			vol->mft_na->allocated_size < 0 ||
++			(guarded->redo_operation == InitializeFileRecordSegment ?
++			 (record_number != (uint64_t)vol->mft_na->initialized_size /
++				mftrecsz ||
++			  record_number >= (uint64_t)vol->mft_na->allocated_size /
++				mftrecsz) :
++			 (record_number >= (uint64_t)vol->mft_na->initialized_size /
++				mftrecsz)))
++			goto fail;
++		if (record_number < 4U) {
++			LCN mirror_lcn = roothealth_attr_vcn_to_lcn(vol->mftmirr_na,
++				(VCN)guarded->target_vcn);
++			if (mirror_lcn < 0 || mirror_lcn == expected_lcn ||
++				(uint64_t)mirror_lcn >= (uint64_t)vol->nr_clusters)
++				goto fail;
++		}
++		target->bytes = (unsigned char *)read_protected(vol, record,
++			mftrecsz, guarded->redo_operation !=
++			InitializeFileRecordSegment);
++		if (!target->bytes && guarded->redo_operation ==
++				InitializeFileRecordSegment &&
++			!roothealth_validate_mft(
++				(const unsigned char *)record + guarded->redo_data_offset,
++				guarded->redo_length, mftrecsz, record_number, 0,
++				SIZE_MAX, NULL)) {
++			raw = (unsigned char *)read_raw(vol, record);
++			if (raw && roothealth_all_zero(raw +
++					guarded->target_slice_offset, mftrecsz)) {
++				entry = (const MFT_RECORD *)((const unsigned char *)record +
++					guarded->redo_data_offset);
++				if (le32_to_cpu(entry->mft_record_number) == record_number &&
++					le16_to_cpu(entry->sequence_number))
++				target->bytes = (unsigned char *)calloc(1, mftrecsz);
++			}
++			free(raw);
++		}
++		if (target->bytes && guarded->redo_operation !=
++				InitializeFileRecordSegment) {
++			entry = (const MFT_RECORD *)target->bytes;
++			if (entry->magic != magic_FILE ||
++				le32_to_cpu(entry->mft_record_number) != record_number ||
++				!le16_to_cpu(entry->sequence_number) ||
++				!(le16_to_cpu(entry->flags) & MFT_RECORD_IN_USE)) {
++				free(target->bytes);
++				target->bytes = NULL;
++			}
++		}
++		break;
++	}
++	case RH_REPLAY_ACTION_INDX_WRITE:
++		target->bytes = (unsigned char *)read_protected(vol, record,
++			vol->indx_record_size, TRUE);
++		break;
++	case RH_REPLAY_ACTION_RAW_WRITE:
++	case RH_REPLAY_ACTION_BITMAP_WRITE:
++		target->bytes = (unsigned char *)read_raw(vol, record);
++		break;
++	default:
++		goto fail;
++	}
++	if (!target->bytes)
++		goto fail;
++	target->next = *targets;
++	*targets = target;
++	return target;
++fail:
++	free(target->bytes);
++	free(target);
++	return NULL;
++}
++
++static int roothealth_preflight_sequence(ntfs_volume *vol,
++		const struct ACTION_RECORD *firstaction)
++{
++	struct roothealth_preflight_target *targets = NULL;
++	const struct ACTION_RECORD *action;
++	const struct ACTION_RECORD *lastaction = NULL;
++	struct rh_replay_geometry geometry;
++	int err = -1;
++
++	memset(&geometry, 0, sizeof(geometry));
++	geometry.page_size = blocksz;
++	geometry.cluster_size = clustersz;
++	geometry.mft_record_size = mftrecsz;
++	geometry.index_record_size = vol->indx_record_size;
++	geometry.logfile_size = logfilesz;
++	geometry.volume_clusters = vol->nr_clusters;
++	geometry.sequence_bits = le32_to_cpu(restart.seq_number_bits);
++	geometry.client_sequence = le16_to_cpu(client.seq_number);
++	geometry.client_index = 0U;
++	for (action = firstaction; action; action = action->next) {
++		struct rh_replay_action_view guarded;
++		struct roothealth_preflight_target *target;
++		size_t record_size = (size_t)le32_to_cpu(
++			action->record.client_data_length) + LOG_RECORD_HEAD_SZ;
++
++		lastaction = action;
++		if (rh_replay_guard_action((const unsigned char *)&action->record,
++				record_size, &geometry, RH_REPLAY_SOURCE_UNKNOWN, &guarded))
++			goto out;
++		if (!(action->flags & ACTION_TO_REDO))
++			continue;
++		target = roothealth_get_preflight_target(vol, action, &guarded,
++			&targets);
++		if (!target || roothealth_semantic_cycle(vol, action, target->bytes,
++				&guarded))
++			goto out;
++		roothealth_semantic_preflight = 1;
++		if (distribute_redos(vol, action, (char *)target->bytes)) {
++			roothealth_semantic_preflight = 0;
++			goto out;
++		}
++		roothealth_semantic_preflight = 0;
++	}
++	for (action = lastaction; action; action = action->prev) {
++		struct rh_replay_action_view guarded;
++		struct roothealth_preflight_target *target;
++		size_t record_size;
++
++		if (!(action->flags & ACTION_TO_UNDO))
++			continue;
++		record_size = (size_t)le32_to_cpu(action->record.client_data_length) +
++			LOG_RECORD_HEAD_SZ;
++		if (rh_replay_guard_action((const unsigned char *)&action->record,
++				record_size, &geometry, RH_REPLAY_SOURCE_UNKNOWN, &guarded))
++			goto out;
++		target = roothealth_get_preflight_target(vol, action, &guarded,
++			&targets);
++		if (!target)
++			goto out;
++		roothealth_semantic_preflight = 1;
++		if (distribute_undos(vol, action, (char *)target->bytes)) {
++			roothealth_semantic_preflight = 0;
++			goto out;
++		}
++		roothealth_semantic_preflight = 0;
++	}
++	err = 0;
++out:
++	roothealth_semantic_preflight = 0;
++	roothealth_free_preflight_targets(targets);
++	return err;
+ }
+ 
+ static int roothealth_preflight_redos(ntfs_volume *vol,
+ 		const struct ACTION_RECORD *firstaction)
+ {
+ 	const struct ACTION_RECORD *action;
+-	le32 transaction_id = 0;
+-	unsigned int resident_count = 0, forget_count = 0;
++	unsigned int data_count = 0;
++	unsigned int action_count = 0;
+ 
+ 	for (action = firstaction; action; action = action->next) {
+ 		const LOG_RECORD *record = &action->record;
+-		uint16_t redo;
+-
+-		if (!(action->flags & ACTION_TO_REDO))
+-			continue;
+-		redo = le16_to_cpu(record->redo_operation);
+-		if (!transaction_id)
+-			transaction_id = record->transaction_id;
+-		if (!record->transaction_id || record->transaction_id != transaction_id)
+-			return -1;
+-		switch (redo) {
+-		case UpdateResidentValue:
+-			if (++resident_count != 1 ||
+-				roothealth_preflight_resident_redo(vol, action))
++		struct rh_replay_geometry geometry;
++		struct rh_replay_action_view guarded;
++		size_t record_size =
++			(size_t)le32_to_cpu(record->client_data_length) +
++			LOG_RECORD_HEAD_SZ;
++
++		memset(&geometry, 0, sizeof(geometry));
++		geometry.page_size = blocksz;
++		geometry.cluster_size = clustersz;
++		geometry.mft_record_size = mftrecsz;
++		geometry.index_record_size = vol->indx_record_size;
++		geometry.logfile_size = logfilesz;
++		geometry.volume_clusters = vol->nr_clusters;
++		geometry.sequence_bits = le32_to_cpu(restart.seq_number_bits);
++		geometry.client_sequence = le16_to_cpu(client.seq_number);
++		geometry.client_index = 0U;
++		if (++action_count > RH_REPLAY_MAX_ACTIONS ||
++			rh_replay_guard_action((const unsigned char *)record,
++				record_size, &geometry, RH_REPLAY_SOURCE_UNKNOWN,
++				&guarded) || guarded.this_lsn < synced_lsn ||
++			guarded.this_lsn > latest_lsn)
++			return -1;
++		switch (guarded.action_class) {
++		case RH_REPLAY_ACTION_MFT_WRITE:
++		case RH_REPLAY_ACTION_INDX_WRITE:
++		case RH_REPLAY_ACTION_RAW_WRITE:
++		case RH_REPLAY_ACTION_BITMAP_WRITE:
++			if (!(action->flags & ACTION_TO_REDO))
++				return -1;
++			if (++data_count > RH_REPLAY_MAX_ACTIONS - 1U)
+ 				return -1;
+ 			break;
+-		case ForgetTransaction:
+-			if (++forget_count != 1 || record->record_type != LOG_STANDARD ||
+-				record->undo_operation != const_cpu_to_le16(Noop) ||
+-				le32_to_cpu(record->client_data_length) != 0x28 ||
+-				record->redo_length || record->undo_length ||
+-				record->redo_offset || record->undo_offset ||
+-				record->target_attribute || record->lcns_to_follow ||
+-				record->record_offset || record->attribute_offset ||
+-				record->cluster_index || record->attribute_flags ||
+-				record->target_vcn)
++		case RH_REPLAY_ACTION_CHECKPOINT:
++		case RH_REPLAY_ACTION_CONTROL:
++		case RH_REPLAY_ACTION_TRANSACTION_END:
++			if (action->flags & (ACTION_TO_REDO | ACTION_TO_UNDO))
+ 				return -1;
+ 			break;
+ 		default:
+ 			return -1;
+ 		}
+ 	}
+-	return resident_count == 1 && forget_count == 1 ? 0 : -1;
++	if (!data_count || !action_count)
++		return -1;
++	/* Resolve and simulate every target only after the pure structural pass. */
++	return roothealth_preflight_sequence(vol, firstaction);
+ }
+ 
+ int play_redos(ntfs_volume *vol, const struct ACTION_RECORD *firstaction)
+@@ -4616,7 +5742,7 @@
+ 	int rop, uop;
+ 	int err;
+ 
+-	err = 0;
++	err = 1;
+ 	rop = le16_to_cpu(action->record.redo_operation);
+ 	uop = le16_to_cpu(action->record.undo_operation);
+ 	switch (rop) {
+@@ -4706,16 +5832,18 @@
+ 			err = undo_update_mapping(vol, action, buffer);
+ 		break;
+ 	case UpdateNonResidentValue :
+-		switch (get_action_kind(action)) {
+-		case ON_INDX :
+-			err = undo_update_index_value(vol, action, buffer);
+-			break;
+-		case ON_RAW :
+-			err = undo_update_value(vol, action, buffer);
+-			break;
+-		default :
+-			printf("** Bad attribute type\n");
+-			err = 1;
++		if (uop == UpdateNonResidentValue) {
++			switch (get_action_kind(action)) {
++			case ON_INDX :
++				err = undo_update_index_value(vol, action, buffer);
++				break;
++			case ON_RAW :
++				err = undo_update_value(vol, action, buffer);
++				break;
++			default :
++				printf("** Bad attribute type\n");
++				break;
++			}
+ 		}
+ 		break;
+ 	case UpdateResidentValue :
+@@ -4723,7 +5851,15 @@
+ 		    == const_cpu_to_le16(UpdateResidentValue))
+ 			err = undo_update_resident(vol, action, buffer);
+ 		break;
+-	case Win10Action37 :
++	case UpdateRecordDataRoot :
++		if (uop == UpdateRecordDataRoot)
++			err = update_record_data(vol, action, buffer, TRUE, FALSE);
++		break;
++	case UpdateRecordDataAllocation :
++		if (uop == UpdateRecordDataAllocation)
++			err = update_record_data(vol, action, buffer, TRUE, TRUE);
++		break;
++	case ZeroEndOfFileRecord :
+ 		if (action->record.undo_operation
+ 		    == const_cpu_to_le16(Noop))
+ 			err = undo_action37(vol, action, buffer);
+@@ -4800,8 +5936,9 @@
+ 	case UpdateFileNameRoot :
+ 	case UpdateMappingPairs :
+ 	case UpdateResidentValue :
+-	case Win10Action37 :
++	case ZeroEndOfFileRecord :
+ 	case WriteEndofFileRecordSegment :
++	case UpdateRecordDataRoot :
+ 		kind = ON_MFT;
+ 		break;
+ 			/* Actions always acting on INDX */
+@@ -4810,6 +5947,7 @@
+ 	case SetIndexEntryVcnAllocation :
+ 	case UpdateFileNameAllocation :
+ 	case WriteEndOfIndexBuffer :
++	case UpdateRecordDataAllocation :
+ 		kind = ON_INDX;
+ 		break;
+ 			/* Actions never acting on MFT or INDX */
+@@ -4843,10 +5981,8 @@
+ 	case OpenAttributeTableDump :
+ 	case PrepareTransaction :
+ 	case TransactionTableDump :
+-	case UpdateRecordDataAllocation :
+-	case UpdateRecordDataRoot :
+-	case Win10Action35 :
+-	case Win10Action36 :
++	case UpdateRelativeDataInIndex :
++	case UpdateRelativeDataInIndex2 :
+ 		kind = ON_NONE;
+ 		break;
+ 	}
+@@ -4988,7 +6124,8 @@
+ 	err = 0;
+ 	action = lastaction;
+ 	while (action && !err) {
+-		if (!optc || within_lcn_range(&action->record))
++		if ((action->flags & ACTION_TO_UNDO) &&
++			(!optc || within_lcn_range(&action->record)))
+ 			err = play_one_undo(vol, action);
+ 		if (!err)
+ 			action = action->prev;
+--- a/src/roothealth_recover.h
++++ b/src/roothealth_recover.h
+@@ -76,9 +76,9 @@
+ 	TransactionTableDump,			/* 32 */
+ 	UpdateRecordDataRoot,			/* 33 */
+ 	UpdateRecordDataAllocation,		/* 34 */
+-	Win10Action35,				/* 35 */
+-	Win10Action36,				/* 36 */
+-	Win10Action37,				/* 37 */
++	UpdateRelativeDataInIndex,		/* 35 */
++	UpdateRelativeDataInIndex2,		/* 36 */
++	ZeroEndOfFileRecord,			/* 37 */
+ 	LastAction				/* 38 */
+ } ;
+ 
+@@ -105,12 +105,15 @@
+ } ;
+ 
+ enum {		/* Flag values for ACTION_RECORD */
+-	ACTION_TO_REDO = 1	/* Committed, possibly not synced */
++	ACTION_TO_REDO = 1,	/* Committed, possibly not synced */
++	ACTION_TO_UNDO = 2	/* Active/loser transaction */
+ 	} ;
+ 
+ struct ATTR {
+ 	u64 inode;
++	u64 reference;
+ 	u64 lsn;
++	u32 bytes_per_index;
+ 	le32 type;
+ 	u16 key;
+ 	u16 namelen;
+@@ -142,16 +145,42 @@
+ extern u64 latest_lsn;
+ extern u64 restart_lsn;
+ 
++enum rh_native_log_state {
++	RH_NATIVE_LOG_UNKNOWN = 0,
++	RH_NATIVE_LOG_CLEAN_RESTART,
++	RH_NATIVE_LOG_REPLAY_PLANNED,
++	RH_NATIVE_LOG_EMPTY_T1OS
++};
++
+ struct rh_log_result {
++	enum rh_native_log_state state;
++	int checked;
+ 	int major_version;
+ 	int minor_version;
++	u64 logfile_bytes;
+ 	u64 restart_lsn;
+ 	u64 synced_lsn;
+ 	u64 committed_lsn;
+ 	u64 latest_lsn;
++	unsigned int pages_expected;
++	unsigned int pages_examined;
++	unsigned int wiped_pages_scanned;
++	unsigned int checkpoint_records_examined;
++	unsigned int control_records_examined;
++	unsigned int mutation_records_examined;
++	unsigned int open_attribute_tables;
++	unsigned int attribute_name_tables;
++	unsigned int dirty_page_tables;
++	unsigned int transaction_tables;
+ 	unsigned int actions_seen;
+ 	unsigned int redo_actions;
++	unsigned int undo_actions;
+ 	unsigned int restart_pages_planned;
++	unsigned int unsupported_actions;
++	unsigned int io_errors;
++	unsigned int parse_errors;
++	size_t planned_io_operations;
++	u64 planned_io_bytes;
+ };
+ 
+ extern struct rh_writer *rh_replay_writer;
+@@ -168,6 +197,7 @@
+ int fixnamelen(const char *name, int len);
+ BOOL within_lcn_range(const LOG_RECORD *logr);
+ struct ATTR *getattrentry(unsigned int key, unsigned int lth);
++struct ATTR *findattrentry(unsigned int key);
+ void copy_attribute(struct ATTR *pa, const char *buf, int length);
+ u32 get_undo_offset(const LOG_RECORD *logr);
+ u32 get_redo_offset(const LOG_RECORD *logr);
+--- a/src/Makefile.am
++++ b/src/Makefile.am
+@@ -69,7 +69,9 @@
+ roothealth_repair_core_SOURCES = roothealth_repair_main.c \
+ 	roothealth_repair.c roothealth_repair.h roothealth_write.c \
+ 	roothealth_write.h roothealth_recover.c roothealth_recover.h \
+-	roothealth_playlog.c utils.c utils.h
++	roothealth_playlog.c roothealth_replay_guard.c \
++	roothealth_replay_guard.h roothealth_replay_analysis.c \
++	roothealth_replay_analysis.h utils.c utils.h
+ roothealth_repair_core_LDADD = $(AM_LIBS)
+ roothealth_repair_core_LDFLAGS = $(AM_LFLAGS)
+ 
+--- /dev/null
++++ b/src/roothealth_replay_guard.c
+@@ -0,0 +1,545 @@
++/*
++ * Fail-closed, side-effect-free structural gate for T1OS native $LogFile
++ * replay.  This translation unit deliberately has no ntfs-3g dependency so
++ * the hostile-input boundary can be fuzzed with ASan/UBSan in isolation.
++ */
++#include "roothealth_replay_guard.h"
++
++#include <limits.h>
++#include <string.h>
++
++#define RH_LOG_STANDARD 1U
++#define RH_LOG_CHECKPOINT 2U
++#define RH_ACTS_ON_MFT 2U
++#define RH_LOG_RECORD_HEADER_SIZE 48U
++#define RH_LOG_RECORD_FIXED_SIZE 80U
++#define RH_RCRD_HEADER_SIZE 40U
++#define RH_RCRD_USA_OFFSET 40U
++#define RH_RCRD_USA_COUNT 9U
++#define RH_RCRD_DATA_OFFSET 64U
++
++#define UBIT(n) (UINT64_C(1) << (n))
++
++static const struct rh_replay_action_policy action_policy[RH_REPLAY_ACTION_COUNT] = {
++	{ "Noop", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "CompensationlogRecord", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "InitializeFileRecordSegment", UBIT(0), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "DeallocateFileRecordSegment", 0, RH_REPLAY_ACTION_DENY, "record deallocation is destructive" },
++	{ "WriteEndofFileRecordSegment", UBIT(4), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "CreateAttribute", UBIT(6), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "DeleteAttribute", UBIT(5), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "UpdateResidentValue", UBIT(7), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "UpdateNonResidentValue", UBIT(8), RH_REPLAY_ACTION_RAW_WRITE, NULL },
++	{ "UpdateMappingPairs", UBIT(9), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "DeleteDirtyClusters", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "SetNewAttributeSizes", UBIT(11), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "AddIndexEntryRoot", UBIT(13), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "DeleteIndexEntryRoot", UBIT(12), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "AddIndexEntryAllocation", UBIT(15), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "DeleteIndexEntryAllocation", UBIT(14), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "WriteEndOfIndexBuffer", UBIT(16), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "SetIndexEntryVcnRoot", UBIT(17), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "SetIndexEntryVcnAllocation", UBIT(18), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "UpdateFileNameRoot", UBIT(19), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "UpdateFileNameAllocation", UBIT(20), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "SetBitsInNonResidentBitMap", UBIT(22), RH_REPLAY_ACTION_BITMAP_WRITE, NULL },
++	{ "ClearBitsInNonResidentBitMap", UBIT(21), RH_REPLAY_ACTION_BITMAP_WRITE, NULL },
++	{ "HotFix", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "EndTopLevelAction", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "PrepareTransaction", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "CommitTransaction", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "ForgetTransaction", UBIT(0), RH_REPLAY_ACTION_TRANSACTION_END, NULL },
++	{ "OpenNonResidentAttribute", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "OpenAttributeTableDump", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "AttributeNamesDump", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "DirtyPageTableDump", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "TransactionTableDump", UBIT(0), RH_REPLAY_ACTION_CONTROL, NULL },
++	{ "UpdateRecordDataRoot", UBIT(33), RH_REPLAY_ACTION_MFT_WRITE, NULL },
++	{ "UpdateRecordDataAllocation", UBIT(34), RH_REPLAY_ACTION_INDX_WRITE, NULL },
++	{ "UpdateRelativeDataInIndex", 0, RH_REPLAY_ACTION_DENY, "named by the shipped parser but not dispatched by it" },
++	{ "UpdateRelativeDataInIndex2", 0, RH_REPLAY_ACTION_DENY, "named by the shipped parser but not dispatched by it" },
++	{ "ZeroEndOfFileRecord", UBIT(0), RH_REPLAY_ACTION_MFT_WRITE, NULL }
++};
++
++static uint16_t rd16(const unsigned char *p)
++{
++	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
++}
++
++static uint32_t rd32(const unsigned char *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++		((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static uint64_t rd64(const unsigned char *p)
++{
++	return (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32);
++}
++
++static int all_zero(const unsigned char *p, size_t length)
++{
++	while (length--)
++		if (*p++)
++			return 0;
++	return 1;
++}
++
++static int add_ok(size_t left, size_t right, size_t limit, size_t *sum)
++{
++	if (left > limit || right > limit - left)
++		return 0;
++	*sum = left + right;
++	return 1;
++}
++
++const struct rh_replay_action_policy *rh_replay_action_policy(unsigned int op)
++{
++	if (op >= RH_REPLAY_ACTION_COUNT)
++		return NULL;
++	return &action_policy[op];
++}
++
++int rh_replay_guard_profile(const struct rh_replay_geometry *geometry)
++{
++	uint32_t offset_bits;
++	uint64_t address_units;
++
++	if (!geometry || geometry->page_size != RH_REPLAY_PAGE_SIZE ||
++		geometry->cluster_size != RH_REPLAY_PAGE_SIZE ||
++		geometry->logfile_size < RH_REPLAY_MIN_LOGFILE_SIZE ||
++		geometry->logfile_size > RH_REPLAY_MAX_LOGFILE_SIZE ||
++		(geometry->logfile_size % RH_REPLAY_PAGE_SIZE) ||
++		!geometry->volume_clusters ||
++		geometry->volume_clusters > (UINT64_C(256) << 30) /
++			RH_REPLAY_PAGE_SIZE ||
++		geometry->mft_record_size != 1024U ||
++		geometry->index_record_size != RH_REPLAY_PAGE_SIZE ||
++		!geometry->sequence_bits || geometry->sequence_bits >= 64U ||
++		!geometry->client_sequence ||
++		geometry->client_sequence == UINT16_MAX || geometry->client_index)
++		return -1;
++	offset_bits = 64U - geometry->sequence_bits;
++	address_units = geometry->logfile_size / 8U;
++	if (offset_bits < 64U && address_units > (UINT64_C(1) << offset_bits))
++		return -1;
++	return 0;
++}
++
++int rh_replay_guard_unprotect_rcrd(unsigned char *page, size_t length,
++		struct rh_replay_page_view *view)
++{
++	unsigned int sector;
++	uint16_t usn;
++	uint16_t next;
++	uint16_t count;
++	uint16_t position;
++
++	if (!page || length != RH_REPLAY_PAGE_SIZE ||
++		memcmp(page, "RCRD", 4) || rd16(page + 4) != RH_RCRD_USA_OFFSET ||
++		rd16(page + 6) != RH_RCRD_USA_COUNT ||
++		rd32(page + 16) != 1U || !all_zero(page + 26, 6))
++		return -1;
++	next = rd16(page + 24);
++	count = rd16(page + 20);
++	position = rd16(page + 22);
++	if (next < RH_RCRD_DATA_OFFSET || next > RH_REPLAY_PAGE_SIZE ||
++		(next & 7U) || count != 1U || position != 1U)
++		return -1;
++	usn = rd16(page + RH_RCRD_USA_OFFSET);
++	if (!usn)
++		return -1;
++	for (sector = 1; sector < RH_RCRD_USA_COUNT; ++sector) {
++		size_t tail = (size_t)sector * RH_REPLAY_SECTOR_SIZE - 2U;
++		size_t replacement = RH_RCRD_USA_OFFSET + 2U * sector;
++
++		if (rd16(page + tail) != usn)
++			return -1;
++		page[tail] = page[replacement];
++		page[tail + 1] = page[replacement + 1];
++	}
++	if (view) {
++		view->next_record_offset = next;
++		view->page_count = count;
++		view->page_position = position;
++		view->copy_value = rd64(page + 8);
++		view->last_end_lsn = rd64(page + 32);
++	}
++	return 0;
++}
++
++int rh_replay_guard_action(const unsigned char *record, size_t record_size,
++		const struct rh_replay_geometry *geometry,
++		uint64_t source_byte_offset, struct rh_replay_action_view *view)
++{
++	const struct rh_replay_action_policy *policy;
++	enum rh_replay_action_class action_class;
++	uint16_t redo = 0, undo = 0, redo_rel = 0, undo_rel = 0;
++	uint16_t redo_length = 0, undo_length = 0, lcn_count = 0;
++	uint16_t cluster_index = 0, record_offset = 0, attribute_offset = 0;
++	uint16_t record_flags, attribute_flags = 0;
++	uint32_t client_length, transaction_id, record_type;
++	uint64_t this_lsn, previous_lsn, undo_next_lsn, mask;
++	uint64_t target_vcn = 0, first_lcn = 0, target_cluster_bytes = 0;
++	size_t fixed_end = 0, redo_at = 0, undo_at = 0;
++	size_t redo_end = 0, undo_end = 0, payload_end = 0, extra_at = 0;
++	size_t extra_length = 0, target_at = 0, target_object_size = 0;
++	uint32_t offset_bits;
++	unsigned int lcn_index;
++
++	if (!record || rh_replay_guard_profile(geometry) ||
++		record_size < 88U || record_size > RH_REPLAY_MAX_ACTION_SIZE ||
++		(record_size & 7U))
++		return -1;
++	client_length = rd32(record + 24);
++	record_type = rd32(record + 32);
++	record_flags = rd16(record + 40);
++	transaction_id = rd32(record + 36);
++	if (client_length > RH_REPLAY_MAX_ACTION_SIZE - RH_LOG_RECORD_HEADER_SIZE ||
++		(size_t)client_length + RH_LOG_RECORD_HEADER_SIZE != record_size ||
++		rd16(record + 28) != geometry->client_sequence ||
++		rd16(record + 30) != geometry->client_index ||
++		rd16(record + 42) || rd16(record + 44) || rd16(record + 46))
++		return -1;
++
++	this_lsn = rd64(record);
++	previous_lsn = rd64(record + 8);
++	undo_next_lsn = rd64(record + 16);
++	if (!this_lsn || (previous_lsn && previous_lsn >= this_lsn) ||
++		(undo_next_lsn && undo_next_lsn >= this_lsn))
++		return -1;
++	if (source_byte_offset != RH_REPLAY_SOURCE_UNKNOWN) {
++		offset_bits = 64U - geometry->sequence_bits;
++		mask = offset_bits == 64U ? UINT64_MAX : (UBIT(offset_bits) - 1U);
++		if (source_byte_offset >= geometry->logfile_size ||
++			(source_byte_offset & 7U) ||
++			(this_lsn & mask) != source_byte_offset / 8U ||
++			!(this_lsn & ~mask))
++			return -1;
++	}
++
++	/* The client-restart record contains NTFS_RESTART, not LOG_REC_HDR. */
++	if (record_type == RH_LOG_CHECKPOINT) {
++		uint32_t major, minor;
++		unsigned int i;
++
++		if (transaction_id || record_flags || undo_next_lsn ||
++			(client_length != 0x68U && client_length != 0x70U) ||
++			record_size < 112U)
++			return -1;
++		major = rd32(record + 48);
++		minor = rd32(record + 52);
++		if (major != 1U || minor != 1U)
++			return -1;
++		for (i = 0; i < 5U; ++i) {
++			uint64_t referenced_lsn = rd64(record + 56U + 8U * i);
++			if (referenced_lsn && (referenced_lsn > this_lsn ||
++				(i && referenced_lsn == this_lsn)))
++				return -1;
++		}
++		for (i = 0; i < 4U; ++i) {
++			uint64_t referenced_lsn = rd64(record + 64U + 8U * i);
++			uint32_t table_length = rd32(record + 96U + 4U * i);
++			if (!!referenced_lsn != !!table_length ||
++				table_length > RH_REPLAY_MAX_ACTION_SIZE)
++				return -1;
++		}
++		extra_at = 112U;
++		extra_length = record_size - extra_at;
++		if (!all_zero(record + extra_at, extra_length))
++			return -1;
++		action_class = RH_REPLAY_ACTION_CHECKPOINT;
++		goto fill_view;
++	}
++	if (record_type != RH_LOG_STANDARD || !transaction_id)
++		return -1;
++
++	redo = rd16(record + 48);
++	undo = rd16(record + 50);
++	if (redo >= RH_REPLAY_ACTION_COUNT || undo >= RH_REPLAY_ACTION_COUNT)
++		return -1;
++	policy = &action_policy[redo];
++	if (!(policy->undo_mask & UBIT(undo)) ||
++		policy->action_class == RH_REPLAY_ACTION_DENY)
++		return -1;
++	action_class = policy->action_class;
++	redo_rel = rd16(record + 52);
++	redo_length = rd16(record + 54);
++	undo_rel = rd16(record + 56);
++	undo_length = rd16(record + 58);
++	lcn_count = rd16(record + 62);
++	record_offset = rd16(record + 64);
++	attribute_offset = rd16(record + 66);
++	cluster_index = rd16(record + 68);
++	attribute_flags = rd16(record + 70);
++	if ((redo_rel & 7U) || (undo_rel & 7U) ||
++		!add_ok(RH_LOG_RECORD_FIXED_SIZE, (size_t)lcn_count * 8U,
++			record_size, &fixed_end) ||
++		(redo_length && redo_rel < 0x28U) ||
++		(undo_length && undo_rel < 0x28U))
++		return -1;
++	redo_at = (lcn_count ? 0x30U : 0x28U) + redo_rel;
++	undo_at = (lcn_count ? 0x30U : 0x28U) + undo_rel;
++	if (!add_ok(redo_at, redo_length, record_size, &redo_end) ||
++		!add_ok(undo_at, undo_length, record_size, &undo_end) ||
++		(redo_length && redo_at < fixed_end) ||
++		(undo_length && undo_at < fixed_end))
++		return -1;
++	if (redo_length && undo_length) {
++		if (redo_at == undo_at) {
++			if (redo_length != undo_length)
++				return -1;
++			payload_end = redo_end;
++		} else if (redo_at == fixed_end &&
++			undo_at == ((redo_end + 7U) & ~(size_t)7U)) {
++			if (!all_zero(record + redo_end, undo_at - redo_end))
++				return -1;
++			payload_end = undo_end;
++		} else if (undo_at == fixed_end &&
++			redo_at == ((undo_end + 7U) & ~(size_t)7U)) {
++			if (!all_zero(record + undo_end, redo_at - undo_end))
++				return -1;
++			payload_end = redo_end;
++		} else {
++			return -1;
++		}
++	} else if (redo_length) {
++		if (redo_at != fixed_end)
++			return -1;
++		payload_end = redo_end;
++	} else if (undo_length) {
++		if (undo_at != fixed_end)
++			return -1;
++		payload_end = undo_end;
++	} else {
++		payload_end = fixed_end;
++	}
++	extra_at = (payload_end + 7U) & ~(size_t)7U;
++	if (extra_at > record_size || !all_zero(record + payload_end,
++			extra_at - payload_end))
++		return -1;
++	extra_length = record_size - extra_at;
++
++	/* These two operations only update the analysis dirty-page table. */
++	if (action_class == RH_REPLAY_ACTION_CONTROL && redo == 10U) {
++		size_t at;
++
++		if (record_flags || rd16(record + 60) || lcn_count ||
++			cluster_index || record_offset || attribute_offset ||
++			attribute_flags || rd64(record + 72) || undo_length ||
++			undo_rel || redo_length < 16U || (redo_length & 15U) ||
++			extra_length)
++			return -1;
++		for (at = redo_at; at < redo_end; at += 16U) {
++			uint64_t lcn = rd64(record + at);
++			uint64_t count = rd64(record + at + 8U);
++
++			if (!count || lcn >= geometry->volume_clusters ||
++				count > geometry->volume_clusters - lcn)
++				return -1;
++		}
++		goto fill_view;
++	}
++	if (action_class == RH_REPLAY_ACTION_CONTROL && redo == 23U) {
++		if (record_flags || !rd16(record + 60) || lcn_count != 1U ||
++			cluster_index || record_offset || attribute_offset ||
++			attribute_flags || redo_length || undo_length || redo_rel ||
++			undo_rel || extra_length)
++			return -1;
++		target_vcn = rd64(record + 72);
++		first_lcn = rd64(record + 80);
++		if (target_vcn > INT64_MAX || first_lcn > INT64_MAX ||
++			first_lcn >= geometry->volume_clusters)
++			return -1;
++		goto fill_view;
++	}
++
++	if (action_class == RH_REPLAY_ACTION_CONTROL ||
++		action_class == RH_REPLAY_ACTION_TRANSACTION_END) {
++		if (record_flags || lcn_count || cluster_index || attribute_flags ||
++			record_offset || attribute_offset ||
++			rd64(record + 72))
++			return -1;
++		if (redo == 28U) {
++			/* target_attribute is the restart-table byte offset. */
++			if (!rd16(record + 60))
++				return -1;
++		} else if (rd16(record + 60)) {
++			return -1;
++		}
++		switch (redo) {
++		case 0U:
++		case 1U:
++		case 24U:
++		case 25U:
++		case 26U:
++		case 27U:
++			if (redo_length || undo_length || redo_rel || undo_rel ||
++				record_size != 88U ||
++				!all_zero(record + RH_LOG_RECORD_FIXED_SIZE,
++					record_size - RH_LOG_RECORD_FIXED_SIZE))
++				return -1;
++			break;
++		case 28U:
++			if ((redo_length != 40U && redo_length != 44U) ||
++				(undo_length & 1U) || undo_length > 510U || extra_length)
++				return -1;
++			break;
++		case 29U:
++		case 31U:
++		case 32U:
++			if (redo_length < 24U || undo_length || extra_length)
++				return -1;
++			break;
++		case 30U:
++			if (redo_length || undo_length || redo_rel || undo_rel ||
++				!extra_length)
++				return -1;
++			break;
++		default:
++			return -1;
++		}
++		goto fill_view;
++	}
++
++	target_vcn = rd64(record + 72);
++	if (!lcn_count || lcn_count != 1U || target_vcn > INT64_MAX ||
++		(record_flags & ~6U) || record_flags == 6U)
++		return -1;
++	first_lcn = rd64(record + 80);
++	for (lcn_index = 0; lcn_index < lcn_count; ++lcn_index) {
++		uint64_t lcn = rd64(record + 80U + 8U * lcn_index);
++		if (lcn > INT64_MAX || lcn >= geometry->volume_clusters)
++			return -1;
++	}
++	target_cluster_bytes = (uint64_t)lcn_count * geometry->cluster_size;
++	if (action_class == RH_REPLAY_ACTION_RAW_WRITE && attribute_flags == 8U)
++		action_class = RH_REPLAY_ACTION_INDX_WRITE;
++	switch (action_class) {
++	case RH_REPLAY_ACTION_MFT_WRITE:
++		if (attribute_flags != RH_ACTS_ON_MFT)
++			return -1;
++		target_at = (size_t)cluster_index * RH_REPLAY_SECTOR_SIZE;
++		target_object_size = geometry->mft_record_size;
++		if (target_at % target_object_size)
++			return -1;
++		break;
++	case RH_REPLAY_ACTION_INDX_WRITE:
++		if (attribute_flags != 8U || cluster_index)
++			return -1;
++		target_object_size = geometry->index_record_size;
++		break;
++	case RH_REPLAY_ACTION_RAW_WRITE:
++		if (attribute_flags || cluster_index)
++			return -1;
++		target_object_size = (size_t)target_cluster_bytes;
++		break;
++	case RH_REPLAY_ACTION_BITMAP_WRITE:
++		if (attribute_flags || cluster_index || record_offset ||
++			attribute_offset || redo_length != 8U || undo_length != 8U ||
++			!((redo == 21U && undo == 22U) ||
++			  (redo == 22U && undo == 21U)) ||
++			memcmp(record + redo_at, record + undo_at, 8))
++			return -1;
++		if (!rd32(record + redo_at + 4) ||
++			rd32(record + redo_at) >= target_cluster_bytes * 8U ||
++			rd32(record + redo_at + 4) > target_cluster_bytes * 8U -
++				rd32(record + redo_at))
++			return -1;
++		target_object_size = (size_t)target_cluster_bytes;
++		break;
++	default:
++		return -1;
++	}
++	if ((uint64_t)target_at + target_object_size > target_cluster_bytes ||
++		(size_t)record_offset + attribute_offset > target_object_size ||
++		redo_length > target_object_size -
++			((size_t)record_offset + attribute_offset) ||
++		undo_length > target_object_size -
++			((size_t)record_offset + attribute_offset) ||
++		extra_length)
++		return -1;
++
++	/* Tight qualified subset of the kernel operation grammar. */
++	switch (redo) {
++	case 2U:
++		if (!redo_length || undo || undo_length)
++			return -1;
++		break;
++	case 4U:
++		/* Variable-size tails reach legacy resize helpers with open TODOs. */
++		if (redo_length < 8U || redo_length != undo_length)
++			return -1;
++		break;
++	case 5U:
++	case 12U:
++	case 14U:
++		if (!redo_length || undo_length || undo == 1U)
++			return -1;
++		break;
++	case 6U:
++	case 13U:
++	case 15U:
++		if (redo_length || !undo_length || undo == 1U)
++			return -1;
++		break;
++	case 11U:
++		if (redo_length != undo_length ||
++			(redo_length != 24U && redo_length != 32U))
++			return -1;
++		break;
++	case 17U:
++	case 18U:
++		if (redo_length != 8U || undo_length != 8U)
++			return -1;
++		break;
++	case 19U:
++	case 20U:
++		if (!redo_length || redo_length != undo_length || redo_length > 64U)
++			return -1;
++		break;
++	case 21U:
++	case 22U:
++		break;
++	case 37U:
++		if (!redo_length || undo_length || undo ||
++			(size_t)record_offset + attribute_offset + redo_length !=
++				target_object_size ||
++			!all_zero(record + redo_at, redo_length))
++			return -1;
++		break;
++	default:
++		if (!redo_length || redo_length != undo_length || undo == 1U)
++			return -1;
++		break;
++	}
++
++fill_view:
++	if (view) {
++		memset(view, 0, sizeof(*view));
++		view->record_type = record_type;
++		view->redo_operation = redo;
++		view->undo_operation = undo;
++		view->lcn_count = lcn_count;
++		view->cluster_index = cluster_index;
++		view->record_offset = record_offset;
++		view->attribute_offset = attribute_offset;
++		view->redo_length = redo_length;
++		view->undo_length = undo_length;
++		view->transaction_id = transaction_id;
++		view->this_lsn = this_lsn;
++		view->previous_lsn = previous_lsn;
++		view->undo_next_lsn = undo_next_lsn;
++		view->target_vcn = target_vcn;
++		view->first_lcn = first_lcn;
++		view->record_size = record_size;
++		view->redo_data_offset = redo_at;
++		view->undo_data_offset = undo_at;
++		view->extra_data_offset = extra_at;
++		view->extra_data_length = extra_length;
++		view->target_slice_offset = target_at;
++		view->target_object_size = target_object_size;
++		view->action_class = action_class;
++	}
++	return 0;
++}
+--- /dev/null
++++ b/src/roothealth_replay_guard.h
+@@ -0,0 +1,88 @@
++#ifndef ROOTHEALTH_REPLAY_GUARD_H
++#define ROOTHEALTH_REPLAY_GUARD_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define RH_REPLAY_PAGE_SIZE 4096U
++#define RH_REPLAY_SECTOR_SIZE 512U
++#define RH_REPLAY_MIN_LOGFILE_SIZE (50U * RH_REPLAY_PAGE_SIZE)
++#define RH_REPLAY_MAX_LOGFILE_SIZE (64U * 1024U * 1024U)
++#define RH_REPLAY_MAX_ACTION_SIZE (RH_REPLAY_PAGE_SIZE - 64U)
++#define RH_REPLAY_MAX_ACTIONS 4096U
++#define RH_REPLAY_ACTION_COUNT 38U
++#define RH_REPLAY_SOURCE_UNKNOWN UINT64_MAX
++
++enum rh_replay_action_class {
++	RH_REPLAY_ACTION_DENY = 0,
++	RH_REPLAY_ACTION_CHECKPOINT,
++	RH_REPLAY_ACTION_CONTROL,
++	RH_REPLAY_ACTION_MFT_WRITE,
++	RH_REPLAY_ACTION_INDX_WRITE,
++	RH_REPLAY_ACTION_RAW_WRITE,
++	RH_REPLAY_ACTION_BITMAP_WRITE,
++	RH_REPLAY_ACTION_TRANSACTION_END
++};
++
++struct rh_replay_action_policy {
++	const char *name;
++	uint64_t undo_mask;
++	enum rh_replay_action_class action_class;
++	const char *deny_reason;
++};
++
++struct rh_replay_geometry {
++	uint32_t page_size;
++	uint32_t cluster_size;
++	uint32_t mft_record_size;
++	uint32_t index_record_size;
++	uint64_t logfile_size;
++	uint64_t volume_clusters;
++	uint32_t sequence_bits;
++	uint16_t client_sequence;
++	uint16_t client_index;
++};
++
++struct rh_replay_page_view {
++	uint16_t next_record_offset;
++	uint16_t page_count;
++	uint16_t page_position;
++	uint64_t copy_value;
++	uint64_t last_end_lsn;
++};
++
++struct rh_replay_action_view {
++	uint32_t record_type;
++	uint16_t redo_operation;
++	uint16_t undo_operation;
++	uint16_t lcn_count;
++	uint16_t cluster_index;
++	uint16_t record_offset;
++	uint16_t attribute_offset;
++	uint16_t redo_length;
++	uint16_t undo_length;
++	uint32_t transaction_id;
++	uint64_t this_lsn;
++	uint64_t previous_lsn;
++	uint64_t undo_next_lsn;
++	uint64_t target_vcn;
++	uint64_t first_lcn;
++	size_t record_size;
++	size_t redo_data_offset;
++	size_t undo_data_offset;
++	size_t extra_data_offset;
++	size_t extra_data_length;
++	size_t target_slice_offset;
++	size_t target_object_size;
++	enum rh_replay_action_class action_class;
++};
++
++const struct rh_replay_action_policy *rh_replay_action_policy(unsigned int op);
++int rh_replay_guard_profile(const struct rh_replay_geometry *geometry);
++int rh_replay_guard_unprotect_rcrd(unsigned char *page, size_t length,
++		struct rh_replay_page_view *view);
++int rh_replay_guard_action(const unsigned char *record, size_t record_size,
++		const struct rh_replay_geometry *geometry,
++		uint64_t source_byte_offset, struct rh_replay_action_view *view);
++
++#endif
+--- /dev/null
++++ b/src/roothealth_replay_analysis.c
+@@ -0,0 +1,898 @@
++/*
++ * Bounded ARIES-style analysis for the T1OS native NTFS replay profile.
++ * This file has no ntfs-3g dependency and never performs I/O.
++ */
++#include "roothealth_replay_analysis.h"
++
++#include <stdlib.h>
++#include <string.h>
++
++#define RH_RESTART_TABLE_HEADER 24U
++#define RH_TRANSACTION_ENTRY_SIZE 40U
++#define RH_OPEN_ATTRIBUTE_ENTRY_SIZE 40U
++#define RH_DIRTY_PAGE_ENTRY_SIZE 40U
++#define RH_ENTRY_ALLOCATED UINT32_C(0xffffffff)
++
++enum rh_tx_state {
++	RH_TX_NONE = 0,
++	RH_TX_ACTIVE = 1,
++	RH_TX_PREPARED = 2,
++	RH_TX_COMMITTED = 3,
++	RH_TX_FORGOTTEN = 4
++};
++
++struct rh_tx {
++	uint32_t id;
++	uint64_t first_lsn;
++	uint64_t last_lsn;
++	uint64_t undo_lsn;
++	enum rh_tx_state state;
++	int present;
++};
++
++struct rh_open_attribute {
++	uint32_t key;
++	uint32_t type;
++	uint64_t file_reference;
++	uint32_t bytes_per_index;
++	uint16_t name_bytes;
++	int expects_name;
++	int name_present;
++	int present;
++};
++
++struct rh_dirty_page {
++	uint32_t target_attribute;
++	uint64_t vcn;
++	uint64_t oldest_lsn;
++	uint64_t lcn;
++	int lcn_valid;
++	int present;
++};
++
++struct rh_checkpoint {
++	uint64_t analysis_start_lsn;
++	uint64_t table_lsn[4];
++	uint32_t table_length[4];
++	uint64_t this_lsn;
++	int present;
++};
++
++struct rh_table_view {
++	const unsigned char *bytes;
++	size_t length;
++	uint16_t entry_size;
++	uint16_t slots;
++	uint16_t allocated;
++};
++
++static uint16_t rd16(const unsigned char *p)
++{
++	return (uint16_t)p[0] | ((uint16_t)p[1] << 8);
++}
++
++static uint32_t rd32(const unsigned char *p)
++{
++	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
++		((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
++}
++
++static uint64_t rd64(const unsigned char *p)
++{
++	return (uint64_t)rd32(p) | ((uint64_t)rd32(p + 4) << 32);
++}
++
++static int all_zero(const unsigned char *p, size_t length)
++{
++	while (length--)
++		if (*p++)
++			return 0;
++	return 1;
++}
++
++static int restart_offset(uint32_t offset, uint16_t entry_size,
++		uint16_t slots)
++{
++	uint32_t end = RH_RESTART_TABLE_HEADER + (uint32_t)entry_size * slots;
++
++	return offset >= RH_RESTART_TABLE_HEADER && offset < end &&
++		!((offset - RH_RESTART_TABLE_HEADER) % entry_size);
++}
++
++static int validate_restart_table(const unsigned char *bytes, size_t length,
++		uint16_t exact_entry_size, struct rh_table_view *view)
++{
++	unsigned char *visited = NULL;
++	uint16_t entry_size, slots, allocated, i;
++	uint32_t table_end, first_free, last_free, cursor;
++	unsigned int allocated_seen = 0, free_seen = 0;
++	int ok = 0;
++
++	if (!bytes || length < RH_RESTART_TABLE_HEADER)
++		return -1;
++	entry_size = rd16(bytes);
++	slots = rd16(bytes + 2);
++	allocated = rd16(bytes + 4);
++	if (entry_size != exact_entry_size || !slots || allocated > slots ||
++		!all_zero(bytes + 6, 6) ||
++		(uint32_t)entry_size * slots > length - RH_RESTART_TABLE_HEADER)
++		return -1;
++	table_end = RH_RESTART_TABLE_HEADER + (uint32_t)entry_size * slots;
++	if (table_end != length)
++		return -1;
++	first_free = rd32(bytes + 16);
++	last_free = rd32(bytes + 20);
++	if (!!first_free != !!last_free ||
++		(first_free && (!restart_offset(first_free, entry_size, slots) ||
++		 !restart_offset(last_free, entry_size, slots))))
++		return -1;
++	visited = calloc(slots, 1U);
++	if (!visited)
++		return -1;
++	for (i = 0; i < slots; ++i) {
++		uint32_t next = rd32(bytes + RH_RESTART_TABLE_HEADER +
++			(size_t)i * entry_size);
++		if (next == RH_ENTRY_ALLOCATED) {
++			++allocated_seen;
++		} else if (next && !restart_offset(next, entry_size, slots)) {
++			goto out;
++		}
++	}
++	if (allocated_seen != allocated)
++		goto out;
++	cursor = first_free;
++	while (cursor) {
++		unsigned int slot = (cursor - RH_RESTART_TABLE_HEADER) / entry_size;
++		uint32_t next;
++
++		if (slot >= slots || visited[slot])
++			goto out;
++		visited[slot] = 1;
++		++free_seen;
++		next = rd32(bytes + cursor);
++		if (cursor == last_free && next)
++			goto out;
++		cursor = next;
++	}
++	if (free_seen != (unsigned int)slots - allocated)
++		goto out;
++	if (view) {
++		view->bytes = bytes;
++		view->length = length;
++		view->entry_size = entry_size;
++		view->slots = slots;
++		view->allocated = allocated;
++	}
++	ok = 1;
++out:
++	free(visited);
++	return ok ? 0 : -1;
++}
++
++static struct rh_tx *find_tx(struct rh_tx *transactions, size_t count,
++		uint32_t id, int create)
++{
++	size_t i;
++
++	for (i = 0; i < count; ++i)
++		if (transactions[i].present && transactions[i].id == id)
++			return &transactions[i];
++	if (!create)
++		return NULL;
++	for (i = 0; i < count; ++i)
++		if (!transactions[i].present) {
++			memset(&transactions[i], 0, sizeof(transactions[i]));
++			transactions[i].present = 1;
++			transactions[i].id = id;
++			transactions[i].state = RH_TX_ACTIVE;
++			return &transactions[i];
++		}
++	return NULL;
++}
++
++static int parse_transaction_table(const unsigned char *bytes, size_t length,
++		struct rh_tx *transactions, size_t transaction_count,
++		uint64_t table_lsn)
++{
++	struct rh_table_view table;
++	uint16_t i;
++
++	if (validate_restart_table(bytes, length, RH_TRANSACTION_ENTRY_SIZE,
++			&table))
++		return -1;
++	for (i = 0; i < table.slots; ++i) {
++		const unsigned char *entry = bytes + RH_RESTART_TABLE_HEADER +
++			(size_t)i * table.entry_size;
++		struct rh_tx *tx;
++		uint8_t state;
++		uint64_t first_lsn, previous_lsn, undo_lsn;
++
++		if (rd32(entry) != RH_ENTRY_ALLOCATED)
++			continue;
++		state = entry[4];
++		first_lsn = rd64(entry + 8);
++		previous_lsn = rd64(entry + 16);
++		undo_lsn = rd64(entry + 24);
++		if (state < RH_TX_ACTIVE || state > RH_TX_COMMITTED ||
++			!all_zero(entry + 5, 3) || !first_lsn ||
++			first_lsn > previous_lsn || previous_lsn >= table_lsn ||
++			(undo_lsn && (undo_lsn < first_lsn || undo_lsn > previous_lsn)) ||
++			rd32(entry + 32) > RH_REPLAY_MAX_ACTIONS ||
++			rd32(entry + 36) > RH_REPLAY_MAX_LOGFILE_SIZE)
++			return -1;
++		tx = find_tx(transactions, transaction_count,
++			RH_RESTART_TABLE_HEADER + (uint32_t)i * table.entry_size, 1);
++		if (!tx)
++			return -1;
++		tx->first_lsn = first_lsn;
++		tx->last_lsn = previous_lsn;
++		tx->undo_lsn = undo_lsn;
++		tx->state = (enum rh_tx_state)state;
++	}
++	return 0;
++}
++
++static int parse_open_attribute_table(const unsigned char *bytes, size_t length,
++		struct rh_open_attribute *attributes, size_t attribute_count,
++		uint64_t table_lsn, uint16_t *open_entry_size)
++{
++	struct rh_table_view table;
++	uint16_t entry_size;
++	uint16_t i;
++
++	if (!bytes || length < RH_RESTART_TABLE_HEADER)
++		return -1;
++	entry_size = rd16(bytes);
++	if ((entry_size != RH_OPEN_ATTRIBUTE_ENTRY_SIZE && entry_size != 44U) ||
++		validate_restart_table(bytes, length, entry_size, &table))
++		return -1;
++	if (table.slots > attribute_count)
++		return -1;
++	for (i = 0; i < table.slots; ++i) {
++		const unsigned char *entry = bytes + RH_RESTART_TABLE_HEADER +
++			(size_t)i * table.entry_size;
++		uint32_t type, bytes_per_index;
++		uint64_t reference, open_lsn;
++		uint16_t name_bytes;
++		int expects_name;
++
++		if (rd32(entry) != RH_ENTRY_ALLOCATED)
++			continue;
++		if (entry_size == RH_OPEN_ATTRIBUTE_ENTRY_SIZE) {
++			bytes_per_index = rd32(entry + 4);
++			type = rd32(entry + 8);
++			reference = rd64(entry + 16);
++			open_lsn = rd64(entry + 24);
++			expects_name = entry[13];
++			name_bytes = (uint16_t)entry[14] * 2U;
++			if (entry[12] > 1U || entry[13] > 1U || entry[15])
++				return -1;
++		} else {
++			reference = rd64(entry + 8);
++			open_lsn = rd64(entry + 16);
++			type = rd32(entry + 28);
++			bytes_per_index = rd32(entry + 40);
++			expects_name = entry[25];
++			name_bytes = (uint16_t)entry[32] * 2U;
++			if (entry[24] > 1U || entry[25] > 1U || entry[26] || entry[27] ||
++				entry[33] || entry[34] || entry[35])
++				return -1;
++		}
++		if (!type || (type & 0xfU) || type > 0x100U ||
++			((type == 0xa0U) != (bytes_per_index == 4096U)) ||
++			!!expects_name != !!name_bytes ||
++			!reference ||
++			(open_lsn && open_lsn >= table_lsn))
++			return -1;
++		attributes[i].present = 1;
++		attributes[i].key = RH_RESTART_TABLE_HEADER +
++			(uint32_t)i * table.entry_size;
++		attributes[i].type = type;
++		attributes[i].file_reference = reference;
++		attributes[i].bytes_per_index = bytes_per_index;
++		attributes[i].name_bytes = name_bytes;
++		attributes[i].expects_name = expects_name;
++	}
++	if (open_entry_size)
++		*open_entry_size = entry_size;
++	return 0;
++}
++
++static int parse_dirty_page_table(const unsigned char *bytes, size_t length,
++		struct rh_dirty_page *pages, size_t page_count,
++		const struct rh_open_attribute *attributes, size_t attribute_count,
++		uint16_t open_entry_size,
++		const struct rh_replay_geometry *geometry, uint64_t table_lsn)
++{
++	struct rh_table_view table;
++	uint16_t i;
++
++	if (!open_entry_size ||
++		validate_restart_table(bytes, length, RH_DIRTY_PAGE_ENTRY_SIZE,
++			&table) || table.slots > page_count)
++		return -1;
++	for (i = 0; i < table.slots; ++i) {
++		const unsigned char *entry = bytes + RH_RESTART_TABLE_HEADER +
++			(size_t)i * table.entry_size;
++		uint32_t key, attribute_slot;
++		uint64_t oldest_lsn, lcn;
++		uint16_t j;
++
++		if (rd32(entry) != RH_ENTRY_ALLOCATED)
++			continue;
++		key = rd32(entry + 4);
++		if (!restart_offset(key, open_entry_size,
++				(uint16_t)attribute_count))
++			return -1;
++		attribute_slot = (key - RH_RESTART_TABLE_HEADER) / open_entry_size;
++		oldest_lsn = rd64(entry + 24);
++		lcn = rd64(entry + 32);
++		if (!attributes[attribute_slot].present || rd32(entry + 8) != 4096U ||
++			rd32(entry + 12) != 1U || !oldest_lsn ||
++			oldest_lsn >= table_lsn || lcn >= geometry->volume_clusters)
++			return -1;
++		for (j = 0; j < i; ++j)
++			if (pages[j].present && pages[j].target_attribute == key &&
++				pages[j].vcn == rd64(entry + 16))
++				return -1;
++		pages[i].present = 1;
++		pages[i].target_attribute = key;
++		pages[i].vcn = rd64(entry + 16);
++		pages[i].oldest_lsn = oldest_lsn;
++		pages[i].lcn = lcn;
++		pages[i].lcn_valid = 1;
++	}
++	return 0;
++}
++
++static struct rh_dirty_page *find_dirty_page(struct rh_dirty_page *pages,
++		size_t count, uint32_t target_attribute, uint64_t vcn)
++{
++	size_t i;
++
++	for (i = 0; i < count; ++i)
++		if (pages[i].present &&
++			pages[i].target_attribute == target_attribute &&
++			pages[i].vcn == vcn)
++			return &pages[i];
++	return NULL;
++}
++
++static int apply_delete_dirty_clusters(
++		const struct rh_replay_analysis_record *record,
++		const struct rh_replay_action_view *view,
++		struct rh_dirty_page *pages, size_t page_count)
++{
++	size_t at, i;
++	const unsigned char *payload;
++
++	if (!record || !view || view->redo_operation != 10U ||
++		!view->redo_length || (view->redo_length & 15U))
++		return -1;
++	payload = record->bytes + view->redo_data_offset;
++	for (at = 0; at < view->redo_length; at += 16U) {
++		uint64_t first = rd64(payload + at);
++		uint64_t count = rd64(payload + at + 8U);
++
++		if (!count || first > UINT64_MAX - count)
++			return -1;
++		for (i = 0; i < page_count; ++i)
++			if (pages[i].present && pages[i].lcn_valid &&
++				pages[i].lcn >= first && pages[i].lcn - first < count) {
++				pages[i].lcn = 0;
++				pages[i].lcn_valid = 0;
++			}
++	}
++	return 0;
++}
++
++static int apply_hotfix(const struct rh_replay_analysis_record *record,
++		const struct rh_replay_action_view *view,
++		struct rh_dirty_page *pages, size_t page_count,
++		const struct rh_open_attribute *attributes, size_t attribute_count,
++		uint16_t open_entry_size)
++{
++	struct rh_dirty_page *page;
++	uint32_t key, slot;
++
++	if (!record || !view || view->redo_operation != 23U ||
++		!open_entry_size)
++		return -1;
++	key = rd16(record->bytes + 60);
++	if (!restart_offset(key, open_entry_size, (uint16_t)attribute_count))
++		return -1;
++	slot = (key - RH_RESTART_TABLE_HEADER) / open_entry_size;
++	if (!attributes[slot].present)
++		return -1;
++	page = find_dirty_page(pages, page_count, key, view->target_vcn);
++	if (!page)
++		return -1;
++	page->lcn = view->first_lcn;
++	page->lcn_valid = 1;
++	return 0;
++}
++
++static int parse_attribute_names(const unsigned char *bytes, size_t length,
++		struct rh_open_attribute *attributes, size_t attribute_count,
++		uint16_t open_entry_size)
++{
++	size_t offset = 0;
++	int terminated = 0;
++
++	if (!open_entry_size)
++		return -1;
++	while (offset + 4U <= length) {
++		uint16_t key = rd16(bytes + offset);
++		uint16_t name_bytes = rd16(bytes + offset + 2U);
++		uint32_t slot;
++
++		if (!key) {
++			terminated = 1;
++			offset += 4U;
++			break;
++		}
++		if (!name_bytes || (name_bytes & 1U) || name_bytes > 510U ||
++			name_bytes > length - offset - 4U ||
++			!restart_offset(key, open_entry_size,
++				(uint16_t)attribute_count))
++			return -1;
++		slot = (key - RH_RESTART_TABLE_HEADER) / open_entry_size;
++		if (!attributes[slot].present ||
++			!attributes[slot].expects_name ||
++			attributes[slot].name_present ||
++			attributes[slot].name_bytes != name_bytes)
++			return -1;
++		attributes[slot].name_present = 1;
++		offset += 4U + name_bytes;
++	}
++	return terminated && all_zero(bytes + offset, length - offset) ? 0 : -1;
++}
++
++static int parse_dynamic_open_attribute(
++		const struct rh_replay_analysis_record *record,
++		const struct rh_replay_action_view *view,
++		struct rh_open_attribute *attributes, size_t attribute_count,
++		uint16_t *open_entry_size)
++{
++	const unsigned char *entry;
++	uint32_t key, slot, type, bytes_per_index;
++	uint64_t reference, open_lsn;
++	uint16_t name_bytes;
++	int expects_name;
++
++	if (!record || !view || view->redo_operation != 28U ||
++		(view->redo_length != RH_OPEN_ATTRIBUTE_ENTRY_SIZE &&
++		 view->redo_length != 44U))
++		return -1;
++	if (!open_entry_size ||
++		(*open_entry_size && *open_entry_size != view->redo_length))
++		return -1;
++	if (!*open_entry_size)
++		*open_entry_size = view->redo_length;
++	key = rd16(record->bytes + 60);
++	if (!restart_offset(key, *open_entry_size,
++			(uint16_t)attribute_count))
++		return -1;
++	slot = (key - RH_RESTART_TABLE_HEADER) / *open_entry_size;
++	entry = record->bytes + view->redo_data_offset;
++	if (view->redo_length == RH_OPEN_ATTRIBUTE_ENTRY_SIZE) {
++		bytes_per_index = rd32(entry + 4);
++		type = rd32(entry + 8);
++		reference = rd64(entry + 16);
++		open_lsn = rd64(entry + 24);
++		expects_name = entry[13];
++		name_bytes = (uint16_t)entry[14] * 2U;
++		if (entry[12] > 1U || entry[13] > 1U || entry[15])
++			return -1;
++	} else {
++		reference = rd64(entry + 8);
++		open_lsn = rd64(entry + 16);
++		type = rd32(entry + 28);
++		bytes_per_index = rd32(entry + 40);
++		expects_name = entry[25];
++		name_bytes = (uint16_t)entry[32] * 2U;
++		if (entry[24] > 1U || entry[25] > 1U || entry[26] || entry[27] ||
++			entry[33] || entry[34] || entry[35])
++			return -1;
++	}
++	if (rd32(entry) != RH_ENTRY_ALLOCATED || !type || (type & 0xfU) ||
++		type > 0x100U ||
++		((type == 0xa0U) != (bytes_per_index == 4096U)) ||
++		!!expects_name != !!view->undo_length ||
++		name_bytes != view->undo_length ||
++		!reference ||
++		(open_lsn && open_lsn > view->this_lsn) ||
++		attributes[slot].present)
++		return -1;
++	attributes[slot].present = 1;
++	attributes[slot].key = key;
++	attributes[slot].type = type;
++	attributes[slot].file_reference = reference;
++	attributes[slot].bytes_per_index = bytes_per_index;
++	attributes[slot].name_bytes = name_bytes;
++	attributes[slot].expects_name = expects_name;
++	attributes[slot].name_present = expects_name;
++	return 0;
++}
++
++static struct rh_replay_analysis_record *find_record_by_lsn(
++		struct rh_replay_analysis_record *records, size_t count, uint64_t lsn)
++{
++	size_t i;
++
++	for (i = 0; i < count; ++i)
++		if (rd64(records[i].bytes) == lsn)
++			return &records[i];
++	return NULL;
++}
++
++static int operation_is_mutation(enum rh_replay_action_class action_class)
++{
++	return action_class == RH_REPLAY_ACTION_MFT_WRITE ||
++		action_class == RH_REPLAY_ACTION_INDX_WRITE ||
++		action_class == RH_REPLAY_ACTION_RAW_WRITE ||
++		action_class == RH_REPLAY_ACTION_BITMAP_WRITE;
++}
++
++int rh_replay_analysis_plan(struct rh_replay_analysis_record *records,
++		size_t record_count, const struct rh_replay_geometry *geometry,
++		uint64_t synced_lsn, uint64_t committed_lsn,
++		struct rh_replay_analysis_result *result)
++{
++	struct rh_replay_action_view *views = NULL;
++	struct rh_tx *transactions = NULL;
++	struct rh_open_attribute *attributes = NULL;
++	struct rh_dirty_page *dirty_pages = NULL;
++	struct rh_checkpoint checkpoint;
++	uint64_t observed_table_lsn[4] = { 0, 0, 0, 0 };
++	uint32_t observed_table_length[4] = { 0, 0, 0, 0 };
++	struct rh_replay_analysis_result local_result;
++	size_t capacity, i;
++	uint16_t open_entry_size = 0;
++	uint64_t prior_lsn = 0, analysis_start = 0;
++	int rc = -1;
++
++	if (!records || !record_count || record_count > RH_REPLAY_MAX_ACTIONS ||
++		rh_replay_guard_profile(geometry))
++		return -1;
++	capacity = record_count + 64U;
++	views = calloc(record_count, sizeof(*views));
++	transactions = calloc(capacity, sizeof(*transactions));
++	attributes = calloc(capacity, sizeof(*attributes));
++	dirty_pages = calloc(capacity, sizeof(*dirty_pages));
++	if (!views || !transactions || !attributes || !dirty_pages)
++		goto out;
++	memset(&checkpoint, 0, sizeof(checkpoint));
++	memset(&local_result, 0, sizeof(local_result));
++	for (i = 0; i < record_count; ++i) {
++		uint64_t lsn;
++
++		records[i].plan_flags = 0;
++		records[i].effective_lcn = 0;
++		records[i].has_effective_lcn = 0;
++		if (rh_replay_guard_action(records[i].bytes, records[i].size,
++				geometry, RH_REPLAY_SOURCE_UNKNOWN, &views[i]))
++			goto out;
++		lsn = views[i].this_lsn;
++		if ((prior_lsn && lsn <= prior_lsn) || lsn < synced_lsn ||
++			lsn > committed_lsn)
++			goto out;
++		prior_lsn = lsn;
++		if (views[i].action_class == RH_REPLAY_ACTION_CHECKPOINT) {
++			unsigned int j;
++			if (checkpoint.present)
++				goto out;
++			checkpoint.present = 1;
++			checkpoint.this_lsn = lsn;
++			checkpoint.analysis_start_lsn = rd64(records[i].bytes + 56);
++			for (j = 0; j < 4U; ++j) {
++				checkpoint.table_lsn[j] = rd64(records[i].bytes + 64U + 8U * j);
++				checkpoint.table_length[j] = rd32(records[i].bytes + 96U + 4U * j);
++			}
++			++local_result.checkpoint_records;
++		}
++	}
++
++	/* Resolve and validate all four checkpoint analysis controls first. */
++	if (checkpoint.present) {
++		unsigned int table_index;
++		static const uint16_t expected_op[4] = { 29U, 30U, 31U, 32U };
++
++		analysis_start = checkpoint.analysis_start_lsn ?
++			checkpoint.analysis_start_lsn : checkpoint.this_lsn;
++		if (analysis_start > checkpoint.this_lsn || analysis_start < synced_lsn)
++			goto out;
++		for (table_index = 0; table_index < 4U; ++table_index) {
++			struct rh_replay_analysis_record *control;
++			struct rh_replay_action_view control_view;
++			const unsigned char *payload;
++			size_t payload_length;
++
++			if (!checkpoint.table_lsn[table_index])
++				continue;
++			if (checkpoint.table_lsn[table_index] < synced_lsn ||
++				checkpoint.table_lsn[table_index] >= checkpoint.this_lsn)
++				goto out;
++			control = find_record_by_lsn(records, record_count,
++				checkpoint.table_lsn[table_index]);
++			if (!control || rh_replay_guard_action(control->bytes, control->size,
++					geometry, RH_REPLAY_SOURCE_UNKNOWN, &control_view) ||
++				control_view.redo_operation != expected_op[table_index])
++				goto out;
++			payload = control->bytes + (table_index == 1U ?
++				control_view.extra_data_offset : control_view.redo_data_offset);
++			payload_length = table_index == 1U ? control_view.extra_data_length :
++				control_view.redo_length;
++			if (payload_length != checkpoint.table_length[table_index])
++				goto out;
++			observed_table_lsn[table_index] = control_view.this_lsn;
++			observed_table_length[table_index] = (uint32_t)payload_length;
++			switch (table_index) {
++			case 0U:
++				if (parse_open_attribute_table(payload, payload_length,
++						attributes, capacity, control_view.this_lsn,
++						&open_entry_size))
++					goto out;
++				++local_result.open_attribute_tables;
++				break;
++			case 1U:
++				if (parse_attribute_names(payload, payload_length,
++						attributes, capacity, open_entry_size))
++					goto out;
++				++local_result.attribute_name_tables;
++				break;
++			case 2U:
++				if (parse_dirty_page_table(payload, payload_length,
++						dirty_pages, capacity, attributes, capacity,
++						open_entry_size, geometry, control_view.this_lsn))
++					goto out;
++				++local_result.dirty_page_tables;
++				break;
++			case 3U:
++				if (parse_transaction_table(payload, payload_length,
++						transactions, capacity, control_view.this_lsn))
++					goto out;
++				++local_result.transaction_tables;
++				break;
++			}
++		}
++		for (i = 0; i < capacity; ++i)
++			if (attributes[i].present &&
++				attributes[i].expects_name != attributes[i].name_present)
++				goto out;
++	} else {
++		analysis_start = synced_lsn;
++	}
++
++	for (i = 0; i < record_count; ++i) {
++		struct rh_replay_action_view *view = &views[i];
++		struct rh_tx *tx;
++		uint16_t op;
++		int checkpoint_seeded_record;
++		int redo_candidate = 1;
++
++		if (view->action_class == RH_REPLAY_ACTION_CHECKPOINT ||
++			view->this_lsn < analysis_start)
++			continue;
++		op = view->redo_operation;
++		checkpoint_seeded_record = checkpoint.present &&
++			view->this_lsn < checkpoint.this_lsn;
++		if (checkpoint.present && operation_is_mutation(view->action_class)) {
++			uint32_t slot;
++			struct rh_dirty_page *page;
++
++			if (!open_entry_size ||
++				!restart_offset(rd16(records[i].bytes + 60),
++					open_entry_size, (uint16_t)capacity))
++				goto out;
++			slot = (rd16(records[i].bytes + 60) - RH_RESTART_TABLE_HEADER) /
++				open_entry_size;
++			if (!attributes[slot].present)
++				goto out;
++			page = find_dirty_page(dirty_pages, capacity,
++				rd16(records[i].bytes + 60), view->target_vcn);
++			if (!page && checkpoint_seeded_record) {
++				redo_candidate = 0;
++			} else if (!page) {
++				size_t j;
++
++				for (j = 0; j < capacity && dirty_pages[j].present; ++j) { }
++				if (j == capacity)
++					goto out;
++				dirty_pages[j].present = 1;
++				dirty_pages[j].target_attribute = rd16(records[i].bytes + 60);
++				dirty_pages[j].vcn = view->target_vcn;
++				dirty_pages[j].oldest_lsn = view->this_lsn;
++				dirty_pages[j].lcn = view->first_lcn;
++				dirty_pages[j].lcn_valid = 1;
++			} else if (checkpoint_seeded_record) {
++				if (!page->lcn_valid || page->oldest_lsn > view->this_lsn)
++					redo_candidate = 0;
++			} else {
++				/* Analysis after the checkpoint refreshes the DPT mapping. */
++				if (!page->lcn_valid)
++					page->oldest_lsn = view->this_lsn;
++				page->lcn = view->first_lcn;
++				page->lcn_valid = 1;
++			}
++		}
++
++		/* A table dump is meaningful only as the checkpoint's exact control. */
++		if (op >= 29U && op <= 32U) {
++			if (!checkpoint.present ||
++				view->this_lsn != checkpoint.table_lsn[op - 29U])
++				goto out;
++			continue;
++		}
++		/*
++		 * Records covered by the checkpoint tables are still redo candidates
++		 * (dirty-page oldest_lsn may precede the checkpoint), but their
++		 * transaction state must not be applied a second time.
++		 */
++		if (checkpoint_seeded_record) {
++			if (operation_is_mutation(view->action_class)) {
++				if (redo_candidate)
++					records[i].plan_flags |= RH_REPLAY_PLAN_REDO;
++				++local_result.mutation_records;
++			}
++			continue;
++		}
++		/* Windows transaction ids are byte offsets in the restart table. */
++		if (checkpoint.present && !restart_offset(view->transaction_id,
++				RH_TRANSACTION_ENTRY_SIZE, (uint16_t)capacity))
++			goto out;
++		tx = find_tx(transactions, capacity, view->transaction_id, 1);
++		if (!tx || tx->state == RH_TX_FORGOTTEN ||
++			(view->previous_lsn != tx->last_lsn))
++			goto out;
++		if (!tx->first_lsn)
++			tx->first_lsn = view->this_lsn;
++		tx->last_lsn = view->this_lsn;
++		if (view->undo_operation == 1U)
++			tx->undo_lsn = view->undo_next_lsn;
++		else if (operation_is_mutation(view->action_class) ||
++			op == 10U || op == 23U)
++			tx->undo_lsn = view->this_lsn;
++		switch (op) {
++		case 1U:
++			/* A CLR has already undone its original; continue at its link. */
++			tx->undo_lsn = view->undo_next_lsn;
++			break;
++		case 24U:
++			tx->undo_lsn = view->undo_next_lsn;
++			break;
++		case 25U:
++			tx->state = RH_TX_PREPARED;
++			break;
++		case 26U:
++			tx->state = RH_TX_COMMITTED;
++			break;
++		case 27U:
++			tx->state = RH_TX_FORGOTTEN;
++			break;
++		case 28U:
++			if (parse_dynamic_open_attribute(&records[i], view,
++					attributes, capacity, &open_entry_size))
++				goto out;
++			++local_result.dynamic_open_attributes;
++			break;
++		case 10U:
++			if (apply_delete_dirty_clusters(&records[i], view,
++					dirty_pages, capacity))
++				goto out;
++			++local_result.delete_dirty_controls;
++			break;
++		case 23U:
++			if (apply_hotfix(&records[i], view, dirty_pages, capacity,
++					attributes, capacity, open_entry_size))
++				goto out;
++			++local_result.hotfix_controls;
++			break;
++		default:
++			break;
++		}
++		if (operation_is_mutation(view->action_class)) {
++			records[i].plan_flags |= RH_REPLAY_PLAN_REDO;
++			++local_result.mutation_records;
++		}
++	}
++
++	/* Follow each active transaction's exact undo-next chain. */
++	for (i = 0; i < capacity; ++i) {
++		struct rh_tx *tx = &transactions[i];
++		uint64_t cursor;
++		unsigned int steps = 0;
++
++		if (!tx->present || tx->state != RH_TX_ACTIVE)
++			continue;
++		cursor = tx->undo_lsn;
++		while (cursor) {
++			struct rh_replay_analysis_record *record;
++			struct rh_replay_action_view view;
++
++			if (++steps > RH_REPLAY_MAX_ACTIONS)
++				goto out;
++			record = find_record_by_lsn(records, record_count, cursor);
++			if (!record || rh_replay_guard_action(record->bytes, record->size,
++					geometry, RH_REPLAY_SOURCE_UNKNOWN, &view) ||
++				view.transaction_id != tx->id)
++				goto out;
++			if (view.undo_operation == 1U) {
++				cursor = view.undo_next_lsn;
++				continue;
++			}
++			if (!operation_is_mutation(view.action_class)) {
++				if (view.action_class != RH_REPLAY_ACTION_CONTROL)
++					goto out;
++				cursor = view.undo_next_lsn;
++				continue;
++			}
++			/* A loser mutation with Noop has no native before-image. */
++			if (view.undo_operation == 0U)
++				goto out;
++			record->plan_flags |= RH_REPLAY_PLAN_UNDO;
++			cursor = view.undo_next_lsn;
++		}
++	}
++	/* No active mutation may be skipped by a forged/short undo-next chain. */
++	for (i = 0; i < record_count; ++i) {
++		struct rh_tx *tx;
++
++		if (!operation_is_mutation(views[i].action_class))
++			continue;
++		tx = find_tx(transactions, capacity, views[i].transaction_id, 0);
++		if (tx && tx->state == RH_TX_ACTIVE &&
++			!(records[i].plan_flags & RH_REPLAY_PLAN_UNDO))
++			goto out;
++	}
++	/* Bind every physical mutation to the final, reconstructed DPT mapping. */
++	for (i = 0; i < record_count; ++i) {
++		struct rh_dirty_page *page;
++		uint32_t key;
++
++		if (!operation_is_mutation(views[i].action_class) ||
++			!(records[i].plan_flags & (RH_REPLAY_PLAN_REDO |
++				RH_REPLAY_PLAN_UNDO)))
++			continue;
++		if (!checkpoint.present) {
++			records[i].effective_lcn = views[i].first_lcn;
++			records[i].has_effective_lcn = 1;
++			continue;
++		}
++		key = rd16(records[i].bytes + 60);
++		page = find_dirty_page(dirty_pages, capacity, key,
++			views[i].target_vcn);
++		if (!page || !page->lcn_valid ||
++			page->oldest_lsn > views[i].this_lsn)
++			goto out;
++		records[i].effective_lcn = page->lcn;
++		records[i].has_effective_lcn = 1;
++	}
++
++	for (i = 0; i < record_count; ++i) {
++		if (records[i].plan_flags & RH_REPLAY_PLAN_UNDO) {
++			++local_result.loser_redos;
++			++local_result.loser_undos;
++		} else if (records[i].plan_flags & RH_REPLAY_PLAN_REDO) {
++			++local_result.winner_redos;
++		}
++	}
++	if (!local_result.mutation_records)
++		goto out;
++	if (checkpoint.present) {
++		unsigned int j;
++		for (j = 0; j < 4U; ++j)
++			if (observed_table_lsn[j] != checkpoint.table_lsn[j] ||
++				observed_table_length[j] != checkpoint.table_length[j])
++				goto out;
++	}
++	if (result)
++		*result = local_result;
++	rc = 0;
++out:
++	free(dirty_pages);
++	free(attributes);
++	free(transactions);
++	free(views);
++	return rc;
++}
+--- /dev/null
++++ b/src/roothealth_replay_analysis.h
+@@ -0,0 +1,40 @@
++#ifndef ROOTHEALTH_REPLAY_ANALYSIS_H
++#define ROOTHEALTH_REPLAY_ANALYSIS_H
++
++#include "roothealth_replay_guard.h"
++
++#include <stddef.h>
++#include <stdint.h>
++
++#define RH_REPLAY_PLAN_REDO 1U
++#define RH_REPLAY_PLAN_UNDO 2U
++
++struct rh_replay_analysis_record {
++	const unsigned char *bytes;
++	size_t size;
++	unsigned int plan_flags;
++	uint64_t effective_lcn;
++	int has_effective_lcn;
++};
++
++struct rh_replay_analysis_result {
++	unsigned int checkpoint_records;
++	unsigned int transaction_tables;
++	unsigned int open_attribute_tables;
++	unsigned int attribute_name_tables;
++	unsigned int dirty_page_tables;
++	unsigned int dynamic_open_attributes;
++	unsigned int delete_dirty_controls;
++	unsigned int hotfix_controls;
++	unsigned int mutation_records;
++	unsigned int winner_redos;
++	unsigned int loser_redos;
++	unsigned int loser_undos;
++};
++
++int rh_replay_analysis_plan(struct rh_replay_analysis_record *records,
++		size_t record_count, const struct rh_replay_geometry *geometry,
++		uint64_t synced_lsn, uint64_t committed_lsn,
++		struct rh_replay_analysis_result *result);
++
++#endif
+--- /dev/null
++++ b/tests/roothealth_replay_guard_malformed.c
+@@ -0,0 +1,398 @@
++#include "roothealth_replay_guard.h"
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
++#define BIT(n) (UINT64_C(1) << (n))
++
++static unsigned int failures;
++
++static void expect(int condition, const char *name)
++{
++	if (!condition) {
++		fprintf(stderr, "FAIL: %s\n", name);
++		++failures;
++	}
++}
++
++static void wr16(unsigned char *p, uint16_t value)
++{
++	p[0] = (unsigned char)value;
++	p[1] = (unsigned char)(value >> 8);
++}
++
++static void wr32(unsigned char *p, uint32_t value)
++{
++	wr16(p, (uint16_t)value);
++	wr16(p + 2, (uint16_t)(value >> 16));
++}
++
++static void wr64(unsigned char *p, uint64_t value)
++{
++	wr32(p, (uint32_t)value);
++	wr32(p + 4, (uint32_t)(value >> 32));
++}
++
++static uint64_t make_lsn(uint64_t source)
++{
++	return (UINT64_C(1) << 19) | (source / 8U);
++}
++
++static void make_resident(unsigned char record[104])
++{
++	memset(record, 0, 104);
++	wr64(record, make_lsn(0x5040));
++	wr32(record + 24, 56);
++	wr16(record + 28, 1);
++	wr32(record + 32, 1);
++	wr32(record + 36, 0x11223344);
++	wr16(record + 48, 7);
++	wr16(record + 50, 7);
++	wr16(record + 52, 0x28);
++	wr16(record + 54, 2);
++	wr16(record + 56, 0x30);
++	wr16(record + 58, 2);
++	wr16(record + 60, 4);
++	wr16(record + 62, 1);
++	wr16(record + 64, 360);
++	wr16(record + 66, 24);
++	wr16(record + 68, 6);
++	wr16(record + 70, 2);
++	wr64(record + 72, 0);
++	wr64(record + 80, 4);
++	record[88] = 'S';
++	record[96] = 'R';
++}
++
++static void make_forget(unsigned char record[88])
++{
++	uint64_t prior = make_lsn(0x5040);
++
++	memset(record, 0, 88);
++	wr64(record, make_lsn(0x50a8));
++	wr64(record + 8, prior);
++	wr64(record + 16, prior);
++	wr32(record + 24, 40);
++	wr16(record + 28, 1);
++	wr32(record + 32, 1);
++	wr32(record + 36, 0x11223344);
++	wr16(record + 48, 27);
++}
++
++static void make_page(unsigned char page[RH_REPLAY_PAGE_SIZE])
++{
++	unsigned int sector;
++
++	memset(page, 0, RH_REPLAY_PAGE_SIZE);
++	memcpy(page, "RCRD", 4);
++	wr16(page + 4, 40);
++	wr16(page + 6, 9);
++	wr64(page + 8, make_lsn(0x5040));
++	wr32(page + 16, 1);
++	wr16(page + 20, 1);
++	wr16(page + 22, 1);
++	wr16(page + 24, 64);
++	wr64(page + 32, make_lsn(0x5040));
++	wr16(page + 40, 0x51a7);
++	for (sector = 1; sector < 9; ++sector) {
++		size_t tail = sector * 512U - 2U;
++
++		page[40 + 2U * sector] = page[tail];
++		page[41 + 2U * sector] = page[tail + 1];
++		wr16(page + tail, 0x51a7);
++	}
++}
++
++static void test_policy(void)
++{
++	static const uint64_t masks[38] = {
++		/*  0 */ BIT(0),
++		/*  1 */ BIT(0),
++		/*  2 */ BIT(0),
++		/*  3 */ 0,
++		/*  4 */ BIT(4),
++		/*  5 */ BIT(6),
++		/*  6 */ BIT(5),
++		/*  7 */ BIT(7),
++		/*  8 */ BIT(8),
++		/*  9 */ BIT(9),
++		/* 10 */ BIT(0),
++		/* 11 */ BIT(11),
++		/* 12 */ BIT(13),
++		/* 13 */ BIT(12),
++		/* 14 */ BIT(15),
++		/* 15 */ BIT(14),
++		/* 16 */ BIT(16),
++		/* 17 */ BIT(17),
++		/* 18 */ BIT(18),
++		/* 19 */ BIT(19),
++		/* 20 */ BIT(20),
++		/* 21 */ BIT(22),
++		/* 22 */ BIT(21),
++		/* 23 */ BIT(0),
++		/* 24 */ BIT(0),
++		/* 25 */ BIT(0),
++		/* 26 */ BIT(0),
++		/* 27 */ BIT(0),
++		/* 28 */ BIT(0),
++		/* 29 */ BIT(0),
++		/* 30 */ BIT(0),
++		/* 31 */ BIT(0),
++		/* 32 */ BIT(0),
++		/* 33 */ BIT(33),
++		/* 34 */ BIT(34),
++		/* 35 */ 0,
++		/* 36 */ 0,
++		/* 37 */ BIT(0)
++	};
++	unsigned int op;
++	unsigned int supported = 0;
++
++	for (op = 0; op < ARRAY_SIZE(masks); ++op) {
++		const struct rh_replay_action_policy *policy =
++			rh_replay_action_policy(op);
++
++		expect(policy != NULL, "all 38 policy rows exist");
++		if (!policy)
++			continue;
++		expect(policy->name != NULL, "policy name exists");
++		expect(policy->undo_mask == masks[op], "exact pair mask");
++		if (policy->action_class != RH_REPLAY_ACTION_DENY)
++			++supported;
++		else
++			expect(policy->deny_reason != NULL, "deny reason exists");
++	}
++	expect(rh_replay_action_policy(38) == NULL, "opcode 38 denied");
++	expect(supported == 35, "exact guarded action/control count");
++}
++
++static void test_pages(void)
++{
++	unsigned char valid[RH_REPLAY_PAGE_SIZE];
++	unsigned char page[RH_REPLAY_PAGE_SIZE];
++	struct rh_replay_page_view view;
++	unsigned int sector;
++
++	make_page(valid);
++	memcpy(page, valid, sizeof(page));
++	expect(!rh_replay_guard_unprotect_rcrd(page, sizeof(page), &view),
++		"valid RCRD page");
++	expect(view.next_record_offset == 64, "RCRD next offset");
++	expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page) - 1, NULL),
++		"short RCRD page rejected");
++
++	for (sector = 1; sector < 9; ++sector) {
++		memcpy(page, valid, sizeof(page));
++		page[sector * 512U - 2U] ^= 1U;
++		expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page), NULL),
++			"every MST sector tail checked");
++	}
++#define BAD_PAGE(offset, value, label) do { \
++	memcpy(page, valid, sizeof(page)); \
++	wr16(page + (offset), (value)); \
++	expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page), NULL), label); \
++} while (0)
++	memcpy(page, valid, sizeof(page));
++	page[0] = 'X';
++	expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page), NULL),
++		"bad RCRD magic rejected");
++	BAD_PAGE(4, 42, "noncanonical USA offset rejected");
++	BAD_PAGE(6, 8, "wrong USA count rejected");
++	memcpy(page, valid, sizeof(page));
++	wr32(page + 16, 0);
++	expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page), NULL),
++		"non-single-page RCRD flags rejected");
++	BAD_PAGE(20, 2, "multi-page RCRD rejected");
++	BAD_PAGE(22, 2, "bad page position rejected");
++	BAD_PAGE(24, 63, "short next offset rejected");
++	BAD_PAGE(24, 65, "unaligned next offset rejected");
++	BAD_PAGE(24, 4104, "unbounded next offset rejected");
++	memcpy(page, valid, sizeof(page));
++	page[26] = 1;
++	expect(rh_replay_guard_unprotect_rcrd(page, sizeof(page), NULL),
++		"nonzero RCRD reserved byte rejected");
++#undef BAD_PAGE
++}
++
++static void test_actions(void)
++{
++	struct rh_replay_geometry geometry = {
++		.page_size = 4096,
++		.cluster_size = 4096,
++		.mft_record_size = 1024,
++		.index_record_size = 4096,
++		.logfile_size = 2U * 1024U * 1024U,
++		.volume_clusters = 16383,
++		.sequence_bits = 45,
++		.client_sequence = 1,
++		.client_index = 0
++	};
++	struct rh_replay_action_view view;
++	unsigned char valid[104];
++	unsigned char changed[4096];
++	unsigned char forget[88];
++	unsigned char control[96];
++	unsigned int op, undo;
++	uint32_t random = 0x13579bdfU;
++	size_t i;
++
++	make_resident(valid);
++	make_forget(forget);
++	expect(!rh_replay_guard_profile(&geometry), "valid T1OS profile");
++	expect(!rh_replay_guard_action(valid, sizeof(valid), &geometry,
++		0x5040, &view), "valid resident action");
++	expect(view.redo_data_offset == 88 && view.undo_data_offset == 96,
++		"resident payload windows");
++	expect(view.target_slice_offset == 3072, "resident target slice");
++	expect(!rh_replay_guard_action(forget, sizeof(forget), &geometry,
++		0x50a8, &view), "valid transaction end");
++
++	memset(control, 0, sizeof(control));
++	wr64(control, make_lsn(0x5200));
++	wr32(control + 24, 48);
++	wr16(control + 28, 1);
++	wr32(control + 32, 1);
++	wr32(control + 36, 64);
++	wr16(control + 48, 10);
++	wr16(control + 52, 0x28);
++	wr16(control + 54, 16);
++	wr64(control + 80, 4);
++	wr64(control + 88, 2);
++	expect(!rh_replay_guard_action(control, sizeof(control), &geometry,
++		RH_REPLAY_SOURCE_UNKNOWN, &view) &&
++		view.action_class == RH_REPLAY_ACTION_CONTROL,
++		"valid DeleteDirtyClusters analysis control");
++	wr64(control + 88, 0);
++	expect(rh_replay_guard_action(control, sizeof(control), &geometry,
++		RH_REPLAY_SOURCE_UNKNOWN, NULL),
++		"zero-length DeleteDirtyClusters range rejected");
++
++	memset(control, 0, 88);
++	wr64(control, make_lsn(0x5300));
++	wr32(control + 24, 40);
++	wr16(control + 28, 1);
++	wr32(control + 32, 1);
++	wr32(control + 36, 64);
++	wr16(control + 48, 23);
++	wr16(control + 60, 24);
++	wr16(control + 62, 1);
++	wr64(control + 72, 2);
++	wr64(control + 80, 5);
++	expect(!rh_replay_guard_action(control, 88, &geometry,
++		RH_REPLAY_SOURCE_UNKNOWN, &view) &&
++		view.action_class == RH_REPLAY_ACTION_CONTROL,
++		"valid HotFix analysis control");
++	wr64(control + 80, geometry.volume_clusters);
++	expect(rh_replay_guard_action(control, 88, &geometry,
++		RH_REPLAY_SOURCE_UNKNOWN, NULL),
++		"out-of-volume HotFix target rejected");
++
++	for (op = 0; op < 38; ++op) {
++		memcpy(changed, valid, sizeof(valid));
++		wr16(changed + 48, (uint16_t)op);
++		if (op != 7)
++			expect(rh_replay_guard_action(changed, sizeof(valid), &geometry,
++				0x5040, NULL), "every unqualified opcode rejected");
++	}
++	for (op = 0; op < 38; ++op) {
++		const struct rh_replay_action_policy *policy =
++			rh_replay_action_policy(op);
++
++		for (undo = 0; undo < 38; ++undo) {
++			if (policy->undo_mask & BIT(undo))
++				continue;
++			memcpy(changed, valid, sizeof(valid));
++			wr16(changed + 48, (uint16_t)op);
++			wr16(changed + 50, (uint16_t)undo);
++			expect(rh_replay_guard_action(changed, sizeof(valid),
++				&geometry, 0x5040, NULL),
++				"every non-allowlisted redo/undo pair rejected");
++		}
++	}
++
++#define BAD_ACTION(offset, width, value, label) do { \
++	memcpy(changed, valid, sizeof(valid)); \
++	if ((width) == 2) wr16(changed + (offset), (uint16_t)(value)); \
++	else if ((width) == 4) wr32(changed + (offset), (uint32_t)(value)); \
++	else wr64(changed + (offset), (uint64_t)(value)); \
++	expect(rh_replay_guard_action(changed, sizeof(valid), &geometry, \
++		0x5040, NULL), label); \
++} while (0)
++	BAD_ACTION(24, 4, 0xffffffffU, "oversized client length rejected");
++	BAD_ACTION(30, 2, 1, "wrong client index rejected");
++	BAD_ACTION(36, 4, 0, "zero transaction rejected");
++	BAD_ACTION(40, 2, 1, "record flags rejected");
++	BAD_ACTION(42, 2, 1, "reserved bytes rejected");
++	BAD_ACTION(50, 2, 1, "unqualified compensation pair rejected");
++	BAD_ACTION(52, 2, 0x20, "redo overlaps LCN table rejected");
++	BAD_ACTION(54, 2, 32, "redo end bound rejected");
++	BAD_ACTION(56, 2, 0x38, "payload gap rejected");
++	BAD_ACTION(58, 2, 16, "undo end bound rejected");
++	BAD_ACTION(62, 2, 0xffff, "LCN list bound rejected");
++	BAD_ACTION(68, 2, 1, "misaligned MFT record slice rejected");
++	BAD_ACTION(68, 2, 7, "protected target slice rejected");
++	BAD_ACTION(70, 2, 8, "wrong target family rejected");
++	BAD_ACTION(80, 8, 16383, "out-of-volume LCN rejected");
++	BAD_ACTION(8, 8, make_lsn(0x5040), "nonpast previous LSN rejected");
++	BAD_ACTION(28, 2, 2, "wrong log client sequence rejected");
++	expect(rh_replay_guard_action(valid, sizeof(valid), &geometry,
++		0x6040, NULL), "LSN source mismatch rejected");
++	expect(rh_replay_guard_action(valid, sizeof(valid) - 8, &geometry,
++		0x5040, NULL), "truncated action rejected");
++	memcpy(changed, forget, sizeof(forget));
++	changed[87] = 1;
++	expect(rh_replay_guard_action(changed, sizeof(forget), &geometry,
++		0x50a8, NULL), "transaction-end trailing data rejected");
++#undef BAD_ACTION
++
++	geometry.page_size = 8192;
++	expect(rh_replay_guard_profile(&geometry), "8KiB log page rejected");
++	geometry.page_size = 4096;
++	geometry.logfile_size = RH_REPLAY_MAX_LOGFILE_SIZE + 4096U;
++	expect(rh_replay_guard_profile(&geometry), "oversized logfile rejected");
++	geometry.logfile_size = 2U * 1024U * 1024U;
++	geometry.cluster_size = 8192;
++	expect(rh_replay_guard_profile(&geometry), "non-T1OS cluster rejected");
++	geometry.cluster_size = 4096;
++	geometry.mft_record_size = 4096;
++	expect(rh_replay_guard_profile(&geometry), "non-T1OS MFT size rejected");
++	geometry.mft_record_size = 1024;
++
++	for (i = 0; i < 20000; ++i) {
++		size_t length;
++		size_t j;
++
++		random ^= random << 13;
++		random ^= random >> 17;
++		random ^= random << 5;
++		length = random % sizeof(changed);
++		for (j = 0; j < length; ++j) {
++			random = random * 1664525U + 1013904223U;
++			changed[j] = (unsigned char)(random >> 24);
++		}
++		(void)rh_replay_guard_action(changed, length, &geometry,
++			RH_REPLAY_SOURCE_UNKNOWN, NULL);
++	}
++	for (i = 0; i < sizeof(valid); ++i) {
++		memcpy(changed, valid, sizeof(valid));
++		changed[i] ^= (unsigned char)(1U << (i & 7U));
++		(void)rh_replay_guard_action(changed, sizeof(valid), &geometry,
++			0x5040, NULL);
++	}
++}
++
++int main(void)
++{
++	test_policy();
++	test_pages();
++	test_actions();
++	if (failures) {
++		fprintf(stderr, "%u roothealth replay guard checks failed\n", failures);
++		return 1;
++	}
++	puts("PASS roothealth native replay guard malformed corpus");
++	return 0;
++}
+--- /dev/null
++++ b/tests/roothealth_replay_analysis_malformed.c
+@@ -0,0 +1,274 @@
++#include "roothealth_replay_analysis.h"
++
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#define TABLE_HEADER 24U
++#define TABLE_ENTRY 40U
++#define ALLOCATED UINT32_C(0xffffffff)
++
++static unsigned int failures;
++
++static void expect(int condition, const char *label)
++{
++	if (!condition) {
++		fprintf(stderr, "FAIL: %s\n", label);
++		++failures;
++	}
++}
++
++static void wr16(unsigned char *p, uint16_t value)
++{
++	p[0] = (unsigned char)value;
++	p[1] = (unsigned char)(value >> 8);
++}
++
++static void wr32(unsigned char *p, uint32_t value)
++{
++	wr16(p, (uint16_t)value);
++	wr16(p + 2, (uint16_t)(value >> 16));
++}
++
++static void wr64(unsigned char *p, uint64_t value)
++{
++	wr32(p, (uint32_t)value);
++	wr32(p + 4, (uint32_t)(value >> 32));
++}
++
++static void common(unsigned char *record, size_t size, uint64_t lsn,
++		uint64_t previous, uint64_t undo_next, uint32_t type, uint32_t tx)
++{
++	memset(record, 0, size);
++	wr64(record, lsn);
++	wr64(record + 8, previous);
++	wr64(record + 16, undo_next);
++	wr32(record + 24, (uint32_t)size - 48U);
++	wr16(record + 28, 1);
++	wr32(record + 32, type);
++	wr32(record + 36, tx);
++}
++
++static void table_header(unsigned char *table, int allocated)
++{
++	memset(table, 0, 64);
++	wr16(table, TABLE_ENTRY);
++	wr16(table + 2, 1);
++	wr16(table + 4, (uint16_t)allocated);
++	if (allocated) {
++		wr32(table + TABLE_HEADER, ALLOCATED);
++	} else {
++		wr32(table + 16, TABLE_HEADER);
++		wr32(table + 20, TABLE_HEADER);
++	}
++}
++
++static void dump(unsigned char record[144], uint64_t lsn, uint64_t previous,
++		uint16_t op, const unsigned char table[64])
++{
++	common(record, 144, lsn, previous, previous, 1, 24);
++	wr16(record + 48, op);
++	wr16(record + 52, 0x28);
++	wr16(record + 54, 64);
++	memcpy(record + 80, table, 64);
++}
++
++static void build_valid(unsigned char open_dump[144],
++		unsigned char names[88], unsigned char dirty_dump[144],
++		unsigned char tx_dump[144], unsigned char checkpoint[152],
++		unsigned char update[104], unsigned char forget[88])
++{
++	unsigned char table[64];
++
++	table_header(table, 1);
++	wr32(table + TABLE_HEADER + 8, 0x80);
++	wr64(table + TABLE_HEADER + 16, (UINT64_C(1) << 48) | 3U);
++	dump(open_dump, 100, 0, 29, table);
++	common(names, 88, 200, 100, 100, 1, 24);
++	wr16(names + 48, 30);
++
++	table_header(table, 1);
++	wr32(table + TABLE_HEADER + 4, TABLE_HEADER);
++	wr32(table + TABLE_HEADER + 8, 4096);
++	wr32(table + TABLE_HEADER + 12, 1);
++	wr64(table + TABLE_HEADER + 16, 0);
++	wr64(table + TABLE_HEADER + 24, 100);
++	wr64(table + TABLE_HEADER + 32, 4);
++	dump(dirty_dump, 300, 200, 31, table);
++	table_header(table, 0);
++	dump(tx_dump, 400, 300, 32, table);
++
++	common(checkpoint, 152, 500, 400, 0, 2, 0);
++	wr32(checkpoint + 48, 1);
++	wr32(checkpoint + 52, 1);
++	wr64(checkpoint + 56, 500);
++	wr64(checkpoint + 64, 100);
++	wr64(checkpoint + 72, 200);
++	wr64(checkpoint + 80, 300);
++	wr64(checkpoint + 88, 400);
++	wr32(checkpoint + 96, 64);
++	wr32(checkpoint + 100, 8);
++	wr32(checkpoint + 104, 64);
++	wr32(checkpoint + 108, 64);
++
++	common(update, 104, 600, 0, 0, 1, 64);
++	wr16(update + 40, 2);
++	wr16(update + 48, 7);
++	wr16(update + 50, 7);
++	wr16(update + 52, 0x28);
++	wr16(update + 54, 2);
++	wr16(update + 56, 0x30);
++	wr16(update + 58, 2);
++	wr16(update + 60, TABLE_HEADER);
++	wr16(update + 62, 1);
++	wr16(update + 64, 360);
++	wr16(update + 66, 24);
++	wr16(update + 68, 6);
++	wr16(update + 70, 2);
++	wr64(update + 80, 4);
++	update[88] = 'S';
++	update[96] = 'R';
++
++	common(forget, 88, 700, 600, 600, 1, 64);
++	wr16(forget + 48, 27);
++}
++
++static int analyze(unsigned char open_dump[144], unsigned char names[88],
++		unsigned char dirty_dump[144], unsigned char tx_dump[144],
++		unsigned char checkpoint[152], unsigned char update[104],
++		unsigned char forget[88], struct rh_replay_analysis_result *result)
++{
++	struct rh_replay_geometry geometry = {
++		.page_size = 4096, .cluster_size = 4096, .mft_record_size = 1024,
++		.index_record_size = 4096, .logfile_size = 2U * 1024U * 1024U,
++		.volume_clusters = 16383, .sequence_bits = 45,
++		.client_sequence = 1, .client_index = 0
++	};
++	struct rh_replay_analysis_record records[] = {
++		{ .bytes = open_dump, .size = 144 },
++		{ .bytes = names, .size = 88 },
++		{ .bytes = dirty_dump, .size = 144 },
++		{ .bytes = tx_dump, .size = 144 },
++		{ .bytes = checkpoint, .size = 152 },
++		{ .bytes = update, .size = 104 },
++		{ .bytes = forget, .size = 88 }
++	};
++	int rc = rh_replay_analysis_plan(records, sizeof(records) / sizeof(records[0]),
++		&geometry, 100, 700, result);
++
++	if (!rc)
++		expect(records[5].plan_flags == RH_REPLAY_PLAN_REDO,
++			"checkpoint winner marked for redo");
++	return rc;
++}
++
++static void test_dynamic_open44(void)
++{
++	unsigned char open_record[128], update[104], forget[88];
++	struct rh_replay_geometry geometry = {
++		.page_size = 4096, .cluster_size = 4096, .mft_record_size = 1024,
++		.index_record_size = 4096, .logfile_size = 2U * 1024U * 1024U,
++		.volume_clusters = 16383, .sequence_bits = 45,
++		.client_sequence = 1, .client_index = 0
++	};
++	struct rh_replay_analysis_record records[] = {
++		{ .bytes = open_record, .size = sizeof(open_record) },
++		{ .bytes = update, .size = sizeof(update) },
++		{ .bytes = forget, .size = sizeof(forget) }
++	};
++	struct rh_replay_analysis_result result;
++
++	common(open_record, sizeof(open_record), 100, 0, 0, 1, 64);
++	wr16(open_record + 48, 28);
++	wr16(open_record + 52, 0x28);
++	wr16(open_record + 54, 44);
++	wr16(open_record + 60, TABLE_HEADER);
++	wr32(open_record + 80, ALLOCATED);
++	wr64(open_record + 88, (UINT64_C(1) << 48) | 0U);
++	wr32(open_record + 108, 0x80);
++
++	common(update, sizeof(update), 200, 100, 100, 1, 64);
++	wr16(update + 40, 2);
++	wr16(update + 48, 7);
++	wr16(update + 50, 7);
++	wr16(update + 52, 0x28);
++	wr16(update + 54, 2);
++	wr16(update + 56, 0x30);
++	wr16(update + 58, 2);
++	wr16(update + 60, TABLE_HEADER);
++	wr16(update + 62, 1);
++	wr16(update + 64, 360);
++	wr16(update + 66, 24);
++	wr16(update + 68, 6);
++	wr16(update + 70, 2);
++	wr64(update + 80, 4);
++	update[88] = 'S';
++	update[96] = 'R';
++	common(forget, sizeof(forget), 300, 200, 200, 1, 64);
++	wr16(forget + 48, 27);
++	expect(!rh_replay_analysis_plan(records, 3, &geometry, 100, 300,
++			&result), "44-byte dynamic open-attribute format");
++	expect(result.dynamic_open_attributes == 1 && result.winner_redos == 1,
++		"44-byte dynamic open participates in winner analysis");
++}
++
++int main(void)
++{
++	unsigned char open_dump[144], names[88], dirty_dump[144], tx_dump[144];
++	unsigned char checkpoint[152], update[104], forget[88], saved[152];
++	struct rh_replay_analysis_result result;
++	uint32_t random = 0x8badf00dU;
++	unsigned int i;
++
++	build_valid(open_dump, names, dirty_dump, tx_dump, checkpoint, update, forget);
++	test_dynamic_open44();
++	expect(!analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++		forget, &result), "valid checkpoint analysis");
++	expect(result.checkpoint_records == 1 && result.open_attribute_tables == 1 &&
++		result.attribute_name_tables == 1 && result.dirty_page_tables == 1 &&
++		result.transaction_tables == 1 && result.winner_redos == 1,
++		"all analysis controls counted");
++
++	memcpy(saved, open_dump, sizeof(open_dump));
++	wr32(open_dump + 80 + TABLE_HEADER + 8, 0x81);
++	expect(analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++		forget, NULL), "misaligned open attribute type rejected");
++	memcpy(open_dump, saved, sizeof(open_dump));
++	memcpy(saved, dirty_dump, sizeof(dirty_dump));
++	wr64(dirty_dump + 80 + TABLE_HEADER + 32, UINT64_MAX);
++	expect(analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++		forget, NULL), "out-of-volume dirty LCN rejected");
++	memcpy(dirty_dump, saved, sizeof(dirty_dump));
++	memcpy(saved, tx_dump, sizeof(tx_dump));
++	wr32(tx_dump + 80 + TABLE_HEADER, TABLE_HEADER);
++	expect(analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++		forget, NULL), "transaction free-list cycle rejected");
++	memcpy(tx_dump, saved, sizeof(tx_dump));
++	memcpy(saved, checkpoint, sizeof(checkpoint));
++	wr32(checkpoint + 96, 63);
++	expect(analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++		forget, NULL), "checkpoint/table length mismatch rejected");
++	memcpy(checkpoint, saved, sizeof(checkpoint));
++
++	for (i = 0; i < 20000U; ++i) {
++		unsigned int at;
++		unsigned char old;
++
++		random ^= random << 13;
++		random ^= random >> 17;
++		random ^= random << 5;
++		at = random % sizeof(tx_dump);
++		old = tx_dump[at];
++		tx_dump[at] ^= (unsigned char)(1U << (random & 7U));
++		(void)analyze(open_dump, names, dirty_dump, tx_dump, checkpoint, update,
++			forget, NULL);
++		tx_dump[at] = old;
++	}
++	if (failures) {
++		fprintf(stderr, "%u roothealth replay analysis checks failed\n", failures);
++		return 1;
++	}
++	puts("PASS roothealth native replay analysis malformed corpus");
++	return 0;
++}

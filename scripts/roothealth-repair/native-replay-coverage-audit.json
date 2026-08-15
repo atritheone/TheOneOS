@@ -1,0 +1,1312 @@
+{
+  "schema_version": 1,
+  "title": "RootHealth adapted native $LogFile replay coverage and preflight audit",
+  "generated_for": {
+    "pinned_ntfs_next_commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
+    "audited_tree": "/var/tmp/roothealth-repair-dev.ntfstooling",
+    "source_sha256": {
+      "src/roothealth_recover.c": "6dd920b316ccb5358e586434fa21b0876dce9715923919c9d70b20e05867f98f",
+      "src/roothealth_playlog.c": "f0366ea9494181013d0de04f545ad057aa645639ca94b795c6153a75755a82d3",
+      "src/roothealth_recover.h": "164c3a93210536bc2bfbd07a9e98ef001cce1eceeff79c681bbcbee59feb3741",
+      "include/logfile.h": "86f680bc1dcd332c354fc0fa9c81b74f9f3121240adb44f0776be174f9ce8bd1"
+    }
+  },
+  "verdict": "BLOCK_NATIVE_REPLAY_QUALIFICATION",
+  "scope_note": "This table audits the fixed roothealth_log_replay_plan sync/redo path (opts=1, optn=TRUE, optu=FALSE). It does not qualify the dormant undo/time-reversal CLI path.",
+  "summary": {
+    "enum_actions": 38,
+    "actions_with_handler_path": 23,
+    "conditional_dispatches_with_silent_pair_mismatch": 22,
+    "undo_unchecked_dynamic_dispatches": 1,
+    "control_or_ignored_success_actions": 5,
+    "fail_closed_or_dispatch_error_actions": 10,
+    "generically_qualification_safe_mutating_actions": 0
+  },
+  "preflight_strengths": [
+    {
+      "id": "POS-001",
+      "detail": "roothealth_log_replay_plan fixes plan-only sync mode (optn=TRUE, opts=1), rejects hibernation, uses a typed rh_writer, and never calls rh_writer_commit.",
+      "source": [
+        "src/roothealth_recover.c:4484-4552"
+      ]
+    },
+    {
+      "id": "POS-002",
+      "detail": "Restart pages are selected through libntfs ntfs_check_logfile and action/page walks have explicit step and action-count ceilings.",
+      "source": [
+        "src/roothealth_recover.c:2960-3018",
+        "src/roothealth_recover.c:2314-2327",
+        "src/roothealth_recover.c:3653-3673"
+      ]
+    },
+    {
+      "id": "POS-003",
+      "detail": "Physical mutations are converted into RH_WRITE_LOGFILE_REDO or RH_WRITE_LOGFILE_RESTART plans and direct replay writes are refused.",
+      "source": [
+        "src/roothealth_playlog.c:494-580",
+        "src/roothealth_recover.c:3030-3095"
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "id": "NRP-001",
+      "severity": "CRITICAL",
+      "category": "record_preflight",
+      "title": "Only the first non-overlapping action on an RCRD page is fully validated",
+      "evidence": "backward_rcrd calls likelyop() for the first record, then accepts every later record based only on client_data_length/size before enqueue_action.",
+      "source": [
+        "src/roothealth_recover.c:3552-3578",
+        "src/roothealth_recover.c:3579-3604",
+        "src/roothealth_recover.c:3620-3648"
+      ],
+      "impact": "A later record can bypass opcode range, transaction-id, offset, contiguity and pair-shape checks; it then reaches dispatch and helper code.",
+      "required_gate": "Call one centralized strict validator for every complete or overlapped record before enqueue; reject the page/plan on any failure."
+    },
+    {
+      "id": "NRP-002",
+      "severity": "CRITICAL",
+      "category": "record_preflight",
+      "title": "likelyop does not prove LCN-list or redo/undo payload extents fit the allocated action",
+      "evidence": "It checks alignment and minimum data offsets but never proves 80+8*lcns_to_follow, get_redo_offset()+redo_length, get_undo_offset()+undo_length, or extra/name data are <= client_data_length+0x30.",
+      "source": [
+        "src/roothealth_recover.c:839-923"
+      ],
+      "impact": "Helpers can read beyond ACTION_RECORD, misinterpret payload as LCN entries, dereference NULL payloads, or derive attacker-controlled lengths.",
+      "required_gate": "Validate the complete LOG_RECORD variable layout with overflow-safe arithmetic before any display, refresh, classification, I/O or dispatch."
+    },
+    {
+      "id": "NRP-003",
+      "severity": "CRITICAL",
+      "category": "io_preflight",
+      "title": "Raw-cluster count and protected-record slice are not bounded before allocation/copy",
+      "evidence": "read_raw allocates clustersz*lcns_to_follow and indexes lcn_list without proving either extent; read_protected/write_protected copy at cluster_index<<9 without proving pos+record_size <= clustersz*count.",
+      "source": [
+        "src/roothealth_playlog.c:426-484",
+        "src/roothealth_playlog.c:587-623",
+        "src/roothealth_playlog.c:635-718"
+      ],
+      "impact": "Malformed native log data can cause out-of-bounds reads/writes, excessive allocation, and arbitrary physical-range planning attempts before helper checks.",
+      "required_gate": "Cap clusters/action, validate multiplication, LCN-list bytes, every LCN against volume geometry, and protected slice bounds before read_raw."
+    },
+    {
+      "id": "NRP-004",
+      "severity": "HIGH",
+      "category": "page_preflight",
+      "title": "Malformed or absent RCRD update-sequence arrays are accepted",
+      "evidence": "replaceusa validates only when xusa/nusa and its shape predicate are already true; otherwise it returns no error and read_buffer marks the page safe.",
+      "source": [
+        "src/roothealth_recover.c:237-269",
+        "src/roothealth_recover.c:347-411"
+      ],
+      "impact": "RCRD pages without valid MST protection can enter record parsing, unlike the strictly validated restart pages.",
+      "required_gate": "Require exact USA offset/count/range for every RCRD page and reject any mismatch or absent protection."
+    },
+    {
+      "id": "NRP-005",
+      "severity": "CRITICAL",
+      "category": "dispatch",
+      "title": "Wrong redo/undo pair returns success for 22 handler-backed redo opcodes",
+      "evidence": "distribute_redos initializes err=0; conditional pair branches have no rejecting else; play_one_redo increments redocount after dispatch.",
+      "source": [
+        "src/roothealth_playlog.c:4102-4274",
+        "src/roothealth_playlog.c:4484-4497"
+      ],
+      "impact": "A required committed operation can be skipped silently and the caller can still plan clean restart pages, discarding evidence that replay remains incomplete.",
+      "required_gate": "Use an exhaustive typed pair table before target reads; every unapproved pair must fail closed and must not increment replayed-action counters."
+    },
+    {
+      "id": "NRP-006",
+      "severity": "CRITICAL",
+      "category": "helper_bounds",
+      "title": "Bitmap bit range is unchecked",
+      "evidence": "redo_force_bits reads firstbit/count then calls ntfs_bit_set count times; the source TODO explicitly notes the missing firstbit+count bound.",
+      "source": [
+        "src/roothealth_playlog.c:2287-2327"
+      ],
+      "impact": "SetBits/ClearBits can write beyond the allocated cluster buffer in plan-only mode.",
+      "required_gate": "Require an 8-byte BITMAP_ACTION payload and firstbit+count <= 8*clustersz*lcns_to_follow with overflow-safe arithmetic."
+    },
+    {
+      "id": "NRP-007",
+      "severity": "CRITICAL",
+      "category": "helper_semantics",
+      "title": "Resident resize helpers are explicitly incomplete and reachable",
+      "evidence": "expand_resident labels its idempotence test wrong; shrink_resident lacks attribute/bytes_in_use bounds and uses a fake not-shrunk assumption.",
+      "source": [
+        "src/roothealth_playlog.c:1100-1160",
+        "src/roothealth_playlog.c:1409-1487"
+      ],
+      "impact": "Unequal-length UpdateResidentValue and WriteEndofFileRecordSegment can move/resize unrelated MFT bytes or misclassify already-applied state.",
+      "required_gate": "Deny unequal-length variants until attribute-local, bytes_in_use, capacity, overlap and expected-before invariants are fully implemented and tested."
+    },
+    {
+      "id": "NRP-008",
+      "severity": "HIGH",
+      "category": "silent_success",
+      "title": "Win10Action37 always reports success",
+      "evidence": "redo_action37 sets err from write_protected or diagnoses a bad target, then unconditionally assigns err=0.",
+      "source": [
+        "src/roothealth_playlog.c:1831-1863"
+      ],
+      "impact": "Invalid targets and failed typed-write planning are hidden; replay can be declared successful.",
+      "required_gate": "Preserve errors and define/validate the complete Action37 format before qualification."
+    },
+    {
+      "id": "NRP-009",
+      "severity": "HIGH",
+      "category": "ignored_semantics",
+      "title": "Dump/control operations have inconsistent or unchecked semantics",
+      "evidence": "OpenAttributeTableDump and AttributeNamesDump are parsed in refresh_attributes without complete payload bounds; DirtyPageTableDump is ignored; TransactionTableDump is called ignored in play_one_redo but errors in distribute_redos.",
+      "source": [
+        "src/roothealth_recover.c:1226-1313",
+        "src/roothealth_playlog.c:4259-4267",
+        "src/roothealth_playlog.c:4360-4367"
+      ],
+      "impact": "Attribute classification can be built from out-of-range data, dirty-page state is lost, and valid transaction-table records may abort depending on dispatch stage.",
+      "required_gate": "Give each dump opcode an exact bounded grammar and explicit semantic role, or deny the whole replay set before any plan is accepted."
+    },
+    {
+      "id": "NRP-010",
+      "severity": "HIGH",
+      "category": "transaction_preflight",
+      "title": "Commit marking matches transaction id without validating the LSN chain",
+      "evidence": "mark_transactions starts at ForgetTransaction and marks every earlier action with the same transaction_id and this_lsn<=committed_lsn; client_previous_lsn/client_undo_next_lsn are not checked.",
+      "source": [
+        "src/roothealth_recover.c:2254-2293"
+      ],
+      "impact": "Stale or unrelated actions with a reused/forged transaction id can be marked for redo.",
+      "required_gate": "Validate transaction-chain topology, monotonic/in-page LSN encoding, restart window membership, and unique termination before marking."
+    },
+    {
+      "id": "NRP-011",
+      "severity": "CRITICAL",
+      "category": "helper_bounds",
+      "title": "Per-action helpers dereference record/attribute targets before complete local bounds proof",
+      "evidence": "Many helpers form ATTR_RECORD/INDEX pointers or read target+8 before proving record_offset, attribute_offset, target, payload, attribute length and record bytes_in_use are in range; right-justified target subtraction can underflow.",
+      "source": [
+        "src/roothealth_playlog.c:868-1020",
+        "src/roothealth_playlog.c:1182-1487",
+        "src/roothealth_playlog.c:1831-2885"
+      ],
+      "impact": "Even when raw I/O succeeds, crafted offsets can cause OOB access or metadata moves outside the intended attribute/index entry.",
+      "required_gate": "Add operation-specific preflight that returns a typed validated view; helpers must consume only validated offsets/ranges and expected-before bytes."
+    },
+    {
+      "id": "NRP-012",
+      "severity": "HIGH",
+      "category": "attribute_table",
+      "title": "Dynamic attribute-table construction is not fail-atomic or fully bounded",
+      "evidence": "getattrentry updates attrcount across realloc failure paths; refresh/open parsing derives variable name/table extents without a central record-end check; UpdateNonResidentValue depends on this table for target kind.",
+      "source": [
+        "src/roothealth_recover.c:279-337",
+        "src/roothealth_recover.c:1226-1313",
+        "src/roothealth_playlog.c:2330-2410",
+        "src/roothealth_playlog.c:4020-4080"
+      ],
+      "impact": "Allocation failure or malformed dump data can corrupt classification state and route a nonresident update to INDX or raw clusters incorrectly.",
+      "required_gate": "Build the table in a bounded temporary structure, validate all dumps first, then publish atomically; deny ambiguous target kinds."
+    },
+    {
+      "id": "NRP-013",
+      "severity": "HIGH",
+      "category": "completion_semantics",
+      "title": "redo_actions counts ignored controls and clean restart planning is not tied to physical semantic completion",
+      "evidence": "redocount increments for every successful distribute_redos call, including Noop/Forget/dumps; roothealth_log_replay_plan plans clean restart pages whenever walk returns success.",
+      "source": [
+        "src/roothealth_playlog.c:4259-4274",
+        "src/roothealth_playlog.c:4484-4488",
+        "src/roothealth_recover.c:4551-4572"
+      ],
+      "impact": "Metrics overstate repaired actions and ignored/silently skipped records can still lead to a clean journal state.",
+      "required_gate": "Track examined, control-consumed, physically-planned, already-applied and rejected counts separately; clean only after every committed record has an approved terminal state."
+    }
+  ],
+  "integration_preconditions": [
+    "This low-level API accepts only a device path/writer; T1OS serial+UUID identity and full namespace proof must be enforced by the caller before the resulting plan is committed.",
+    "A persistent typed WAL must cover every planned redo and both restart-page writes before mutation; this audit does not qualify the WAL implementation.",
+    "No unsupported, ignored-semantic or ambiguous pair may be bypassed merely because a later checker reports a clean namespace."
+  ],
+  "action_table": [
+    {
+      "code": 0,
+      "name": "Noop",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "CONTROL_NO_TARGET_MUTATION",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [],
+      "semantic_effect": "True no-op at redo time; currently counted as a redo action.",
+      "mismatch_or_unhandled_behavior": "all undo opcodes return success; redocount increments",
+      "roothealth_qualification": "CONDITIONAL_CONTROL_ONLY",
+      "gap_ids": [
+        "NRP-013"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4262,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 1,
+      "name": "CompensationlogRecord",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          0
+        ],
+        "names": [
+          "Noop"
+        ]
+      },
+      "handler": [
+        "redo_compensate"
+      ],
+      "semantic_effect": "Advances restart_lsn only; does not mutate an NTFS target.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_CONTROL_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-010"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4129,
+        "helper_lines": [
+          1993
+        ]
+      }
+    },
+    {
+      "code": 2,
+      "name": "InitializeFileRecordSegment",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          0
+        ],
+        "names": [
+          "Noop"
+        ]
+      },
+      "handler": [
+        "redo_create_file"
+      ],
+      "semantic_effect": "Initializes/marks an MFT record in use.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4169,
+        "helper_lines": [
+          2009
+        ]
+      }
+    },
+    {
+      "code": 3,
+      "name": "DeallocateFileRecordSegment",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          2,
+          1
+        ],
+        "names": [
+          "InitializeFileRecordSegment",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_delete_file"
+      ],
+      "semantic_effect": "Clears MFT_RECORD_IN_USE and copies undo bytes into the record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4141,
+        "helper_lines": [
+          2107
+        ]
+      }
+    },
+    {
+      "code": 4,
+      "name": "WriteEndofFileRecordSegment",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          4
+        ],
+        "names": [
+          "WriteEndofFileRecordSegment"
+        ]
+      },
+      "handler": [
+        "redo_write_end"
+      ],
+      "semantic_effect": "Updates or resizes the end of an MFT record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-007"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4247,
+        "helper_lines": [
+          2782
+        ]
+      }
+    },
+    {
+      "code": 5,
+      "name": "CreateAttribute",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          6,
+          1
+        ],
+        "names": [
+          "DeleteAttribute",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_create_attribute"
+      ],
+      "semantic_effect": "Inserts a resident attribute only when redo_create_attribute's extra length constraints hold.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4134,
+        "helper_lines": [
+          2062
+        ]
+      }
+    },
+    {
+      "code": 6,
+      "name": "DeleteAttribute",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          5,
+          1
+        ],
+        "names": [
+          "CreateAttribute",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_delete_attribute"
+      ],
+      "semantic_effect": "Removes a resident attribute only when redo_delete_attribute's extra length constraints hold.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4148,
+        "helper_lines": [
+          2085
+        ]
+      }
+    },
+    {
+      "code": 7,
+      "name": "UpdateResidentValue",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          7,
+          1
+        ],
+        "names": [
+          "UpdateResidentValue",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_update_resident"
+      ],
+      "semantic_effect": "Updates or resizes resident attribute bytes.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-007"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4235,
+        "helper_lines": [
+          2563
+        ]
+      }
+    },
+    {
+      "code": 8,
+      "name": "UpdateNonResidentValue",
+      "preflight_kind": "DYNAMIC_ON_INDX_OR_ON_RAW",
+      "dispatch_status": "HANDLER_DYNAMIC_UNDO_UNCHECKED",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [
+        "redo_update_index_value",
+        "redo_update_value"
+      ],
+      "semantic_effect": "Updates an INDX block or raw nonresident clusters after dynamic attribute classification.",
+      "mismatch_or_unhandled_behavior": "undo opcode is not consulted",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-012"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4222,
+        "helper_lines": [
+          2455,
+          2692
+        ]
+      }
+    },
+    {
+      "code": 9,
+      "name": "UpdateMappingPairs",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          9
+        ],
+        "names": [
+          "UpdateMappingPairs"
+        ]
+      },
+      "handler": [
+        "redo_update_mapping"
+      ],
+      "semantic_effect": "Replaces/resizes nonresident mapping pairs and recomputes highest_vcn.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4217,
+        "helper_lines": [
+          2475
+        ]
+      }
+    },
+    {
+      "code": 10,
+      "name": "DeleteDirtyClusters",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4369,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 11,
+      "name": "SetNewAttributeSizes",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          11,
+          1
+        ],
+        "names": [
+          "SetNewAttributeSizes",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_sizes"
+      ],
+      "semantic_effect": "Changes resident allocated/data/initialized size fields.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4196,
+        "helper_lines": [
+          2411
+        ]
+      }
+    },
+    {
+      "code": 12,
+      "name": "AddIndexEntryRoot",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          13
+        ],
+        "names": [
+          "DeleteIndexEntryRoot"
+        ]
+      },
+      "handler": [
+        "redo_add_root_index"
+      ],
+      "semantic_effect": "Inserts an index-root entry in an MFT record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4117,
+        "helper_lines": [
+          1929
+        ]
+      }
+    },
+    {
+      "code": 13,
+      "name": "DeleteIndexEntryRoot",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          12,
+          1
+        ],
+        "names": [
+          "AddIndexEntryRoot",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_delete_root_index"
+      ],
+      "semantic_effect": "Removes an index-root entry in an MFT record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4162,
+        "helper_lines": [
+          2220
+        ]
+      }
+    },
+    {
+      "code": 14,
+      "name": "AddIndexEntryAllocation",
+      "preflight_kind": "ON_INDX",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          15
+        ],
+        "names": [
+          "DeleteIndexEntryAllocation"
+        ]
+      },
+      "handler": [
+        "redo_add_index"
+      ],
+      "semantic_effect": "Inserts an index-allocation entry in an INDX record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4112,
+        "helper_lines": [
+          1866
+        ]
+      }
+    },
+    {
+      "code": 15,
+      "name": "DeleteIndexEntryAllocation",
+      "preflight_kind": "ON_INDX",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          14,
+          1
+        ],
+        "names": [
+          "AddIndexEntryAllocation",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_delete_index"
+      ],
+      "semantic_effect": "Removes an index-allocation entry in an INDX record.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4155,
+        "helper_lines": [
+          2160
+        ]
+      }
+    },
+    {
+      "code": 16,
+      "name": "WriteEndOfIndexBuffer",
+      "preflight_kind": "ON_INDX",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          16,
+          1
+        ],
+        "names": [
+          "WriteEndOfIndexBuffer",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_write_index"
+      ],
+      "semantic_effect": "Updates/truncates the end of an INDX buffer.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4252,
+        "helper_lines": [
+          2849
+        ]
+      }
+    },
+    {
+      "code": 17,
+      "name": "SetIndexEntryVcnRoot",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          17
+        ],
+        "names": [
+          "SetIndexEntryVcnRoot"
+        ]
+      },
+      "handler": [
+        "redo_update_root_vcn"
+      ],
+      "semantic_effect": "Updates an index-root entry VCN.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4191,
+        "helper_lines": [
+          2664
+        ]
+      }
+    },
+    {
+      "code": 18,
+      "name": "SetIndexEntryVcnAllocation",
+      "preflight_kind": "ON_INDX",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          18,
+          1
+        ],
+        "names": [
+          "SetIndexEntryVcnAllocation",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_update_vcn"
+      ],
+      "semantic_effect": "Updates an index-allocation entry VCN.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4184,
+        "helper_lines": [
+          2758
+        ]
+      }
+    },
+    {
+      "code": 19,
+      "name": "UpdateFileNameRoot",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          19,
+          1
+        ],
+        "names": [
+          "UpdateFileNameRoot",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_update_root_index"
+      ],
+      "semantic_effect": "Updates FILE_NAME fields inside an index root.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4210,
+        "helper_lines": [
+          2632
+        ]
+      }
+    },
+    {
+      "code": 20,
+      "name": "UpdateFileNameAllocation",
+      "preflight_kind": "ON_INDX",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          20,
+          1
+        ],
+        "names": [
+          "UpdateFileNameAllocation",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_update_index"
+      ],
+      "semantic_effect": "Updates FILE_NAME fields inside an index allocation.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4203,
+        "helper_lines": [
+          2433
+        ]
+      }
+    },
+    {
+      "code": 21,
+      "name": "SetBitsInNonResidentBitMap",
+      "preflight_kind": "ON_RAW",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          22
+        ],
+        "names": [
+          "ClearBitsInNonResidentBitMap"
+        ]
+      },
+      "handler": [
+        "redo_force_bits"
+      ],
+      "semantic_effect": "Sets bits in raw nonresident bitmap clusters.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-006"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4179,
+        "helper_lines": [
+          2287
+        ]
+      }
+    },
+    {
+      "code": 22,
+      "name": "ClearBitsInNonResidentBitMap",
+      "preflight_kind": "ON_RAW",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          21,
+          1
+        ],
+        "names": [
+          "SetBitsInNonResidentBitMap",
+          "CompensationlogRecord"
+        ]
+      },
+      "handler": [
+        "redo_force_bits"
+      ],
+      "semantic_effect": "Clears bits in raw nonresident bitmap clusters.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-006"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4122,
+        "helper_lines": [
+          2287
+        ]
+      }
+    },
+    {
+      "code": 23,
+      "name": "HotFix",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4372,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 24,
+      "name": "EndTopLevelAction",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4371,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 25,
+      "name": "PrepareTransaction",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4373,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 26,
+      "name": "CommitTransaction",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4369,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 27,
+      "name": "ForgetTransaction",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "CONTROL_NO_TARGET_MUTATION",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [],
+      "semantic_effect": "Commit marker consumed by mark_transactions; no target mutation.",
+      "mismatch_or_unhandled_behavior": "all undo opcodes return success; redocount increments",
+      "roothealth_qualification": "CONDITIONAL_CONTROL_ONLY",
+      "gap_ids": [
+        "NRP-013"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4261,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 28,
+      "name": "OpenNonResidentAttribute",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          0
+        ],
+        "names": [
+          "Noop"
+        ]
+      },
+      "handler": [
+        "redo_open_attribute"
+      ],
+      "semantic_effect": "Populates the in-memory attribute table.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_CONTROL_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-009",
+        "NRP-012"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4174,
+        "helper_lines": [
+          2330
+        ]
+      }
+    },
+    {
+      "code": 29,
+      "name": "OpenAttributeTableDump",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "SEMANTIC_DUMP_IGNORED_AFTER_REFRESH",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [],
+      "semantic_effect": "Populates the in-memory attribute table during refresh_attributes, then no-ops in dispatch.",
+      "mismatch_or_unhandled_behavior": "all undo opcodes return success; redocount increments",
+      "roothealth_qualification": "DENY_SEMANTICS_UNPROVEN",
+      "gap_ids": [
+        "NRP-009",
+        "NRP-012",
+        "NRP-013"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4263,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 30,
+      "name": "AttributeNamesDump",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "SEMANTIC_DUMP_IGNORED_AFTER_REFRESH",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [],
+      "semantic_effect": "Populates in-memory attribute names during refresh_attributes, then no-ops in dispatch.",
+      "mismatch_or_unhandled_behavior": "all undo opcodes return success; redocount increments",
+      "roothealth_qualification": "DENY_SEMANTICS_UNPROVEN",
+      "gap_ids": [
+        "NRP-009",
+        "NRP-012",
+        "NRP-013"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4259,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 31,
+      "name": "DirtyPageTableDump",
+      "preflight_kind": "ON_NONE",
+      "dispatch_status": "SEMANTIC_DUMP_IGNORED_AFTER_REFRESH",
+      "accepted_undo": {
+        "mode": "ANY_ENUM_VALUE",
+        "codes": [
+          0,
+          37
+        ]
+      },
+      "handler": [],
+      "semantic_effect": "Ignored; dirty-page table semantics are not consumed.",
+      "mismatch_or_unhandled_behavior": "all undo opcodes return success; redocount increments",
+      "roothealth_qualification": "DENY_SEMANTICS_UNPROVEN",
+      "gap_ids": [
+        "NRP-009",
+        "NRP-013"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4260,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 32,
+      "name": "TransactionTableDump",
+      "preflight_kind": "ON_NONE_THEN_DISPATCH_ERROR",
+      "dispatch_status": "DISPATCH_ERROR_INCONSISTENT_WITH_PREFLIGHT_COMMENT",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "Labelled ignored in play_one_redo but falls into distribute_redos default error.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4365,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 33,
+      "name": "UpdateRecordDataRoot",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4375,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 34,
+      "name": "UpdateRecordDataAllocation",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4374,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 35,
+      "name": "Win10Action35",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4376,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 36,
+      "name": "Win10Action36",
+      "preflight_kind": "ERROR",
+      "dispatch_status": "FAIL_CLOSED_UNSUPPORTED",
+      "accepted_undo": [],
+      "handler": [],
+      "semantic_effect": "No implemented native redo path.",
+      "mismatch_or_unhandled_behavior": "not_applicable",
+      "roothealth_qualification": "DENY_UNSUPPORTED",
+      "gap_ids": [],
+      "source": {
+        "dispatch_or_kind_line": 4377,
+        "helper_lines": []
+      }
+    },
+    {
+      "code": 37,
+      "name": "Win10Action37",
+      "preflight_kind": "ON_MFT",
+      "dispatch_status": "HANDLER_CONDITIONAL_PAIR",
+      "accepted_undo": {
+        "mode": "EXACT_SET",
+        "codes": [
+          0
+        ],
+        "names": [
+          "Noop"
+        ]
+      },
+      "handler": [
+        "redo_action37"
+      ],
+      "semantic_effect": "Trims zero bytes at the end of an MFT record, but reports success even on an invalid target.",
+      "mismatch_or_unhandled_behavior": "returns success without invoking a handler; redocount increments",
+      "roothealth_qualification": "DENY_UNTIL_TYPED_PREFLIGHT",
+      "gap_ids": [
+        "NRP-005",
+        "NRP-002",
+        "NRP-003",
+        "NRP-011",
+        "NRP-008"
+      ],
+      "source": {
+        "dispatch_or_kind_line": 4242,
+        "helper_lines": [
+          1831
+        ]
+      }
+    }
+  ],
+  "required_qualification_sequence": [
+    "Strictly validate every RCRD page MST/header and every record variable layout.",
+    "Classify the exact redo/undo pair from a closed machine-readable allowlist before target I/O.",
+    "Validate transaction chains and restart-window LSNs.",
+    "Resolve target type and physical ranges from trusted NTFS metadata, not unchecked log hints.",
+    "Run operation-specific bounds/idempotence preflight and produce a typed validated view.",
+    "Plan writes through rh_writer; require exact semantic outcome accounting.",
+    "Only then plan two clean restart pages."
+  ]
+}

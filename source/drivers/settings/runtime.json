@@ -1,0 +1,13 @@
+{
+  "format": 1,
+  "runtime": "T1OS driver module loader",
+  "kmod_version": "34.2",
+  "kmod_source_sha256": "5a5d5073070cc7e0c7a7a3c6ec2a0e1780850c8b47b3e3892226b93ffcb9cb54",
+  "module_directory": "/the one/drivers/modules",
+  "module_state": "/the one/drivers/state/module",
+  "loaded_module_list": "/the one/drivers/processes/modules",
+  "kernel_command_line": "/the one/drivers/processes/cmdline",
+  "static": true,
+  "zstd": true,
+  "sha256": "50e14d8691f927b4f8719f3d9055d794496d100b101b0e19a75eed17fecf11f1"
+}

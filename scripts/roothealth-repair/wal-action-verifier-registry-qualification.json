@@ -1,0 +1,61 @@
+{
+  "schema": "roothealth-wal-action-verifier-registry-qualification-v1",
+  "status": "PROPOSED_FAIL_CLOSED_BOUNDARY",
+  "qualified_for_native_id5_id6": false,
+  "baseline": {
+    "src/roothealth_wal.c": "f7b7d2e493bc0a5f9fe91d5652023ca53029a741fd5b73800818df37ea270322",
+    "src/roothealth_wal.h": "7c054bd2cab01f9f2a55b1635c86ce4aacbb6541f49f3bc5c76d1ef6274e3474"
+  },
+  "result": {
+    "src/roothealth_wal.c": "16a1a1bd3317a3ac955d4062c3c21b1b8830909de9c85512b241f4bf4b9e7c3c",
+    "src/roothealth_wal.h": "8dd4e279dd02fa1fb55c55a4b82942dadd3646fb0e49fe6da03ee54021bda7f9"
+  },
+  "assets": {
+    "wal-action-verifier-registry.patch": "c5c565e8ddd9640758967e982ea6fb53f9528fa1d77d84d00f02795833b597c1",
+    "wal_action_verifier_registry_selftest.c": "ef30107bcd37c99ee0ecf814899cb273fa1b52ce7e29c4cfec1517ac953d4d98",
+    "check-wal-action-verifier-registry.py": "2e79914c41561fc6482ccff9d038616300761072dda1adbeac0ad6cb85b29924",
+    "complete-census-op2-authority-proposed-fail-closed.patch": "52f830a23c11da2d9a28a59ef941eecba486ea933d92533cb9674c854ba06a2f",
+    "complete-census-op2-authority-proposed-fail-closed.sha256": "fce77062de298e507fc39be1c9c88c0b9308ea1db7c2767f31d8be054ad8c7ae"
+  },
+  "registry_contract": {
+    "registration_key": "exact stable on-disk action_id",
+    "unknown_or_unregistered": "whole-transaction refusal before callback or write",
+    "generic_digest_fallback": false,
+    "callback_input": [
+      "transaction_kind",
+      "wal_state",
+      "generation",
+      "volume_and_journal_identity",
+      "transaction_uuid_and_plan_hash",
+      "all immutable entry descriptors",
+      "bounded old-payload accessor",
+      "opaque bounded reverse-old-byte virtual-preimage accessor"
+    ],
+    "callback_obligation": "rederive all owned locations, semantic targets, evidence fields, cross-entry invariants and intended after hashes from the virtual preimage",
+    "callback_opaque_state": false,
+    "callback_side_effects": "in-memory callback or closure mutations cause whole-transaction refusal",
+    "callback_error_mapping": "preserves I/O (EIO/ENXIO/ENODEV), memory (ENOMEM), and unsafe/unsupported (EINVAL/EOPNOTSUPP) classes",
+    "registered_builtin_group": [23, 24, 25],
+    "privileged_legacy_bypass": false,
+    "native_registration_disabled": [5, 6]
+  },
+  "tests": {
+    "strict_werror_compile": "PASS",
+    "gcc_fanalyzer": "PASS",
+    "asan_ubsan": "PASS",
+    "self_test_cases": 9,
+    "self_test_passed": 9,
+    "cases": [
+      "unregistered action fails with EOPNOTSUPP",
+      "native ID5 registration fails with EOPNOTSUPP",
+      "exact registered verifier succeeds",
+      "duplicate registration fails with EEXIST",
+      "callback EIO is preserved",
+      "callback ENOMEM is preserved",
+      "callback closure mutation is detected and refused",
+      "IDs 23-25 install as one exact registered group",
+      "mixed ID23-shaped group plus independent ID22 verifier both run exactly once"
+    ]
+  },
+  "remaining_native_blocker": "ID5/ID6 stay disabled until the outer free-slot/namespace evidence hash ABI, post-overlay seal, and source-bound native verifier reproduce every target/evidence field during WAL recovery"
+}

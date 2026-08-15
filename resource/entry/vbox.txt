@@ -1,0 +1,15 @@
+
+
+boot iso
+
+grub-mkrescue -o t1os-boot.iso iso  
+
+
+convert img
+
+VBoxManage convertfromraw storage.img t1os-root.vdi --format VDI  
+
+
+uuid
+
+VBoxManage showhdinfo t1os-root.vdi | awk -F': *' '/^UUID:/{print $2}'

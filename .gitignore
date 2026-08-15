@@ -1,0 +1,92 @@
+# T1OS generated working environments
+/environment/
+
+# Keep only the authored top-level build programs in development.
+/development/**
+!/development/*.py
+
+# Applications that are outside this repository's scope
+/software/
+/command_centre.exe
+/t1os_usb_flasher.exe
+
+# Generated and downloaded runtime payloads
+/source/software/
+/source/catalogue/
+/resource/production/
+/resource/python/
+/resource/fonts/
+/resource/cursors/
+
+# Compiled kernel history; retain source, configuration, and patches nearby.
+/resource/entry/kernel/current build/
+/resource/entry/kernel/legacy builds/
+
+# Generated trust bundle and bundled helper executables
+/source/settings/network/cacerts.pem
+/source/drivers/tools/
+/source/build software/python/patchelf
+/source/build software/python/python-command
+/scripts/roothealth-repair/journal-integration-v2/ntfscp
+/scripts/roothealth-repair/.journal-integration-v2-work/
+
+# Command Centre application-only helpers and assets
+/scripts/run command centre.ps1
+/flash/t1oscommandcentrelogo.png
+
+# Local IDE, assistant, and machine state
+/.idea/
+/.junie/
+/.codex/
+/.agents/
+/last_push.txt
+desktop.ini
+
+# Local development environments and dependency trees
+.venv/
+**/node_modules/
+
+# Generated Electron/Vite output
+**/dist/
+**/dist-electron/
+**/release/
+*.tsbuildinfo
+
+# Python caches and test/tool caches
+**/__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Compiled and packaged dependencies
+*.exe
+*.so
+*.a
+*.o
+*.whl
+*.tar.gz
+*.tgz
+
+# Operating-system, firmware, archive, and VM artifacts
+*.img
+*.iso
+*.vdi
+*.vmdk
+*.t1os
+*.rar
+*.zst
+
+# Logs and transient work
+*.log
+*.tmp
+*.temp
+
+# Secrets and machine-local configuration. Example credentials remain allowed.
+.env
+.env.*
+*.key
+*.pfx
+*.p12
+*credentials*.json
+!*credentials.example.json

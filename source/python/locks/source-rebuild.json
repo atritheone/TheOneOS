@@ -1,0 +1,151 @@
+{
+  "format": 1,
+  "component": "python-source-rebuild-diagnostic",
+  "python_version": "3.13.5",
+  "promotable": false,
+  "reason": "The recovered GCC 14.2/glibc 2.41 build host and exact historical transitive tool environment are unavailable.",
+  "scratch_path": "/tmp/t1os-python-source",
+  "sources": [
+    {
+      "name": "cpython",
+      "filename": "Python-3.13.5.tar.xz",
+      "cache_filename": "cpython-3.13.5.tar.xz",
+      "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tar.xz",
+      "size": 22856016,
+      "sha256": "93e583f243454e6e9e4588ca2c2662206ad961659863277afcdb96801647d640"
+    },
+    {
+      "name": "cpython-sigstore-bundle",
+      "filename": "Python-3.13.5.tar.xz.sigstore",
+      "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tar.xz.sigstore",
+      "size": 5151,
+      "sha256": "610fbc2236eabeec9a6285360c65643d00b09579ae0b64eefde0e529a127478e"
+    },
+    {
+      "name": "cpython-openpgp-signature",
+      "filename": "Python-3.13.5.tar.xz.asc",
+      "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tar.xz.asc",
+      "size": 963,
+      "sha256": "da6e013d98dcf8fc6696cdb2872b0051fc8fdeb632f73ef9f54d7b5a68647401"
+    },
+    {
+      "name": "cpython-release-manager-key",
+      "filename": "thomas-wouters-python-release-key.gpg",
+      "url": "https://github.com/Yhg1s.gpg",
+      "size": 7127,
+      "sha256": "33c3af79f23a83c2a8a569bfd546601be400cb26dd7eb31f6d5e5b621667c391",
+      "fingerprint": "7169605F62C751356D054A26A821E680E5FA6305"
+    },
+    {
+      "name": "ncurses",
+      "filename": "ncurses-6.5.tar.gz",
+      "cache_filename": "ncurses-6.5.tar.gz",
+      "url": "https://ftp.gnu.org/gnu/ncurses/ncurses-6.5.tar.gz",
+      "size": 3688489,
+      "sha256": "136d91bc269a9a5785e5f9e980bc76ab57428f604ce3e5a5a90cebc767971cc6"
+    },
+    {
+      "name": "readline",
+      "filename": "readline-8.2.13.tar.gz",
+      "cache_filename": "readline-8.2.13.tar.gz",
+      "url": "https://ftp.gnu.org/gnu/readline/readline-8.2.13.tar.gz",
+      "size": 3045184,
+      "sha256": "0e5be4d2937e8bd9b7cd60d46721ce79f88a33415dd68c2d738fb5924638f656"
+    }
+  ],
+  "tool_wheels": [
+    {
+      "name": "portable-python",
+      "version": "1.9.9",
+      "filename": "portable_python-1.9.9-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b6/18/39f14ddbc655cd7851b60df31f8391f25f8e9e521d39fba729e8f17587d3/portable_python-1.9.9-py3-none-any.whl",
+      "size": 41589,
+      "sha256": "38a93e5cd1e2e90a7954dcce72d19dd75b1ad62c7f9d54a845caf6ee4e92bdaf"
+    },
+    {
+      "name": "runez",
+      "version": "5.3.0",
+      "filename": "runez-5.3.0-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/40/2e/fa9da4d52522be15341cfb8d051d28053c30950a9bb08fd7c61e2b97abce/runez-5.3.0-py3-none-any.whl",
+      "size": 120847,
+      "sha256": "c04b8389ec50aea4c40b47353df8b02d2fac0ad9747647ab55a1077b6998508a"
+    },
+    {
+      "name": "click",
+      "version": "8.2.1",
+      "filename": "click-8.2.1-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/85/32/10bb5764d90a8eee674e9dc6f4db6a0ab47c8c4d0d83c27f7c39ac415a4d/click-8.2.1-py3-none-any.whl",
+      "size": 102215,
+      "sha256": "61a3265b914e850b85317d0b3109c7f8cd35a670f963866005d6ef1d5175a12b"
+    },
+    {
+      "name": "PyYAML",
+      "version": "6.0.2",
+      "filename": "PyYAML-6.0.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/b9/2b/614b4752f2e127db5cc206abc23a8c19678e92b23c3db30fc86ab731d3bd/PyYAML-6.0.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "size": 767542,
+      "sha256": "80bab7bfc629882493af4aa31a4cfa43a4c57c83813253626916b8c7ada83476"
+    },
+    {
+      "name": "requests",
+      "version": "2.32.4",
+      "filename": "requests-2.32.4-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/7c/e4/56027c4a6b4ae70ca9de302488c5ca95ad4a39e190093d6c1a8ace08341b/requests-2.32.4-py3-none-any.whl",
+      "size": 64847,
+      "sha256": "27babd3cda2a6d50b30443204ee89830707d396671944c998b5975b031ac2b2c"
+    },
+    {
+      "name": "urllib3",
+      "version": "1.26.20",
+      "filename": "urllib3-1.26.20-py2.py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/33/cf/8435d5a7159e2a9c83a95896ed596f68cf798005fe107cc655b5c5c14704/urllib3-1.26.20-py2.py3-none-any.whl",
+      "size": 144225,
+      "sha256": "0ed14ccfbf1c30a9072c7ca157e4319b70d65f623e91e7b32fadb2853431016e"
+    },
+    {
+      "name": "charset-normalizer",
+      "version": "3.4.2",
+      "filename": "charset_normalizer-3.4.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/8c/73/6ede2ec59bce19b3edf4209d70004253ec5f4e319f9a2e3f2f15601ed5f7/charset_normalizer-3.4.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "size": 148567,
+      "sha256": "4e594135de17ab3866138f496755f302b72157d115086d100c3f19370839dd3a"
+    },
+    {
+      "name": "idna",
+      "version": "3.10",
+      "filename": "idna-3.10-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/76/c6/c88e154df9c4e1a2a66ccf0005a88dfb2650c1dffb6f5ce603dfbd452ce3/idna-3.10-py3-none-any.whl",
+      "size": 70442,
+      "sha256": "946d195a0d259cbba61165e88e65941f16e9b36ea6ddb97f00452bae8b1287d3"
+    },
+    {
+      "name": "certifi",
+      "version": "2025.6.15",
+      "filename": "certifi-2025.6.15-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/84/ae/320161bd181fc06471eed047ecce67b693fd7515b16d495d8932db763426/certifi-2025.6.15-py3-none-any.whl",
+      "size": 157650,
+      "sha256": "2e0c7ce7cb5d8f8634ca55d2ba7e6ec2689a2fd6537d8dec1296a477a4910057"
+    }
+  ],
+  "signature_policy": {
+    "method": "OpenPGP detached signature",
+    "signer": "Thomas Wouters <thomas@python.org>",
+    "fingerprint": "7169605F62C751356D054A26A821E680E5FA6305",
+    "sigstore_identity": "thomas@python.org",
+    "sigstore_oidc_issuer": "https://accounts.google.com",
+    "sigstore_bundle_archived_and_hash_locked": true,
+    "sigstore_crypto_verification": false
+  },
+  "environment_boundary": {
+    "historical": {
+      "compiler": "GCC 14.2.0",
+      "glibc": "2.41"
+    },
+    "diagnostic": {
+      "distribution": "Ubuntu 24.04 WSL",
+      "compiler": "GCC 13.3.0",
+      "glibc": "2.39",
+      "host_python": "3.12"
+    }
+  }
+}

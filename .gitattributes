@@ -1,0 +1,32 @@
+* text=auto
+
+# Linux and portable source files must retain LF line endings.
+*.sh text eol=lf
+*.py text eol=lf
+*.c text eol=lf
+*.cc text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.patch text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.cfg text eol=lf
+*.conf text eol=lf
+*.xml text eol=lf
+*.graphml text eol=lf
+
+# PowerShell files use native Windows line endings.
+*.ps1 text eol=crlf
+
+# Binary assets must never undergo line-ending conversion.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.mp3 binary
+*.flac binary
+*.ttf binary
+*.woff binary
+*.woff2 binary

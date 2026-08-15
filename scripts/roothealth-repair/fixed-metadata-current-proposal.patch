@@ -1,0 +1,2947 @@
+diff --git a/FIXED-METADATA-SLICE.md b/FIXED-METADATA-SLICE.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..3c394fcdb44bc301413d086d7ce2838ce48a588d
+--- /dev/null
++++ b/FIXED-METADATA-SLICE.md
+@@ -0,0 +1,104 @@
++# RootHealth fixed-system data slice (fail-closed rebase proposal)
++
++This isolated slice implements bounded, data-only candidates for WAL action 20
++(`$UpCase`) and action 21 (`$AttrDef`).  It is not a production authorization.
++The stable fixed check IDs are `system.upcase` and `system.attrdef`.
++`roothealth_policy.c` deliberately still has no implementation entry for
++`PR_UPCASE_CORRUPTED` or `PR_ATTRDEF_CORRUPTED`, and the tests require that gate
++to remain closed.
++
++## Canonical inputs
++
++- `$UpCase` is built by the pinned ntfs-next `d4f481d`
++  `ntfs_upcase_build_default()` routine.  The result must be exactly 131072
++  bytes and SHA-256
++  `41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742`.
++- `$AttrDef` is copied from the pinned `attrdef_ntfs3x_array` asset.  The result
++  must be exactly 2560 bytes and SHA-256
++  `d7de5b1b2f79f45f235ceb1adbc46908ed64eae174eb90ed66aefe5f25165da3`.
++
++The output hashes are checked every time canonical bytes are built.  A source
++change that produces different bytes is an internal failure, not new repair
++authority.  The pinned source-file SHA-256 values qualified here are
++`1f40ffcf68a0decb95af39d0f3b0663e7378e6bdd8a803afdd56f119c051e625`
++for `libntfs/unistr.c` and
++`27d5fa53b6e63abffa6226f9c46bae867a64919c42c97e216e4f847f13ff9f6b`
++for `src/attrdef.c`.
++
++## Closed predicates
++
++Both actions require a sealed RHCOV3 full-coverage ledger; raw T1OS identity;
++complete MFT, attribute, extent, run and target-ownership censuses; no I/O
++uncertainty; and proof that every target lies outside the internal WAL.
++
++Action 20 additionally requires the complete reciprocal namespace manifest,
++the complete index/block census, and proof that every index is ordered under
++the canonical table.  Action 21 additionally requires a complete attribute
++type-use census, zero custom types, and zero incompatible bounds.  Missing,
++partial, contradictory, or tampered authority is refused before an operation
++is added.
++
++Production authority is constructed only by
++`rh_fixed_metadata_authority_build()`, which cross-checks the release-green
++RHCOV3 denominators against the real raw-MFT, canonical namespace/I30 and
++cluster-allocation censuses.  The old generic counter sealer is compiled only
++into the isolated negative-test binary and is unavailable to production.
++
++The local target parser accepts only fixed record 10 or 4 respectively, a live
++base record with no attribute-list extents, one unnamed nonresident `AT_DATA`,
++the exact release size and allocation, one dense extent with a
++strict zero mapping-pairs tail, and the supported geometry.  Size changes,
++allocation changes, missing attributes and extent reconstruction are outside
++this data-only slice.
++
++## Planning and recovery
++
++Both fixed targets form one exact bounded batch.  RootHealth first uses
++`ntfs_volume_startup()` through its private read-only overlay to load only the
++boot metadata and `$MFT`.  It captures and hashes the raw streams for records
++10 and 4 before either corrupt table can control a full mount.  Each target is
++then recorded as clean or planned; only after both have been examined does one
++ordinary read-only/forensic/no-repair full mount run over the staged writer
++view.  There is no libntfs source or ordinary-mount behavior change.  If the
++second target refuses or errors after the first was clean or planned, the
++batch is discarded to its original checkpoint, both examined bits are
++cleared, and no partial plan is returned.
++
++One exact whole-stream operation is emitted for each corrupt table; fragment
++or changed-range repair is forbidden.  Each write goes through
++`rh_ntfs_overlay_run_action()` and receives an exact typed nonresident target:
++record/sequence, attribute instance/type/name hash, lowest/logical VCN, LCN,
++logical range and physical range.  The overlay performs its mandatory fresh
++forensic remount.  A separately sealed staged-view ledger must then prove the
++canonical stream, unchanged mapping and complete final view before the targets
++can be finalized for WAL serialization.  Planning and finalization perform no
++target write.
++
++Crash rederivation accepts the WAL descriptor fields plus two read-only views.
++The pre-transaction view is reconstructed from undo bytes.  The staged view is
++the current device for `COMMITTED`, or a virtual canonical overlay for
++`PREPARING`/`APPLYING`.  It reruns both authorities, reparses the exact fixed
++stream, reconstructs the complete changed-slice set, and reproduces every
++target, old/new/semantic hash, evidence seal and staged-view seal.  Retargeted
++offset/LCN, content hash, size, attribute name, owner record, evidence hash and
++staged-view hash variants are rejected.
++
++## Qualification and remaining integration gates
++
++Run `tests/roothealth_fixed_metadata_qualification.sh`.  It checks the two
++canonical artifacts, clean no-op paths, tail and parser-breaking corruptions,
++the UpCase-only, AttrDef-only and both-corrupt matrices, unchanged ordinary
++mount semantics, whole-image no-write probes, absent/tampered/incomplete
++census refusal, both first-clean/second-refused and
++first-corrupt/second-refused atomic aborts, fresh remount convergence,
++PREPARING and COMMITTED rederivation, descriptor negative matrices, strict
++`-Werror`, and ASan/UBSan.
++
++The rebased proposal remains deliberately fail-closed.  The complete checker
++does not yet publish a production RHCOV3 fixed-system authority object, and
++the approved WAL registry has no ID20/21 callback capable of rebuilding the
++full raw/namespace/type-use/allocation evidence from its opaque virtual
++preimage.  Consequently ID20/21 are not registered and central policy remains
++closed.  Both must stay closed until a source-bound rederiver and real outer
++ledger producer land together; digest comparison or injected synthetic
++authority is not an acceptable recovery substitute.
+diff --git a/src/roothealth_fixed_metadata.c b/src/roothealth_fixed_metadata.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..7f9532f51d8d9504b6f7b9fc83ecb938bf0d9bfa
+--- /dev/null
++++ b/src/roothealth_fixed_metadata.c
+@@ -0,0 +1,1631 @@
++/* ROOTHEALTH_REPAIR_ROLE(DIAGNOSTIC) ROOTHEALTH_IO_ROLE(PLANNER) */
++#include "config.h"
++
++#include <errno.h>
++#include <limits.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "attrib.h"
++#include "attrdef.h"
++#include "device.h"
++#include "endians.h"
++#include "inode.h"
++#include "layout.h"
++#include "roothealth_bitmap.h"
++#include "roothealth_coverage.h"
++#include "roothealth_fixed_metadata.h"
++#include "roothealth_namespace.h"
++#include "roothealth_raw_mft.h"
++#include "runlist.h"
++#include "unistr.h"
++
++#define RH_FIXED_MAX_VOLUME_BYTES (UINT64_C(256) * 1024U * 1024U * 1024U)
++#define RH_FIXED_AUTH_ENCODED_BYTES 536U
++#define RH_FIXED_MAPPING_HEADER_BYTES 80U
++#define RH_FIXED_MAPPING_SLICE_BYTES 40U
++
++/* ntfs-next d4f481d inputs, checked again by their normative output digests. */
++static const char rh_upcase_source[] =
++	"ntfs-next:d4f481d:libntfs/unistr.c:ntfs_upcase_build_default";
++static const char rh_attrdef_source[] =
++	"ntfs-next:d4f481d:src/attrdef.c:attrdef_ntfs3x_array";
++
++struct rh_fixed_stage_context {
++	const struct rh_fixed_metadata_inspection *inspection;
++	const unsigned char *canonical;
++	const size_t *changed;
++	size_t changed_count;
++};
++
++const char *rh_fixed_metadata_check_id(enum rh_fixed_metadata_kind kind)
++{
++	if (kind == RH_FIXED_METADATA_UPCASE)
++		return RH_FIXED_METADATA_UPCASE_CHECK_ID;
++	if (kind == RH_FIXED_METADATA_ATTRDEF)
++		return RH_FIXED_METADATA_ATTRDEF_CHECK_ID;
++	return NULL;
++}
++
++static int rh_fixed_all_zero(const unsigned char *bytes, size_t length)
++{
++	size_t i;
++
++	for (i = 0; i < length; i++)
++		if (bytes[i])
++			return 0;
++	return 1;
++}
++
++static int rh_fixed_bool(int value)
++{
++	return value == 0 || value == 1;
++}
++
++static void rh_fixed_put_u16(unsigned char *out, uint16_t value)
++{
++	out[0] = (unsigned char)value;
++	out[1] = (unsigned char)(value >> 8);
++}
++
++static void rh_fixed_put_u32(unsigned char *out, uint32_t value)
++{
++	out[0] = (unsigned char)value;
++	out[1] = (unsigned char)(value >> 8);
++	out[2] = (unsigned char)(value >> 16);
++	out[3] = (unsigned char)(value >> 24);
++}
++
++static void rh_fixed_put_u64(unsigned char *out, uint64_t value)
++{
++	unsigned int i;
++
++	for (i = 0; i < 8U; i++)
++		out[i] = (unsigned char)(value >> (i * 8U));
++}
++
++static uint64_t rh_fixed_record(enum rh_fixed_metadata_kind kind)
++{
++	if (kind == RH_FIXED_METADATA_UPCASE)
++		return FILE_UpCase;
++	if (kind == RH_FIXED_METADATA_ATTRDEF)
++		return FILE_AttrDef;
++	return UINT64_MAX;
++}
++
++static enum rh_write_kind rh_fixed_write_kind(
++		enum rh_fixed_metadata_kind kind)
++{
++	return kind == RH_FIXED_METADATA_UPCASE ? RH_WRITE_UPCASE_DATA :
++		RH_WRITE_ATTRDEF_DATA;
++}
++
++static uint64_t rh_fixed_canonical_size(enum rh_fixed_metadata_kind kind)
++{
++	if (kind == RH_FIXED_METADATA_UPCASE)
++		return RH_UPCASE_CANONICAL_SIZE;
++	if (kind == RH_FIXED_METADATA_ATTRDEF)
++		return RH_ATTRDEF_CANONICAL_SIZE;
++	return 0;
++}
++
++static const char *rh_fixed_canonical_hex(enum rh_fixed_metadata_kind kind)
++{
++	if (kind == RH_FIXED_METADATA_UPCASE)
++		return RH_UPCASE_CANONICAL_SHA256;
++	if (kind == RH_FIXED_METADATA_ATTRDEF)
++		return RH_ATTRDEF_CANONICAL_SHA256;
++	return NULL;
++}
++
++int rh_fixed_metadata_canonical_build(enum rh_fixed_metadata_kind kind,
++		unsigned char **bytes, size_t *length, unsigned char hash[32])
++{
++	unsigned char *result = NULL;
++	char actual_hex[65];
++	size_t expected;
++
++	if (!bytes || !length || !hash || !rh_fixed_canonical_hex(kind)) {
++		errno = EINVAL;
++		return -1;
++	}
++	*bytes = NULL;
++	*length = 0;
++	expected = (size_t)rh_fixed_canonical_size(kind);
++	if (kind == RH_FIXED_METADATA_UPCASE) {
++		ntfschar *upcase = NULL;
++		u32 count = ntfs_upcase_build_default(&upcase);
++
++		if (count != RH_UPCASE_CANONICAL_SIZE / sizeof(*upcase) || !upcase) {
++			free(upcase);
++			errno = EIO;
++			return -1;
++		}
++		result = (unsigned char *)upcase;
++	} else {
++		result = malloc(expected);
++		if (!result)
++			return -1;
++		memcpy(result, attrdef_ntfs3x_array, expected);
++	}
++	rh_sha256(result, expected, hash);
++	rh_sha256_hex(result, expected, actual_hex);
++	if (strcmp(actual_hex, rh_fixed_canonical_hex(kind))) {
++		memset(result, 0, expected);
++		free(result);
++		errno = EILSEQ;
++		return -1;
++	}
++	*bytes = result;
++	*length = expected;
++	return 0;
++}
++
++static int rh_fixed_census_common_valid(
++		const struct rh_fixed_metadata_census *census)
++{
++	return census && census->coverage_ledger_format ==
++		RH_FIXED_METADATA_LEDGER_FORMAT && census->generation &&
++		census->volume_serial &&
++		rh_fixed_bool(census->coverage_complete) && census->coverage_complete &&
++		rh_fixed_bool(census->identity_bound) && census->identity_bound &&
++		rh_fixed_bool(census->no_io_uncertainty) &&
++		census->no_io_uncertainty &&
++		rh_fixed_bool(census->target_runs_complete) &&
++		census->target_runs_complete &&
++		rh_fixed_bool(census->target_ownership_exact) &&
++		census->target_ownership_exact &&
++		rh_fixed_bool(census->targets_outside_wal) &&
++		census->targets_outside_wal && census->mft_slots_expected &&
++		census->mft_slots_completed == census->mft_slots_expected &&
++		census->attributes_expected &&
++		census->attributes_completed == census->attributes_expected &&
++		census->extents_completed == census->extents_expected &&
++		census->runs_expected && census->runs_completed == census->runs_expected &&
++		!rh_fixed_all_zero(census->coverage_ledger_hash, 32) &&
++		!rh_fixed_all_zero(census->raw_census_hash, 32) &&
++		!rh_fixed_all_zero(census->target_mapping_hash, 32) &&
++		!rh_fixed_all_zero(census->allocation_bitmap_hash, 32) &&
++		!rh_fixed_all_zero(census->identity_graph_hash, 32);
++}
++
++static int rh_fixed_census_kind_valid(
++		const struct rh_fixed_metadata_census *census)
++{
++	if (!rh_fixed_census_common_valid(census))
++		return 0;
++	if (census->kind == RH_FIXED_METADATA_UPCASE)
++		return census->namespace_links_expected &&
++			census->namespace_links_completed ==
++				census->namespace_links_expected &&
++			census->namespace_links_reciprocal ==
++				census->namespace_links_expected &&
++			!census->namespace_links_unresolved &&
++			census->indexes_expected &&
++			census->indexes_completed == census->indexes_expected &&
++			census->index_blocks_allocated ==
++				census->index_blocks_reachable &&
++			census->index_blocks_reachable ==
++				census->index_blocks_examined &&
++			!census->index_blocks_unreadable &&
++			census->canonical_ordered_indexes == census->indexes_expected &&
++			!census->incompatible_collations &&
++			!rh_fixed_all_zero(census->namespace_manifest_hash, 32) &&
++			!rh_fixed_all_zero(census->index_census_hash, 32);
++	if (census->kind == RH_FIXED_METADATA_ATTRDEF)
++		return census->attribute_types_expected &&
++			census->attribute_types_examined ==
++				census->attribute_types_expected &&
++			!census->custom_attribute_types &&
++			!census->incompatible_attribute_bounds &&
++			!rh_fixed_all_zero(census->attribute_type_use_hash, 32);
++	return 0;
++}
++
++static void rh_fixed_authority_encode(
++		const struct rh_fixed_metadata_census *census,
++		unsigned char output[RH_FIXED_AUTH_ENCODED_BYTES])
++{
++	uint64_t counters[] = {
++		(uint64_t)census->coverage_ledger_format,
++		census->generation, census->volume_serial,
++		(uint64_t)census->coverage_complete,
++		(uint64_t)census->identity_bound,
++		(uint64_t)census->no_io_uncertainty,
++		(uint64_t)census->target_runs_complete,
++		(uint64_t)census->target_ownership_exact,
++		(uint64_t)census->targets_outside_wal,
++		census->mft_slots_expected, census->mft_slots_completed,
++		census->attributes_expected, census->attributes_completed,
++		census->extents_expected, census->extents_completed,
++		census->runs_expected, census->runs_completed,
++		census->namespace_links_expected,
++		census->namespace_links_completed,
++		census->namespace_links_reciprocal,
++		census->namespace_links_unresolved,
++		census->indexes_expected, census->indexes_completed,
++		census->index_blocks_allocated,
++		census->index_blocks_reachable,
++		census->index_blocks_examined,
++		census->index_blocks_unreadable,
++		census->canonical_ordered_indexes,
++		census->incompatible_collations,
++		census->attribute_types_expected,
++		census->attribute_types_examined,
++		census->custom_attribute_types,
++		census->incompatible_attribute_bounds,
++	};
++	size_t cursor = 16U, i;
++
++	memset(output, 0, RH_FIXED_AUTH_ENCODED_BYTES);
++	memcpy(output, "RHFIXAUTH1", 10);
++	rh_fixed_put_u32(output + 10, RH_FIXED_METADATA_AUTHORITY_VERSION);
++	output[14] = (unsigned char)census->kind;
++	output[15] = (unsigned char)census->view;
++	for (i = 0; i < sizeof(counters) / sizeof(counters[0]); i++) {
++		rh_fixed_put_u64(output + cursor, counters[i]);
++		cursor += 8U;
++	}
++	memcpy(output + cursor, census->coverage_ledger_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->raw_census_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->target_mapping_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->allocation_bitmap_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->identity_graph_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->namespace_manifest_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->index_census_hash, 32);
++	cursor += 32U;
++	memcpy(output + cursor, census->attribute_type_use_hash, 32);
++}
++
++static int rh_fixed_metadata_authority_seal_validated(
++		const struct rh_fixed_metadata_census *census,
++		struct rh_fixed_metadata_authority *authority)
++{
++	unsigned char encoded[RH_FIXED_AUTH_ENCODED_BYTES];
++
++	if (!authority || !rh_fixed_census_kind_valid(census) ||
++			(census->view != RH_FIXED_METADATA_PRETRANSACTION &&
++			 census->view != RH_FIXED_METADATA_STAGED)) {
++		errno = EINVAL;
++		return -1;
++	}
++	memset(authority, 0, sizeof(*authority));
++	authority->version = RH_FIXED_METADATA_AUTHORITY_VERSION;
++	authority->census = *census;
++	rh_fixed_authority_encode(census, encoded);
++	rh_sha256(encoded, sizeof(encoded), authority->seal);
++	return 0;
++}
++
++#ifdef ROOTHEALTH_REPAIR_TESTING
++int rh_fixed_metadata_authority_seal(
++		const struct rh_fixed_metadata_census *census,
++		struct rh_fixed_metadata_authority *authority)
++{
++	return rh_fixed_metadata_authority_seal_validated(census, authority);
++}
++#endif
++
++int rh_fixed_metadata_authority_valid(
++		const struct rh_fixed_metadata_authority *authority,
++		enum rh_fixed_metadata_kind kind, enum rh_fixed_metadata_view view,
++		uint64_t volume_serial)
++{
++	unsigned char encoded[RH_FIXED_AUTH_ENCODED_BYTES], seal[32];
++
++	if (!authority || authority->version !=
++			RH_FIXED_METADATA_AUTHORITY_VERSION ||
++			authority->census.kind != kind || authority->census.view != view ||
++			authority->census.volume_serial != volume_serial ||
++			!rh_fixed_census_kind_valid(&authority->census))
++		return 0;
++	rh_fixed_authority_encode(&authority->census, encoded);
++	rh_sha256(encoded, sizeof(encoded), seal);
++	return !memcmp(seal, authority->seal, sizeof(seal));
++}
++
++static int rh_fixed_read_serial(struct rh_writer *writer, uint64_t *serial)
++{
++	unsigned char boot[512];
++
++	if (!writer || !serial || rh_writer_read(writer, 0,
++			sizeof(boot), boot) || memcmp(boot + 3, "NTFS    ", 8) ||
++			boot[510] != 0x55 || boot[511] != 0xaa) {
++		errno = EIO;
++		return -1;
++	}
++	*serial = (uint64_t)boot[72] | ((uint64_t)boot[73] << 8) |
++		((uint64_t)boot[74] << 16) | ((uint64_t)boot[75] << 24) |
++		((uint64_t)boot[76] << 32) | ((uint64_t)boot[77] << 40) |
++		((uint64_t)boot[78] << 48) | ((uint64_t)boot[79] << 56);
++	if (!*serial) {
++		errno = EIO;
++		return -1;
++	}
++	return 0;
++}
++
++static int rh_fixed_counter_is(const struct rh_coverage_counter *counter,
++		uint64_t value)
++{
++	return counter && counter->known && counter->value == value;
++}
++
++static int rh_fixed_coverage_authority(
++		const struct rh_coverage_ledger *coverage,
++		const struct rh_raw_mft_census *raw,
++		const struct rh_namespace_census *namespace_census,
++		const struct rh_cluster_bitmap_census *cluster_census,
++		unsigned char coverage_hash[32])
++{
++	struct rh_coverage_ledger normalized;
++	struct rh_fixed_check *checks = NULL;
++	size_t i;
++	uint64_t allowed_failures = 0;
++	int result = 0;
++
++	if (!coverage || !raw || !namespace_census || !cluster_census ||
++			!coverage_hash || !coverage->fixed_system.check_count ||
++			!coverage->fixed_system.checks)
++		return 0;
++	checks = malloc(coverage->fixed_system.check_count * sizeof(*checks));
++	if (!checks)
++		return -1;
++	memcpy(checks, coverage->fixed_system.checks,
++		coverage->fixed_system.check_count * sizeof(*checks));
++	for (i = 0; i < coverage->fixed_system.check_count; i++) {
++		if (checks[i].result == RH_FIXED_CHECK_PASS)
++			continue;
++		if (checks[i].result != RH_FIXED_CHECK_FAIL ||
++				(strcmp(checks[i].id, RH_FIXED_METADATA_UPCASE_CHECK_ID) &&
++				 strcmp(checks[i].id, RH_FIXED_METADATA_ATTRDEF_CHECK_ID)))
++			goto out;
++		checks[i].result = RH_FIXED_CHECK_PASS;
++		allowed_failures++;
++	}
++	normalized = *coverage;
++	normalized.fixed_system.checks = checks;
++	if (!normalized.fixed_system.failed.known ||
++			normalized.fixed_system.failed.value != allowed_failures)
++		goto out;
++	normalized.fixed_system.failed.value = 0;
++	if (!rh_coverage_is_clean(&normalized) ||
++			!rh_fixed_counter_is(&coverage->mft_slots.expected,
++				raw->slots_expected) ||
++			!rh_fixed_counter_is(&coverage->mft_slots.completed,
++				raw->slots_completed) ||
++			!rh_fixed_counter_is(&coverage->mft_slots.unreadable,
++				raw->unreadable_records) ||
++			!rh_fixed_counter_is(&coverage->mft_slots.invalid,
++				raw->invalid_records) ||
++			!rh_fixed_counter_is(&coverage->attributes.expected,
++				raw->attribute_count) ||
++			!rh_fixed_counter_is(&coverage->attributes.completed,
++				raw->attribute_count) ||
++			!rh_fixed_counter_is(&coverage->attributes.resident,
++				raw->resident_attributes) ||
++			!rh_fixed_counter_is(&coverage->attributes.nonresident,
++				raw->nonresident_attributes) ||
++			!rh_fixed_counter_is(&coverage->attributes.user_defined,
++				raw->user_defined_attributes) ||
++			!rh_fixed_counter_is(&coverage->attributes.extents_expected,
++				raw->extents_expected) ||
++			!rh_fixed_counter_is(&coverage->attributes.extents_completed,
++				raw->extents_completed) ||
++			!rh_fixed_counter_is(&coverage->attributes.runs_expected,
++				raw->runs_expected) ||
++			!rh_fixed_counter_is(&coverage->attributes.runs_completed,
++				raw->runs_completed) ||
++			!rh_fixed_counter_is(&coverage->namespace_links.expected,
++				namespace_census->links_expected) ||
++			!rh_fixed_counter_is(&coverage->namespace_links.completed,
++				namespace_census->links_completed) ||
++			!rh_fixed_counter_is(&coverage->namespace_links.reciprocal,
++				namespace_census->reciprocity_complete ?
++					namespace_census->links_expected : 0) ||
++			!rh_fixed_counter_is(&coverage->indexes.expected,
++				namespace_census->i30_indexes_expected) ||
++			!rh_fixed_counter_is(&coverage->indexes.completed,
++				namespace_census->i30_indexes_completed) ||
++			!rh_fixed_counter_is(&coverage->indexes.blocks_allocated,
++				namespace_census->i30_blocks_expected) ||
++			!rh_fixed_counter_is(&coverage->indexes.blocks_reachable,
++				namespace_census->i30_blocks_reachable) ||
++			!rh_fixed_counter_is(&coverage->indexes.blocks_examined,
++				namespace_census->i30_blocks_examined) ||
++			!rh_fixed_counter_is(&coverage->bitmaps.cluster_bits_expected,
++				cluster_census->cluster_count) ||
++			!rh_fixed_counter_is(&coverage->bitmaps.cluster_bits_examined,
++				cluster_census->bitmap_bits_examined) ||
++			rh_coverage_hash(coverage, coverage_hash))
++		goto out;
++	result = 1;
++out:
++	free(checks);
++	return result;
++}
++
++static const struct rh_raw_attribute *rh_fixed_raw_target(
++		const struct rh_raw_mft_census *raw,
++		enum rh_fixed_metadata_kind kind)
++{
++	const struct rh_raw_attribute *matched = NULL;
++	const struct rh_raw_mft_slot *slot;
++	uint64_t record = rh_fixed_record(kind);
++	uint64_t size = rh_fixed_canonical_size(kind);
++	uint64_t allocation = (size + 4095U) & ~UINT64_C(4095);
++	size_t i;
++
++	if (!raw || record >= raw->slot_count || !raw->records_complete ||
++			!raw->records_bounded || !raw->layout_complete ||
++			!raw->attribute_lists_complete || !raw->extents_complete ||
++			raw->slots_completed != raw->slots_expected ||
++			raw->unreadable_records || raw->invalid_records ||
++			raw->runs_completed != raw->runs_expected ||
++			rh_fixed_all_zero(raw->census_hash, 32))
++		return NULL;
++	slot = &raw->slots[record];
++	if (slot->state != RH_RAW_SLOT_LIVE_BASE || !slot->sequence ||
++			slot->record != record || slot->has_attribute_list ||
++			slot->attribute_list_assembled)
++		return NULL;
++	for (i = 0; i < raw->attribute_count; i++) {
++		const struct rh_raw_attribute *attribute = &raw->attributes[i];
++		const struct rh_raw_run *run;
++
++		if (attribute->owner.record != record ||
++				attribute->owner.sequence != slot->sequence ||
++				attribute->type != le32_to_cpu(AT_DATA) ||
++				attribute->name_length)
++			continue;
++		if (matched || !attribute->nonresident || attribute->flags ||
++				attribute->lowest_vcn ||
++				attribute->data_size != (int64_t)size ||
++				attribute->initialized_size != (int64_t)size ||
++				attribute->allocated_size != (int64_t)allocation ||
++				attribute->run_count != 1U ||
++				attribute->run_first >= raw->run_count)
++			return NULL;
++		run = &raw->runs[attribute->run_first];
++		if (run->attribute_index != i || run->vcn || run->lcn < 0 ||
++				run->sparse || run->length != allocation / 4096U)
++			return NULL;
++		matched = attribute;
++	}
++	return matched;
++}
++
++int rh_fixed_metadata_attrdef_type_census(
++		const struct rh_raw_mft_census *raw, unsigned char output[32])
++{
++	const ATTR_DEF *definitions = (const ATTR_DEF *)attrdef_ntfs3x_array;
++	const size_t definition_count = sizeof(attrdef_ntfs3x_array) /
++		sizeof(*definitions);
++	unsigned char encoded[112];
++	size_t i, j;
++
++	if (!raw || !output || !raw->attribute_count ||
++			raw->user_defined_attributes)
++		return 0;
++	for (i = 0; i < raw->attribute_count; i++) {
++		const struct rh_raw_attribute *attribute = &raw->attributes[i];
++		uint64_t size = attribute->nonresident ?
++			(uint64_t)attribute->data_size : attribute->value_length;
++		int found = 0;
++
++		if (attribute->data_size < 0)
++			return 0;
++		for (j = 0; j < definition_count; j++) {
++			uint32_t type = le32_to_cpu(definitions[j].type);
++			uint32_t flags;
++			int64_t minimum, maximum;
++
++			if (type != attribute->type)
++				continue;
++			flags = le32_to_cpu(definitions[j].flags);
++			minimum = sle64_to_cpu(definitions[j].min_size);
++			maximum = sle64_to_cpu(definitions[j].max_size);
++			if ((flags & le32_to_cpu(ATTR_DEF_RESIDENT)) &&
++					attribute->nonresident)
++				return 0;
++			if ((minimum >= 0 && size < (uint64_t)minimum) ||
++					(maximum >= 0 && size > (uint64_t)maximum))
++				return 0;
++			found = 1;
++			break;
++		}
++		if (!found)
++			return 0;
++	}
++	memset(encoded, 0, sizeof(encoded));
++	memcpy(encoded, "RHFIXTYPE1", 10U);
++	rh_fixed_put_u64(encoded + 16U, raw->attribute_count);
++	memcpy(encoded + 24U, raw->attribute_hash, 32U);
++	rh_sha256(attrdef_ntfs3x_array, sizeof(attrdef_ntfs3x_array),
++		encoded + 56U);
++	memcpy(encoded + 88U, raw->census_hash, 24U);
++	rh_sha256(encoded, sizeof(encoded), output);
++	return !rh_fixed_all_zero(output, 32);
++}
++
++int rh_fixed_metadata_authority_build(
++		const struct rh_coverage_ledger *coverage,
++		const struct rh_raw_mft_census *raw,
++		const struct rh_namespace_census *namespace_census,
++		const struct rh_cluster_bitmap_census *cluster_census,
++		struct rh_writer *writer, enum rh_fixed_metadata_kind kind,
++		enum rh_fixed_metadata_view view, uint64_t volume_serial,
++		struct rh_fixed_metadata_authority *authority)
++{
++	const struct rh_raw_attribute *target;
++	const struct rh_raw_run *run;
++	struct rh_fixed_metadata_census census;
++	unsigned char coverage_hash[32], type_hash[32];
++	uint64_t serial, first_cluster, cluster_count, i;
++	int coverage_result;
++
++	if (!writer || !authority || !raw || !namespace_census ||
++			!cluster_census || !volume_serial ||
++			(view != RH_FIXED_METADATA_PRETRANSACTION &&
++			 view != RH_FIXED_METADATA_STAGED) ||
++			raw->generation != namespace_census->generation ||
++			raw->generation != cluster_census->generation ||
++			rh_fixed_read_serial(writer, &serial) || serial != volume_serial ||
++			!namespace_census->graph_bounded ||
++			!namespace_census->graph_complete ||
++			!namespace_census->i30_complete ||
++			!namespace_census->reciprocity_complete ||
++			!namespace_census->identity_checked ||
++			namespace_census->identity != RH_T1OS_IDENTITY_MATCH ||
++			namespace_census->i30_bitmap_changes ||
++			namespace_census->i30_clear_bits_required ||
++			!cluster_census->complete ||
++			!cluster_census->structurally_valid ||
++			!cluster_census->ownership_exact ||
++			!cluster_census->targets_outside_wal || !cluster_census->clean ||
++			cluster_census->duplicate_clusters ||
++			cluster_census->unreadable_slots ||
++			!cluster_census->expected_bitmap ||
++			!cluster_census->observed_bitmap ||
++			rh_fixed_all_zero(cluster_census->allocation_hash, 32) ||
++			!writer->excluded_count || !writer->raw_wal_allowed_count) {
++		errno = EPERM;
++		return -1;
++	}
++	coverage_result = rh_fixed_coverage_authority(coverage, raw,
++		namespace_census, cluster_census, coverage_hash);
++	if (coverage_result <= 0) {
++		if (!coverage_result)
++			errno = EPERM;
++		return -1;
++	}
++	target = rh_fixed_raw_target(raw, kind);
++	if (!target) {
++		errno = EPERM;
++		return -1;
++	}
++	run = &raw->runs[target->run_first];
++	first_cluster = (uint64_t)run->lcn;
++	cluster_count = (uint64_t)run->length;
++	if (first_cluster > UINT64_MAX / 4096U ||
++			cluster_count > UINT64_MAX / 4096U ||
++			first_cluster * 4096U > writer->device_size ||
++			cluster_count * 4096U > writer->device_size -
++				first_cluster * 4096U ||
++			rh_writer_range_excluded(writer, first_cluster * 4096U,
++				(uint64_t)target->data_size)) {
++		errno = EPERM;
++		return -1;
++	}
++	for (i = 0; i < cluster_count; i++) {
++		uint64_t bit = first_cluster + i;
++		if (bit >= cluster_census->cluster_count ||
++				bit / 8U >= cluster_census->bitmap_bytes ||
++				!(cluster_census->expected_bitmap[bit / 8U] &
++					(1U << (bit & 7U))) ||
++				!(cluster_census->observed_bitmap[bit / 8U] &
++					(1U << (bit & 7U)))) {
++			errno = EPERM;
++			return -1;
++		}
++	}
++	memset(&census, 0, sizeof(census));
++	census.kind = kind;
++	census.view = view;
++	census.coverage_ledger_format = RH_COVERAGE_FORMAT;
++	census.generation = raw->generation;
++	census.volume_serial = serial;
++	census.coverage_complete = 1;
++	census.identity_bound = 1;
++	census.no_io_uncertainty = 1;
++	census.target_runs_complete = 1;
++	census.target_ownership_exact = 1;
++	census.targets_outside_wal = 1;
++	census.mft_slots_expected = raw->slots_expected;
++	census.mft_slots_completed = raw->slots_completed;
++	census.attributes_expected = raw->attribute_count;
++	census.attributes_completed = raw->attribute_count;
++	census.extents_expected = raw->extents_expected;
++	census.extents_completed = raw->extents_completed;
++	census.runs_expected = raw->runs_expected;
++	census.runs_completed = raw->runs_completed;
++	memcpy(census.coverage_ledger_hash, coverage_hash, 32U);
++	memcpy(census.raw_census_hash, raw->census_hash, 32U);
++	memcpy(census.target_mapping_hash, target->mapping_hash, 32U);
++	memcpy(census.allocation_bitmap_hash,
++		cluster_census->allocation_hash, 32U);
++	memcpy(census.identity_graph_hash,
++		namespace_census->census_hash, 32U);
++	if (kind == RH_FIXED_METADATA_UPCASE) {
++		census.namespace_links_expected = namespace_census->links_expected;
++		census.namespace_links_completed = namespace_census->links_completed;
++		census.namespace_links_reciprocal = namespace_census->links_expected;
++		census.indexes_expected = namespace_census->i30_indexes_expected;
++		census.indexes_completed = namespace_census->i30_indexes_completed;
++		census.index_blocks_allocated = namespace_census->i30_blocks_expected;
++		census.index_blocks_reachable = namespace_census->i30_blocks_reachable;
++		census.index_blocks_examined = namespace_census->i30_blocks_examined;
++		census.canonical_ordered_indexes =
++			namespace_census->i30_indexes_completed;
++		memcpy(census.namespace_manifest_hash,
++			namespace_census->manifest_hash, 32U);
++		memcpy(census.index_census_hash,
++			namespace_census->i30_index_census_hash, 32U);
++	} else {
++		if (!rh_fixed_metadata_attrdef_type_census(raw, type_hash)) {
++			errno = EPERM;
++			return -1;
++		}
++		census.attribute_types_expected = raw->attribute_count;
++		census.attribute_types_examined = raw->attribute_count;
++		memcpy(census.attribute_type_use_hash, type_hash, 32U);
++	}
++	return rh_fixed_metadata_authority_seal_validated(&census, authority);
++}
++
++static int rh_fixed_mapping_pairs_tail_zero(const ATTR_RECORD *attribute)
++{
++	const unsigned char *raw = (const unsigned char *)attribute;
++	uint32_t length = le32_to_cpu(attribute->length);
++	uint16_t offset = le16_to_cpu(attribute->mapping_pairs_offset);
++	size_t cursor;
++
++	if (!attribute->non_resident || offset < 64U || offset >= length)
++		return 0;
++	for (cursor = offset; cursor < length;) {
++		unsigned int length_bytes, offset_bytes;
++
++		if (!raw[cursor]) {
++			cursor++;
++			while (cursor < length)
++				if (raw[cursor++])
++					return 0;
++			return 1;
++		}
++		length_bytes = raw[cursor] & 15U;
++		offset_bytes = raw[cursor] >> 4;
++		if (!length_bytes || length_bytes > 8U || offset_bytes > 8U ||
++				cursor + 1U > length ||
++				length_bytes + offset_bytes > length - cursor - 1U)
++			return 0;
++		cursor += 1U + length_bytes + offset_bytes;
++	}
++	return 0;
++}
++
++static int rh_fixed_attr_record_valid(const ATTR_RECORD *attribute,
++		uint64_t canonical_size, uint32_t cluster_size,
++		uint16_t *instance)
++{
++	uint64_t clusters = (canonical_size + cluster_size - 1U) / cluster_size;
++	uint64_t allocated = clusters * cluster_size;
++	uint32_t length;
++
++	if (!attribute || !instance || attribute->type != AT_DATA ||
++			!attribute->non_resident || attribute->name_length ||
++			attribute->flags || attribute->compression_unit ||
++			!rh_fixed_all_zero(attribute->reserved1,
++				sizeof(attribute->reserved1)) ||
++			sle64_to_cpu(attribute->lowest_vcn) != 0 ||
++			sle64_to_cpu(attribute->highest_vcn) != (int64_t)clusters - 1 ||
++			sle64_to_cpu(attribute->allocated_size) != (int64_t)allocated ||
++			sle64_to_cpu(attribute->data_size) != (int64_t)canonical_size ||
++			sle64_to_cpu(attribute->initialized_size) !=
++				(int64_t)canonical_size)
++		return 0;
++	length = le32_to_cpu(attribute->length);
++	if (length < 72U || (length & 7U) ||
++			le16_to_cpu(attribute->mapping_pairs_offset) < 64U ||
++			le16_to_cpu(attribute->mapping_pairs_offset) >= length ||
++			!rh_fixed_mapping_pairs_tail_zero(attribute))
++		return 0;
++	*instance = le16_to_cpu(attribute->instance);
++	return 1;
++}
++
++static int rh_fixed_mapping_hash(
++		const struct rh_fixed_metadata_inspection *inspection,
++		unsigned char output[32])
++{
++	unsigned char *encoded;
++	size_t total, cursor, i;
++
++	if (!inspection || !inspection->slice_count ||
++			inspection->slice_count > RH_FIXED_METADATA_MAX_SLICES ||
++			inspection->slice_count >
++			(SIZE_MAX - RH_FIXED_MAPPING_HEADER_BYTES) /
++				RH_FIXED_MAPPING_SLICE_BYTES)
++		return -1;
++	total = RH_FIXED_MAPPING_HEADER_BYTES + inspection->slice_count *
++		RH_FIXED_MAPPING_SLICE_BYTES;
++	encoded = calloc(1, total);
++	if (!encoded)
++		return -1;
++	memcpy(encoded, "RHFIXMAP1", 9);
++	encoded[9] = (unsigned char)inspection->kind;
++	rh_fixed_put_u64(encoded + 16, inspection->volume_serial);
++	rh_fixed_put_u64(encoded + 24, inspection->owner_mft_record);
++	rh_fixed_put_u16(encoded + 32, inspection->owner_sequence);
++	rh_fixed_put_u16(encoded + 34, inspection->attribute_instance);
++	rh_fixed_put_u64(encoded + 40, inspection->data_size);
++	rh_fixed_put_u64(encoded + 48, inspection->allocated_size);
++	rh_fixed_put_u64(encoded + 56, inspection->slice_count);
++	cursor = RH_FIXED_MAPPING_HEADER_BYTES;
++	for (i = 0; i < inspection->slice_count; i++) {
++		const struct rh_fixed_metadata_slice *slice = &inspection->slices[i];
++		rh_fixed_put_u64(encoded + cursor, slice->logical_offset);
++		rh_fixed_put_u64(encoded + cursor + 8, slice->length);
++		rh_fixed_put_u64(encoded + cursor + 16, slice->physical_offset);
++		rh_fixed_put_u64(encoded + cursor + 24,
++			(uint64_t)slice->logical_vcn);
++		rh_fixed_put_u64(encoded + cursor + 32, (uint64_t)slice->lcn);
++		cursor += RH_FIXED_MAPPING_SLICE_BYTES;
++	}
++	rh_sha256(encoded, total, output);
++	free(encoded);
++	return 0;
++}
++
++int rh_fixed_metadata_inspect(ntfs_volume *volume, struct rh_writer *writer,
++		enum rh_fixed_metadata_kind kind,
++		struct rh_fixed_metadata_inspection *inspection)
++{
++	ntfs_inode *inode = NULL;
++	ntfs_attr_search_ctx *search = NULL;
++	ntfs_attr *attribute = NULL;
++	unsigned char *canonical = NULL;
++	unsigned char canonical_hash[32];
++	size_t canonical_length = 0, slice_count = 0;
++	uint64_t expected_record = rh_fixed_record(kind), expected_vcn = 0;
++	uint64_t allocated_clusters, covered = 0, volume_serial;
++	runlist_element *run;
++	uint16_t instance = 0;
++	int result = -1;
++
++	if (!volume || !writer || !inspection || expected_record == UINT64_MAX ||
++			volume->sector_size != 512U || volume->cluster_size != 4096U ||
++			volume->mft_record_size != 1024U ||
++			volume->indx_record_size != 4096U ||
++			writer->device_size > RH_FIXED_MAX_VOLUME_BYTES ||
++			rh_fixed_read_serial(writer, &volume_serial) ||
++			rh_fixed_metadata_canonical_build(kind, &canonical,
++				&canonical_length, canonical_hash)) {
++		if (!errno)
++			errno = EINVAL;
++		return -1;
++	}
++	memset(inspection, 0, sizeof(*inspection));
++	inode = ntfs_inode_open(volume, expected_record);
++	if (!inode || !inode->mrec || inode->mft_no != expected_record ||
++			inode->mrec->magic != magic_FILE ||
++			le32_to_cpu(inode->mrec->mft_record_number) != expected_record ||
++			!(inode->mrec->flags & MFT_RECORD_IN_USE) ||
++			(inode->mrec->flags & MFT_RECORD_IS_DIRECTORY) ||
++			le64_to_cpu(inode->mrec->base_mft_record) ||
++			!le16_to_cpu(inode->mrec->sequence_number) ||
++			NInoAttrList(inode) || inode->nr_extents)
++		goto out;
++	search = ntfs_attr_get_search_ctx(inode, NULL);
++	if (!search || ntfs_attr_lookup(AT_DATA, AT_UNNAMED, 0,
++			CASE_SENSITIVE, 0, NULL, 0, search) || search->ntfs_ino != inode ||
++			!rh_fixed_attr_record_valid(search->attr, canonical_length,
++				volume->cluster_size, &instance))
++		goto out;
++	attribute = ntfs_attr_open(inode, AT_DATA, AT_UNNAMED, 0);
++	if (!attribute || !NAttrNonResident(attribute) || attribute->name_len ||
++			attribute->type != AT_DATA || attribute->data_flags ||
++			attribute->data_size != (int64_t)canonical_length ||
++			attribute->initialized_size != (int64_t)canonical_length ||
++			attribute->allocated_size != (int64_t)((canonical_length +
++				volume->cluster_size - 1U) &
++				~((uint64_t)volume->cluster_size - 1U)) ||
++			ntfs_attr_map_whole_runlist(attribute))
++		goto out;
++	allocated_clusters = (uint64_t)attribute->allocated_size /
++		volume->cluster_size;
++	for (run = attribute->rl; run && run->length; run++) {
++		uint64_t run_bytes, take, physical;
++
++		if (slice_count >= RH_FIXED_METADATA_MAX_SLICES || run->vcn < 0 ||
++				run->lcn < 0 || run->length <= 0 ||
++				(uint64_t)run->vcn != expected_vcn ||
++				(uint64_t)run->length > allocated_clusters - expected_vcn ||
++				(uint64_t)run->length > UINT64_MAX / volume->cluster_size ||
++				(uint64_t)run->lcn > UINT64_MAX / volume->cluster_size)
++			goto out;
++		run_bytes = (uint64_t)run->length * volume->cluster_size;
++		physical = (uint64_t)run->lcn * volume->cluster_size;
++		if (physical > writer->device_size || run_bytes >
++				writer->device_size - physical)
++			goto out;
++		take = run_bytes;
++		if (take > canonical_length - covered)
++			take = canonical_length - covered;
++		if (take) {
++			struct rh_fixed_metadata_slice *grown;
++
++			if ((take % volume->sector_size) ||
++					rh_writer_range_excluded(writer, physical, (size_t)take))
++				goto out;
++			grown = realloc(inspection->slices,
++				(slice_count + 1U) * sizeof(*grown));
++			if (!grown)
++				goto out;
++			inspection->slices = grown;
++			inspection->slices[slice_count].logical_offset = covered;
++			inspection->slices[slice_count].length = take;
++			inspection->slices[slice_count].physical_offset = physical;
++			inspection->slices[slice_count].logical_vcn = run->vcn;
++			inspection->slices[slice_count].lcn = run->lcn;
++			slice_count++;
++			covered += take;
++		}
++		expected_vcn += (uint64_t)run->length;
++	}
++	if (!run || run->length || run->vcn < 0 ||
++			(uint64_t)run->vcn != expected_vcn || run->lcn != LCN_ENOENT ||
++			expected_vcn != allocated_clusters ||
++			covered != canonical_length || slice_count != 1U ||
++			inspection->slices[0].logical_offset ||
++			inspection->slices[0].length != canonical_length)
++		goto out;
++	for (size_t i = 0; i < slice_count; i++)
++		for (size_t j = i + 1U; j < slice_count; j++) {
++			uint64_t first_end = inspection->slices[i].physical_offset +
++				inspection->slices[i].length;
++			uint64_t second_end = inspection->slices[j].physical_offset +
++				inspection->slices[j].length;
++
++			if (inspection->slices[i].physical_offset < second_end &&
++					inspection->slices[j].physical_offset < first_end)
++				goto out;
++		}
++	inspection->current_data = malloc(canonical_length);
++	if (!inspection->current_data || ntfs_attr_pread(attribute, 0,
++			canonical_length, inspection->current_data) !=
++			(int64_t)canonical_length)
++		goto out;
++	inspection->kind = kind;
++	inspection->volume_serial = volume_serial;
++	inspection->owner_mft_record = expected_record;
++	inspection->owner_sequence =
++		le16_to_cpu(inode->mrec->sequence_number);
++	inspection->attribute_instance = instance;
++	inspection->data_size = canonical_length;
++	inspection->allocated_size = attribute->allocated_size;
++	inspection->slice_count = slice_count;
++	rh_sha256(inspection->current_data, canonical_length,
++		inspection->current_hash);
++	memcpy(inspection->canonical_hash, canonical_hash, 32);
++	inspection->canonical = !memcmp(inspection->current_hash,
++		canonical_hash, 32);
++	if (rh_fixed_mapping_hash(inspection, inspection->mapping_hash))
++		goto out;
++	result = 0;
++out:
++	if (attribute)
++		ntfs_attr_close(attribute);
++	if (search)
++		ntfs_attr_put_search_ctx(search);
++	if (inode)
++		ntfs_inode_close(inode);
++	if (canonical) {
++		memset(canonical, 0, canonical_length);
++		free(canonical);
++	}
++	if (result) {
++		rh_fixed_metadata_inspection_destroy(inspection);
++		if (!errno)
++			errno = ENOTSUP;
++	}
++	return result;
++}
++
++void rh_fixed_metadata_inspection_destroy(
++		struct rh_fixed_metadata_inspection *inspection)
++{
++	if (!inspection)
++		return;
++	if (inspection->current_data) {
++		memset(inspection->current_data, 0, (size_t)inspection->data_size);
++		free(inspection->current_data);
++	}
++	free(inspection->slices);
++	memset(inspection, 0, sizeof(*inspection));
++}
++
++static void rh_fixed_unnamed_hash(unsigned char hash[32])
++{
++	rh_sha256("", 0, hash);
++}
++
++static void rh_fixed_target(const struct rh_fixed_metadata_inspection *inspection,
++		const struct rh_fixed_metadata_slice *slice,
++		struct rh_write_semantic_target *target)
++{
++	memset(target, 0, sizeof(*target));
++	target->seal_version = 1;
++	target->object = RH_WRITE_TARGET_NONRESIDENT_ATTRIBUTE;
++	target->owner_mft_record = inspection->owner_mft_record;
++	target->owner_sequence = inspection->owner_sequence;
++	target->attribute_instance = inspection->attribute_instance;
++	target->attribute_type = AT_DATA;
++	target->flags = RH_WRITE_TARGET_NONRESIDENT;
++	rh_fixed_unnamed_hash(target->attribute_name_hash);
++	target->lowest_vcn = 0;
++	target->logical_vcn = slice->logical_vcn;
++	target->logical_offset = slice->logical_offset;
++	target->logical_length = slice->length;
++	target->semantic_target_offset = slice->physical_offset;
++	target->semantic_target_length = slice->length;
++	target->lcn = slice->lcn;
++}
++
++static void rh_fixed_evidence_hash(
++		const struct rh_fixed_metadata_authority *authority,
++		const struct rh_fixed_metadata_inspection *inspection,
++		unsigned char output[32])
++{
++	unsigned char encoded[240];
++	const char *source = inspection->kind == RH_FIXED_METADATA_UPCASE ?
++		rh_upcase_source : rh_attrdef_source;
++
++	memset(encoded, 0, sizeof(encoded));
++	memcpy(encoded, "RHFIXEVID1", 10);
++	encoded[10] = (unsigned char)inspection->kind;
++	encoded[11] = (unsigned char)authority->census.view;
++	rh_fixed_put_u64(encoded + 16, authority->census.generation);
++	rh_fixed_put_u64(encoded + 24, inspection->volume_serial);
++	rh_fixed_put_u64(encoded + 32, inspection->owner_mft_record);
++	rh_fixed_put_u16(encoded + 40, inspection->owner_sequence);
++	rh_fixed_put_u16(encoded + 42, inspection->attribute_instance);
++	rh_fixed_put_u64(encoded + 48, inspection->data_size);
++	memcpy(encoded + 56, authority->seal, 32);
++	memcpy(encoded + 88, inspection->current_hash, 32);
++	memcpy(encoded + 120, inspection->canonical_hash, 32);
++	memcpy(encoded + 152, inspection->mapping_hash, 32);
++	rh_sha256(source, strlen(source), encoded + 184);
++	rh_sha256(encoded, sizeof(encoded), output);
++}
++
++static int rh_fixed_stage_action(ntfs_volume *volume, void *opaque)
++{
++	const struct rh_fixed_stage_context *context = opaque;
++	size_t i;
++
++	if (!volume || !volume->dev || !context || !context->inspection ||
++			!context->canonical || !context->changed) {
++		errno = EINVAL;
++		return RH_OVERLAY_ACTION_ERROR;
++	}
++	for (i = 0; i < context->changed_count; i++) {
++		const struct rh_fixed_metadata_slice *slice =
++			&context->inspection->slices[context->changed[i]];
++
++		if (slice->physical_offset > INT64_MAX || slice->length > INT64_MAX ||
++				ntfs_pwrite(volume->dev, (int64_t)slice->physical_offset,
++					(int64_t)slice->length,
++					context->canonical + slice->logical_offset) !=
++					(int64_t)slice->length)
++			return RH_OVERLAY_ACTION_ERROR;
++	}
++	return RH_OVERLAY_ACTION_OK;
++}
++
++static enum rh_fixed_metadata_stage_result rh_fixed_metadata_stage_one(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *authority,
++		enum rh_fixed_metadata_kind kind, struct rh_fixed_metadata_plan *plan)
++{
++	struct rh_fixed_metadata_inspection inspection;
++	struct rh_overlay_expected_write *writes = NULL;
++	struct rh_overlay_action_expectation expectation;
++	struct rh_fixed_stage_context context;
++	unsigned char *canonical = NULL;
++	unsigned char canonical_hash[32], plan_hash[32];
++	size_t canonical_length = 0, *changed = NULL, changed_count = 0;
++	size_t checkpoint, i;
++	enum rh_fixed_metadata_stage_result result = RH_FIXED_METADATA_STAGE_ERROR;
++
++	memset(&inspection, 0, sizeof(inspection));
++	if (!overlay || !overlay->volume || !overlay->writer || !plan ||
++			!overlay->fixed_metadata_startup_only) {
++		errno = EINVAL;
++		return RH_FIXED_METADATA_STAGE_ERROR;
++	}
++	memset(plan, 0, sizeof(*plan));
++	if (!rh_fixed_metadata_authority_valid(authority, kind,
++			RH_FIXED_METADATA_PRETRANSACTION,
++			authority ? authority->census.volume_serial : 0)) {
++		errno = EPERM;
++		return RH_FIXED_METADATA_STAGE_REFUSED;
++	}
++	if (rh_fixed_metadata_inspect(overlay->volume, overlay->writer, kind,
++			&inspection))
++		return errno == EIO ? RH_FIXED_METADATA_STAGE_ERROR :
++			RH_FIXED_METADATA_STAGE_REFUSED;
++	if (!rh_fixed_metadata_authority_valid(authority, kind,
++			RH_FIXED_METADATA_PRETRANSACTION, inspection.volume_serial)) {
++		errno = EPERM;
++		result = RH_FIXED_METADATA_STAGE_REFUSED;
++		goto out;
++	}
++	plan->kind = kind;
++	plan->owner_mft_record = inspection.owner_mft_record;
++	plan->owner_sequence = inspection.owner_sequence;
++	plan->attribute_instance = inspection.attribute_instance;
++	plan->generation = authority->census.generation;
++	plan->volume_serial = inspection.volume_serial;
++	plan->writer_checkpoint = rh_writer_plan_checkpoint(overlay->writer);
++	memcpy(plan->canonical_hash, inspection.canonical_hash, 32);
++	memcpy(plan->current_hash, inspection.current_hash, 32);
++	memcpy(plan->mapping_hash, inspection.mapping_hash, 32);
++	rh_fixed_evidence_hash(authority, &inspection, plan->pre_evidence_hash);
++	if (inspection.canonical) {
++		plan->clean = 1;
++		if (rh_ntfs_overlay_fixed_metadata_note_clean(overlay,
++				rh_fixed_write_kind(kind))) {
++			plan->clean = 0;
++			goto out;
++		}
++		result = RH_FIXED_METADATA_STAGE_CLEAN;
++		goto out;
++	}
++	if (rh_fixed_metadata_canonical_build(kind, &canonical,
++			&canonical_length, canonical_hash) ||
++			canonical_length != inspection.data_size ||
++			memcmp(canonical_hash, inspection.canonical_hash, 32))
++		goto out;
++	changed = calloc(inspection.slice_count, sizeof(*changed));
++	writes = calloc(inspection.slice_count, sizeof(*writes));
++	if (!changed || !writes)
++		goto out;
++	for (i = 0; i < inspection.slice_count; i++) {
++		const struct rh_fixed_metadata_slice *slice = &inspection.slices[i];
++		struct rh_write_semantic_target target;
++
++		if (!memcmp(inspection.current_data + slice->logical_offset,
++				canonical + slice->logical_offset, (size_t)slice->length))
++			continue;
++		changed[changed_count] = i;
++		writes[changed_count].offset = slice->physical_offset;
++		writes[changed_count].length = slice->length;
++		rh_fixed_target(&inspection, slice, &target);
++		if (!rh_write_semantic_target_valid(rh_fixed_write_kind(kind),
++				&target, slice->physical_offset, (size_t)slice->length, 0)) {
++			errno = EINVAL;
++			goto out;
++		}
++		writes[changed_count].target = target;
++		changed_count++;
++	}
++	if (!changed_count) {
++		errno = EILSEQ;
++		goto out;
++	}
++	checkpoint = rh_writer_plan_checkpoint(overlay->writer);
++	expectation.kind = rh_fixed_write_kind(kind);
++	expectation.writes = writes;
++	expectation.write_count = changed_count;
++	context.inspection = &inspection;
++	context.canonical = canonical;
++	context.changed = changed;
++	context.changed_count = changed_count;
++	if (rh_ntfs_overlay_run_action(overlay, &expectation,
++			rh_fixed_stage_action, &context) != RH_OVERLAY_ACTION_OK ||
++			overlay->writer->operation_count != checkpoint + changed_count ||
++			overlay->writer->write_boundaries ||
++			rh_writer_plan_hash(overlay->writer,
++				overlay->writer->operation_count, plan_hash))
++		goto out;
++	plan->first_operation_ordinal = checkpoint + 1U;
++	plan->operation_count = changed_count;
++	plan->writer_checkpoint = overlay->writer->operation_count;
++	memcpy(plan->staged_plan_hash, plan_hash, 32);
++	result = RH_FIXED_METADATA_STAGE_PLANNED;
++out:
++	if (canonical) {
++		memset(canonical, 0, canonical_length);
++		free(canonical);
++	}
++	free(changed);
++	free(writes);
++	rh_fixed_metadata_inspection_destroy(&inspection);
++	if (result == RH_FIXED_METADATA_STAGE_ERROR && !errno)
++		errno = EIO;
++	return result;
++}
++
++static void rh_fixed_metadata_batch_discard(struct rh_ntfs_overlay *overlay,
++		size_t checkpoint)
++{
++	if (!overlay || !overlay->writer)
++		return;
++	if (overlay->fixed_metadata_startup_only) {
++		if (rh_ntfs_overlay_abort_fixed_metadata_bootstrap(overlay))
++			overlay->failed = 1;
++	} else {
++		overlay->fixed_metadata_abort_examined_mask =
++			overlay->fixed_metadata_examined_mask;
++		overlay->fixed_metadata_abort_discarded_operations =
++			overlay->writer->operation_count - checkpoint;
++		if (rh_writer_discard_after(overlay->writer, checkpoint))
++			overlay->failed = 1;
++		overlay->fixed_metadata_examined_mask = 0;
++		overlay->planned_calls[RH_WRITE_UPCASE_DATA] = 0;
++		overlay->planned_calls[RH_WRITE_ATTRDEF_DATA] = 0;
++	}
++}
++
++enum rh_fixed_metadata_stage_result rh_fixed_metadata_stage_batch(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *upcase_authority,
++		const struct rh_fixed_metadata_authority *attrdef_authority,
++		struct rh_fixed_metadata_batch *batch)
++{
++	enum rh_fixed_metadata_stage_result upcase_result =
++		RH_FIXED_METADATA_STAGE_ERROR;
++	enum rh_fixed_metadata_stage_result attrdef_result =
++		RH_FIXED_METADATA_STAGE_ERROR;
++	unsigned char plan_hash[32];
++	size_t final_count;
++
++	if (!overlay || !overlay->volume || !overlay->writer || !batch ||
++			!overlay->fixed_metadata_startup_only || overlay->failed ||
++			overlay->fixed_metadata_examined_mask ||
++			overlay->writer->operation_count !=
++				overlay->fixed_metadata_batch_checkpoint) {
++		errno = EINVAL;
++		return RH_FIXED_METADATA_STAGE_ERROR;
++	}
++	memset(batch, 0, sizeof(*batch));
++	batch->writer_checkpoint = overlay->fixed_metadata_batch_checkpoint;
++	/* Close before touching either target: both complete ledgers are atomic. */
++	if (!rh_fixed_metadata_authority_valid(upcase_authority,
++			RH_FIXED_METADATA_UPCASE, RH_FIXED_METADATA_PRETRANSACTION,
++			upcase_authority ? upcase_authority->census.volume_serial : 0) ||
++			!rh_fixed_metadata_authority_valid(attrdef_authority,
++				RH_FIXED_METADATA_ATTRDEF,
++				RH_FIXED_METADATA_PRETRANSACTION,
++				attrdef_authority ?
++					attrdef_authority->census.volume_serial : 0) ||
++			upcase_authority->census.generation !=
++				attrdef_authority->census.generation ||
++			upcase_authority->census.volume_serial !=
++				attrdef_authority->census.volume_serial) {
++		errno = EPERM;
++		return RH_FIXED_METADATA_STAGE_REFUSED;
++	}
++	upcase_result = rh_fixed_metadata_stage_one(overlay, upcase_authority,
++		RH_FIXED_METADATA_UPCASE, &batch->upcase);
++	if (upcase_result != RH_FIXED_METADATA_STAGE_CLEAN &&
++			upcase_result != RH_FIXED_METADATA_STAGE_PLANNED)
++		goto fail;
++#ifdef ROOTHEALTH_REPAIR_TESTING
++	if (getenv("ROOTHEALTH_FIXED_METADATA_TEST_REFUSE_SECOND")) {
++		errno = EPERM;
++		attrdef_result = RH_FIXED_METADATA_STAGE_REFUSED;
++		goto fail;
++	}
++#endif
++	attrdef_result = rh_fixed_metadata_stage_one(overlay, attrdef_authority,
++		RH_FIXED_METADATA_ATTRDEF, &batch->attrdef);
++	if (attrdef_result != RH_FIXED_METADATA_STAGE_CLEAN &&
++			attrdef_result != RH_FIXED_METADATA_STAGE_PLANNED)
++		goto fail;
++	final_count = overlay->writer->operation_count;
++	memset(plan_hash, 0, sizeof(plan_hash));
++	if (final_count != batch->writer_checkpoint &&
++			rh_writer_plan_hash(overlay->writer, final_count, plan_hash))
++		goto fail;
++	batch->upcase.writer_checkpoint = final_count;
++	batch->attrdef.writer_checkpoint = final_count;
++	if (!batch->upcase.clean)
++		memcpy(batch->upcase.staged_plan_hash, plan_hash, 32);
++	if (!batch->attrdef.clean)
++		memcpy(batch->attrdef.staged_plan_hash, plan_hash, 32);
++	if (rh_ntfs_overlay_finish_fixed_metadata_bootstrap(overlay)) {
++		memset(batch, 0, sizeof(*batch));
++		return RH_FIXED_METADATA_STAGE_ERROR;
++	}
++	batch->staged = 1;
++	return upcase_result == RH_FIXED_METADATA_STAGE_PLANNED ||
++		attrdef_result == RH_FIXED_METADATA_STAGE_PLANNED ?
++		RH_FIXED_METADATA_STAGE_PLANNED : RH_FIXED_METADATA_STAGE_CLEAN;
++fail:
++	rh_fixed_metadata_batch_discard(overlay, batch->writer_checkpoint);
++	memset(batch, 0, sizeof(*batch));
++	if (!errno)
++		errno = EIO;
++	return upcase_result == RH_FIXED_METADATA_STAGE_REFUSED ||
++		attrdef_result == RH_FIXED_METADATA_STAGE_REFUSED ?
++		RH_FIXED_METADATA_STAGE_REFUSED : RH_FIXED_METADATA_STAGE_ERROR;
++}
++
++static const struct rh_fixed_metadata_slice *rh_fixed_find_slice(
++		const struct rh_fixed_metadata_inspection *inspection,
++		const struct rh_write_operation *operation)
++{
++	size_t i;
++
++	for (i = 0; i < inspection->slice_count; i++)
++		if (inspection->slices[i].physical_offset == operation->offset &&
++				inspection->slices[i].length == operation->length)
++			return &inspection->slices[i];
++	return NULL;
++}
++
++static int rh_fixed_target_identity_equal(
++		const struct rh_write_semantic_target *actual,
++		const struct rh_write_semantic_target *expected)
++{
++	return actual->seal_version == expected->seal_version &&
++		actual->object == expected->object &&
++		actual->owner_mft_record == expected->owner_mft_record &&
++		actual->owner_sequence == expected->owner_sequence &&
++		actual->attribute_instance == expected->attribute_instance &&
++		actual->attribute_type == expected->attribute_type &&
++		actual->attribute_name_length == expected->attribute_name_length &&
++		actual->flags == expected->flags &&
++		!memcmp(actual->attribute_name_hash, expected->attribute_name_hash, 32) &&
++		actual->lowest_vcn == expected->lowest_vcn &&
++		actual->logical_vcn == expected->logical_vcn &&
++		actual->logical_offset == expected->logical_offset &&
++		actual->logical_length == expected->logical_length &&
++		actual->semantic_target_offset == expected->semantic_target_offset &&
++		actual->semantic_target_length == expected->semantic_target_length &&
++		actual->lcn == expected->lcn;
++}
++
++int rh_fixed_metadata_verify_staged(struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *authority,
++		struct rh_fixed_metadata_plan *plan)
++{
++	struct rh_fixed_metadata_inspection inspection;
++	unsigned char *canonical = NULL, *reconstructed = NULL;
++	unsigned char canonical_hash[32], reconstructed_hash[32], plan_hash[32];
++	unsigned char before_hash[32], after_hash[32];
++	unsigned char matched[RH_FIXED_METADATA_MAX_SLICES] = {0};
++	size_t canonical_length = 0, i;
++	int result = -1;
++
++	memset(&inspection, 0, sizeof(inspection));
++	if (!overlay || !overlay->volume || !overlay->writer || !authority ||
++			!plan || plan->clean || !plan->operation_count ||
++			plan->staged_verified || plan->finalized ||
++			overlay->writer->operation_count != plan->writer_checkpoint ||
++			!rh_fixed_metadata_authority_valid(authority, plan->kind,
++				RH_FIXED_METADATA_STAGED, plan->volume_serial) ||
++			authority->census.generation != plan->generation ||
++			rh_fixed_metadata_inspect(overlay->volume, overlay->writer,
++				plan->kind, &inspection) || !inspection.canonical ||
++			inspection.owner_mft_record != plan->owner_mft_record ||
++			inspection.owner_sequence != plan->owner_sequence ||
++			inspection.attribute_instance != plan->attribute_instance ||
++			memcmp(inspection.mapping_hash, plan->mapping_hash, 32) ||
++			rh_fixed_metadata_canonical_build(plan->kind, &canonical,
++				&canonical_length, canonical_hash) ||
++			canonical_length != inspection.data_size ||
++			memcmp(canonical_hash, plan->canonical_hash, 32)) {
++		if (!errno)
++			errno = EPERM;
++		goto out;
++	}
++	reconstructed = malloc(canonical_length);
++	if (!reconstructed)
++		goto out;
++	memcpy(reconstructed, canonical, canonical_length);
++	for (i = 0; i < plan->operation_count; i++) {
++		const struct rh_write_operation *operation =
++			&overlay->writer->operations[
++				plan->first_operation_ordinal - 1U + i];
++		const struct rh_fixed_metadata_slice *slice =
++			rh_fixed_find_slice(&inspection, operation);
++		struct rh_write_semantic_target expected;
++		size_t slice_ordinal;
++
++		if (!slice || operation->kind != rh_fixed_write_kind(plan->kind) ||
++				memcmp(operation->after,
++					canonical + slice->logical_offset, operation->length))
++			goto out;
++		slice_ordinal = (size_t)(slice - inspection.slices);
++		if (slice_ordinal >= inspection.slice_count || matched[slice_ordinal])
++			goto out;
++		matched[slice_ordinal] = 1;
++		rh_fixed_target(&inspection, slice, &expected);
++		if (!rh_fixed_target_identity_equal(&operation->target, &expected) ||
++				operation->target.finalized ||
++				!rh_write_semantic_target_valid(operation->kind,
++					&operation->target, operation->offset,
++					operation->length, 0) ||
++				!memcmp(operation->before, operation->after,
++					operation->length))
++			goto out;
++		rh_sha256(operation->before, operation->length, before_hash);
++		rh_sha256(operation->after, operation->length, after_hash);
++		if (memcmp(before_hash, operation->target.semantic_before_hash, 32) ||
++				memcmp(after_hash,
++					operation->target.semantic_after_hash, 32))
++			goto out;
++		memcpy(reconstructed + slice->logical_offset, operation->before,
++			operation->length);
++	}
++	rh_sha256(reconstructed, canonical_length, reconstructed_hash);
++	if (memcmp(reconstructed_hash, plan->current_hash, 32) ||
++			rh_writer_plan_hash(overlay->writer,
++				overlay->writer->operation_count, plan_hash) ||
++			memcmp(plan_hash, plan->staged_plan_hash, 32))
++		goto out;
++	rh_fixed_evidence_hash(authority, &inspection,
++		plan->staged_evidence_hash);
++	plan->staged_verified = 1;
++	result = 0;
++out:
++	if (canonical) {
++		memset(canonical, 0, canonical_length);
++		free(canonical);
++	}
++	if (reconstructed) {
++		memset(reconstructed, 0, canonical_length);
++		free(reconstructed);
++	}
++	rh_fixed_metadata_inspection_destroy(&inspection);
++	if (result && !errno)
++		errno = EIO;
++	return result;
++}
++
++static int rh_fixed_metadata_verify_clean_staged(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *authority,
++		struct rh_fixed_metadata_plan *plan)
++{
++	struct rh_fixed_metadata_inspection inspection;
++	int result = -1;
++
++	memset(&inspection, 0, sizeof(inspection));
++	if (!overlay || !overlay->volume || !overlay->writer || !authority ||
++			!plan || !plan->clean || plan->operation_count ||
++			!rh_fixed_metadata_authority_valid(authority, plan->kind,
++				RH_FIXED_METADATA_STAGED, plan->volume_serial) ||
++			authority->census.generation != plan->generation ||
++			rh_fixed_metadata_inspect(overlay->volume, overlay->writer,
++				plan->kind, &inspection) || !inspection.canonical ||
++			inspection.owner_mft_record != plan->owner_mft_record ||
++			inspection.owner_sequence != plan->owner_sequence ||
++			inspection.attribute_instance != plan->attribute_instance ||
++			memcmp(inspection.current_hash, plan->canonical_hash, 32) ||
++			memcmp(inspection.mapping_hash, plan->mapping_hash, 32)) {
++		if (!errno)
++			errno = EPERM;
++		goto out;
++	}
++	rh_fixed_evidence_hash(authority, &inspection,
++		plan->staged_evidence_hash);
++	plan->staged_verified = 1;
++	result = 0;
++out:
++	rh_fixed_metadata_inspection_destroy(&inspection);
++	return result;
++}
++
++int rh_fixed_metadata_verify_finalize_batch(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *upcase_authority,
++		const struct rh_fixed_metadata_authority *attrdef_authority,
++		struct rh_fixed_metadata_batch *batch)
++{
++	struct rh_fixed_metadata_plan *plans[2];
++	const struct rh_fixed_metadata_authority *authorities[2];
++	unsigned char plan_hash[32];
++	size_t i, j;
++
++	if (!overlay || !overlay->volume || !overlay->writer || !batch ||
++			!batch->staged || batch->finalized ||
++			overlay->fixed_metadata_startup_only || overlay->failed ||
++			overlay->writer->operation_count < batch->writer_checkpoint) {
++		errno = EINVAL;
++		return -1;
++	}
++	plans[0] = &batch->upcase;
++	plans[1] = &batch->attrdef;
++	authorities[0] = upcase_authority;
++	authorities[1] = attrdef_authority;
++	for (i = 0; i < 2U; i++) {
++		int verify_result = plans[i]->clean ?
++			rh_fixed_metadata_verify_clean_staged(overlay, authorities[i],
++				plans[i]) :
++			rh_fixed_metadata_verify_staged(overlay, authorities[i],
++				plans[i]);
++
++		if (verify_result)
++			goto fail;
++	}
++	memset(plan_hash, 0, sizeof(plan_hash));
++	if (overlay->writer->operation_count != batch->writer_checkpoint &&
++			rh_writer_plan_hash(overlay->writer,
++				overlay->writer->operation_count, plan_hash))
++		goto fail;
++	for (i = 0; i < 2U; i++)
++		if (!plans[i]->clean &&
++				memcmp(plan_hash, plans[i]->staged_plan_hash, 32))
++			goto fail;
++	for (i = 0; i < 2U; i++) {
++		if (plans[i]->clean) {
++			plans[i]->finalized = 1;
++			continue;
++		}
++		for (j = 0; j < plans[i]->operation_count; j++)
++			if (rh_writer_finalize_target(overlay->writer,
++					plans[i]->first_operation_ordinal + j,
++					RH_FIXED_METADATA_EVIDENCE_VERSION,
++					plans[i]->generation, plans[i]->pre_evidence_hash,
++					plans[i]->staged_evidence_hash))
++				goto fail;
++		plans[i]->finalized = 1;
++	}
++	batch->finalized = 1;
++	return 0;
++fail:
++	i = batch->writer_checkpoint;
++	rh_fixed_metadata_batch_discard(overlay, i);
++	memset(batch, 0, sizeof(*batch));
++	overlay->failed = 1;
++	if (!errno)
++		errno = EPERM;
++	return -1;
++}
++
++static int rh_fixed_recovery_entry_valid(
++		const struct rh_fixed_metadata_recovery_entry *entry,
++		const struct rh_fixed_metadata_inspection *inspection,
++		const struct rh_fixed_metadata_slice *slice,
++		const unsigned char *canonical,
++		const unsigned char pre_evidence_hash[32],
++		const unsigned char *staged_evidence_hash, uint64_t generation)
++{
++	struct rh_write_semantic_target expected;
++	unsigned char old_hash[32], new_hash[32];
++
++	if (!entry || !entry->old_bytes ||
++			entry->kind != rh_fixed_write_kind(inspection->kind) ||
++			entry->target_offset != slice->physical_offset ||
++			entry->length != slice->length)
++		return 0;
++	rh_fixed_target(inspection, slice, &expected);
++	if (!rh_fixed_target_identity_equal(&entry->target, &expected) ||
++			!entry->target.finalized ||
++			entry->target.evidence_version !=
++				RH_FIXED_METADATA_EVIDENCE_VERSION ||
++			entry->target.evidence_generation != generation ||
++			memcmp(entry->target.evidence_hash, pre_evidence_hash, 32) ||
++			(staged_evidence_hash && memcmp(entry->target.staged_view_hash,
++				staged_evidence_hash, 32)) ||
++			!rh_write_semantic_target_valid(entry->kind, &entry->target,
++				entry->target_offset, entry->length, 1))
++		return 0;
++	rh_sha256(entry->old_bytes, entry->length, old_hash);
++	rh_sha256(canonical + slice->logical_offset, entry->length, new_hash);
++	return memcmp(old_hash, new_hash, 32) &&
++		!memcmp(entry->old_hash, old_hash, 32) &&
++		!memcmp(entry->new_hash, new_hash, 32) &&
++		!memcmp(entry->target.semantic_before_hash, old_hash, 32) &&
++		!memcmp(entry->target.semantic_after_hash, new_hash, 32);
++}
++
++int rh_fixed_metadata_rederive_recovery(ntfs_volume *pre_volume,
++		struct rh_writer *pre_writer,
++		const struct rh_fixed_metadata_authority *pre_authority,
++		ntfs_volume *post_volume, struct rh_writer *post_writer,
++		const struct rh_fixed_metadata_authority *post_authority,
++		const struct rh_fixed_metadata_recovery_entry *entries,
++		size_t entry_count, int committed)
++{
++	struct rh_fixed_metadata_inspection pre, post;
++	unsigned char *canonical = NULL;
++	unsigned char canonical_hash[32], pre_evidence[32], staged_evidence[32];
++	size_t canonical_length = 0, changed = 0, i;
++	int result = -1;
++	enum rh_fixed_metadata_kind kind;
++
++	memset(&pre, 0, sizeof(pre));
++	memset(&post, 0, sizeof(post));
++	if (!pre_volume || !pre_writer || !pre_authority || !post_volume ||
++			!post_writer || !post_authority || !entries ||
++			!entry_count || (committed != 0 && committed != 1) ||
++			rh_fixed_all_zero(post_authority->seal, 32)) {
++		errno = EINVAL;
++		return -1;
++	}
++	if (entries[0].kind == RH_WRITE_UPCASE_DATA)
++		kind = RH_FIXED_METADATA_UPCASE;
++	else if (entries[0].kind == RH_WRITE_ATTRDEF_DATA)
++		kind = RH_FIXED_METADATA_ATTRDEF;
++	else {
++		errno = ENOTSUP;
++		return -1;
++	}
++	for (i = 1; i < entry_count; i++)
++		if (entries[i].kind != entries[0].kind) {
++			errno = EINVAL;
++			return -1;
++		}
++	if (rh_fixed_metadata_inspect(pre_volume, pre_writer, kind, &pre) ||
++			!rh_fixed_metadata_authority_valid(pre_authority, kind,
++				RH_FIXED_METADATA_PRETRANSACTION, pre.volume_serial) ||
++			rh_fixed_metadata_canonical_build(kind, &canonical,
++				&canonical_length, canonical_hash) ||
++			canonical_length != pre.data_size ||
++			memcmp(canonical_hash, pre.canonical_hash, 32))
++		goto out;
++	rh_fixed_evidence_hash(pre_authority, &pre, pre_evidence);
++	if (rh_fixed_metadata_inspect(post_volume, post_writer, kind, &post) ||
++				!post.canonical ||
++				!rh_fixed_metadata_authority_valid(post_authority, kind,
++					RH_FIXED_METADATA_STAGED, post.volume_serial) ||
++				post_authority->census.generation !=
++					pre_authority->census.generation ||
++				post.owner_mft_record != pre.owner_mft_record ||
++				post.owner_sequence != pre.owner_sequence ||
++				post.attribute_instance != pre.attribute_instance ||
++				memcmp(post.mapping_hash, pre.mapping_hash, 32))
++		goto out;
++	rh_fixed_evidence_hash(post_authority, &post, staged_evidence);
++	for (i = 0; i < pre.slice_count; i++) {
++		const struct rh_fixed_metadata_slice *slice = &pre.slices[i];
++
++		if (!memcmp(pre.current_data + slice->logical_offset,
++				canonical + slice->logical_offset, (size_t)slice->length))
++			continue;
++		if (changed >= entry_count ||
++				!rh_fixed_recovery_entry_valid(&entries[changed], &pre,
++					slice, canonical, pre_evidence, staged_evidence,
++					pre_authority->census.generation) ||
++				memcmp(entries[changed].old_bytes,
++					pre.current_data + slice->logical_offset,
++					(size_t)slice->length))
++			goto out;
++		changed++;
++	}
++	if (changed != entry_count)
++		goto out;
++	result = 0;
++out:
++	if (canonical) {
++		memset(canonical, 0, canonical_length);
++		free(canonical);
++	}
++	rh_fixed_metadata_inspection_destroy(&post);
++	rh_fixed_metadata_inspection_destroy(&pre);
++	if (result && !errno)
++		errno = EIO;
++	return result;
++}
+diff --git a/src/roothealth_fixed_metadata.h b/src/roothealth_fixed_metadata.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..5629c2e21874906fd6c8836cbd7d1e99691c32f7
+--- /dev/null
++++ b/src/roothealth_fixed_metadata.h
+@@ -0,0 +1,229 @@
++#ifndef ROOTHEALTH_FIXED_METADATA_H
++#define ROOTHEALTH_FIXED_METADATA_H
++
++#include <stddef.h>
++#include <stdint.h>
++
++#include "roothealth_overlay.h"
++
++struct rh_cluster_bitmap_census;
++struct rh_coverage_ledger;
++struct rh_namespace_census;
++struct rh_raw_mft_census;
++
++#define RH_FIXED_METADATA_AUTHORITY_VERSION UINT32_C(1)
++#define RH_FIXED_METADATA_LEDGER_FORMAT UINT32_C(3)
++#define RH_FIXED_METADATA_EVIDENCE_VERSION UINT32_C(1)
++#define RH_FIXED_METADATA_MAX_SLICES 128U
++#define RH_UPCASE_CANONICAL_SIZE UINT64_C(131072)
++#define RH_ATTRDEF_CANONICAL_SIZE UINT64_C(2560)
++
++#define RH_UPCASE_CANONICAL_SHA256 \
++	"41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742"
++#define RH_ATTRDEF_CANONICAL_SHA256 \
++	"d7de5b1b2f79f45f235ceb1adbc46908ed64eae174eb90ed66aefe5f25165da3"
++#define RH_FIXED_METADATA_UPCASE_CHECK_ID "system.upcase"
++#define RH_FIXED_METADATA_ATTRDEF_CHECK_ID "system.attrdef"
++
++enum rh_fixed_metadata_kind {
++	RH_FIXED_METADATA_UPCASE = 1,
++	RH_FIXED_METADATA_ATTRDEF = 2
++};
++
++enum rh_fixed_metadata_view {
++	RH_FIXED_METADATA_PRETRANSACTION = 1,
++	RH_FIXED_METADATA_STAGED = 2
++};
++
++enum rh_fixed_metadata_stage_result {
++	RH_FIXED_METADATA_STAGE_ERROR = -1,
++	RH_FIXED_METADATA_STAGE_CLEAN = 0,
++	RH_FIXED_METADATA_STAGE_PLANNED = 1,
++	RH_FIXED_METADATA_STAGE_REFUSED = 2
++};
++
++const char *rh_fixed_metadata_check_id(enum rh_fixed_metadata_kind kind);
++
++/*
++ * Input owned by the exhaustive checker.  It is intentionally counter-based:
++ * a repair adapter cannot turn one successful lookup into "complete" census
++ * authority.  The ledger and graph/type-use hashes bind the exact walked
++ * objects; the fixed-metadata module only validates and seals this input.
++ */
++struct rh_fixed_metadata_census {
++	enum rh_fixed_metadata_kind kind;
++	enum rh_fixed_metadata_view view;
++	uint32_t coverage_ledger_format;
++	uint64_t generation;
++	uint64_t volume_serial;
++	int coverage_complete;
++	int identity_bound;
++	int no_io_uncertainty;
++	int target_runs_complete;
++	int target_ownership_exact;
++	int targets_outside_wal;
++	uint64_t mft_slots_expected;
++	uint64_t mft_slots_completed;
++	uint64_t attributes_expected;
++	uint64_t attributes_completed;
++	uint64_t extents_expected;
++	uint64_t extents_completed;
++	uint64_t runs_expected;
++	uint64_t runs_completed;
++	uint64_t namespace_links_expected;
++	uint64_t namespace_links_completed;
++	uint64_t namespace_links_reciprocal;
++	uint64_t namespace_links_unresolved;
++	uint64_t indexes_expected;
++	uint64_t indexes_completed;
++	uint64_t index_blocks_allocated;
++	uint64_t index_blocks_reachable;
++	uint64_t index_blocks_examined;
++	uint64_t index_blocks_unreadable;
++	uint64_t canonical_ordered_indexes;
++	uint64_t incompatible_collations;
++	uint64_t attribute_types_expected;
++	uint64_t attribute_types_examined;
++	uint64_t custom_attribute_types;
++	uint64_t incompatible_attribute_bounds;
++	unsigned char coverage_ledger_hash[32];
++	unsigned char raw_census_hash[32];
++	unsigned char target_mapping_hash[32];
++	unsigned char allocation_bitmap_hash[32];
++	unsigned char identity_graph_hash[32];
++	unsigned char namespace_manifest_hash[32];
++	unsigned char index_census_hash[32];
++	unsigned char attribute_type_use_hash[32];
++};
++
++struct rh_fixed_metadata_authority {
++	uint32_t version;
++	struct rh_fixed_metadata_census census;
++	unsigned char seal[32];
++};
++
++struct rh_fixed_metadata_slice {
++	uint64_t logical_offset;
++	uint64_t length;
++	uint64_t physical_offset;
++	int64_t logical_vcn;
++	int64_t lcn;
++};
++
++struct rh_fixed_metadata_inspection {
++	enum rh_fixed_metadata_kind kind;
++	uint64_t volume_serial;
++	uint64_t owner_mft_record;
++	uint16_t owner_sequence;
++	uint16_t attribute_instance;
++	uint64_t data_size;
++	uint64_t allocated_size;
++	int canonical;
++	unsigned char current_hash[32];
++	unsigned char canonical_hash[32];
++	unsigned char mapping_hash[32];
++	unsigned char *current_data;
++	struct rh_fixed_metadata_slice *slices;
++	size_t slice_count;
++};
++
++struct rh_fixed_metadata_plan {
++	enum rh_fixed_metadata_kind kind;
++	uint64_t owner_mft_record;
++	uint16_t owner_sequence;
++	uint16_t attribute_instance;
++	uint64_t generation;
++	uint64_t volume_serial;
++	size_t writer_checkpoint;
++	size_t first_operation_ordinal;
++	size_t operation_count;
++	int clean;
++	int staged_verified;
++	int finalized;
++	unsigned char canonical_hash[32];
++	unsigned char current_hash[32];
++	unsigned char mapping_hash[32];
++	unsigned char pre_evidence_hash[32];
++	unsigned char staged_evidence_hash[32];
++	unsigned char staged_plan_hash[32];
++};
++
++struct rh_fixed_metadata_batch {
++	size_t writer_checkpoint;
++	struct rh_fixed_metadata_plan upcase;
++	struct rh_fixed_metadata_plan attrdef;
++	int staged;
++	int finalized;
++};
++
++/* Public, read-only view of the descriptor data needed for crash rederivation. */
++struct rh_fixed_metadata_recovery_entry {
++	enum rh_write_kind kind;
++	uint64_t target_offset;
++	size_t length;
++	unsigned char old_hash[32];
++	unsigned char new_hash[32];
++	struct rh_write_semantic_target target;
++	const unsigned char *old_bytes;
++};
++
++int rh_fixed_metadata_canonical_build(enum rh_fixed_metadata_kind kind,
++		unsigned char **bytes, size_t *length, unsigned char hash[32]);
++int rh_fixed_metadata_attrdef_type_census(
++		const struct rh_raw_mft_census *raw, unsigned char output[32]);
++/*
++ * The production constructor consumes independently completed engine
++ * censuses.  It never accepts caller-authored counters or caller-provided
++ * digests as repair authority.
++ */
++int rh_fixed_metadata_authority_build(
++		const struct rh_coverage_ledger *coverage,
++		const struct rh_raw_mft_census *raw,
++		const struct rh_namespace_census *namespace_census,
++		const struct rh_cluster_bitmap_census *cluster_census,
++		struct rh_writer *writer, enum rh_fixed_metadata_kind kind,
++		enum rh_fixed_metadata_view view, uint64_t volume_serial,
++		struct rh_fixed_metadata_authority *authority);
++#ifdef ROOTHEALTH_REPAIR_TESTING
++/* Synthetic construction is confined to the isolated negative-test binary. */
++int rh_fixed_metadata_authority_seal(
++		const struct rh_fixed_metadata_census *census,
++		struct rh_fixed_metadata_authority *authority);
++#endif
++int rh_fixed_metadata_authority_valid(
++		const struct rh_fixed_metadata_authority *authority,
++		enum rh_fixed_metadata_kind kind, enum rh_fixed_metadata_view view,
++		uint64_t volume_serial);
++int rh_fixed_metadata_inspect(ntfs_volume *volume, struct rh_writer *writer,
++		enum rh_fixed_metadata_kind kind,
++		struct rh_fixed_metadata_inspection *inspection);
++void rh_fixed_metadata_inspection_destroy(
++		struct rh_fixed_metadata_inspection *inspection);
++enum rh_fixed_metadata_stage_result rh_fixed_metadata_stage_batch(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *upcase_authority,
++		const struct rh_fixed_metadata_authority *attrdef_authority,
++		struct rh_fixed_metadata_batch *batch);
++int rh_fixed_metadata_verify_staged(struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *authority,
++		struct rh_fixed_metadata_plan *plan);
++int rh_fixed_metadata_verify_finalize_batch(
++		struct rh_ntfs_overlay *overlay,
++		const struct rh_fixed_metadata_authority *upcase_authority,
++		const struct rh_fixed_metadata_authority *attrdef_authority,
++		struct rh_fixed_metadata_batch *batch);
++/*
++ * Both views are mandatory.  For PREPARING/APPLYING recovery, post_writer is
++ * a read-only virtual view made by overlaying the independently derived
++ * canonical bytes; for COMMITTED it is the current on-device view.  This
++ * rederives the staged-view seal before either rollback or acceptance.
++ */
++int rh_fixed_metadata_rederive_recovery(ntfs_volume *pre_volume,
++		struct rh_writer *pre_writer,
++		const struct rh_fixed_metadata_authority *pre_authority,
++		ntfs_volume *post_volume, struct rh_writer *post_writer,
++		const struct rh_fixed_metadata_authority *post_authority,
++		const struct rh_fixed_metadata_recovery_entry *entries,
++		size_t entry_count, int committed);
++
++#endif
+diff --git a/src/roothealth_overlay.c b/src/roothealth_overlay.c
+index 3956f0431156699447dc097548688d48698ac40c..12e9812574c7b179625545bd4c46952fcae82e37 100644
+--- a/src/roothealth_overlay.c
++++ b/src/roothealth_overlay.c
+@@ -22,6 +22,20 @@ static struct rh_ntfs_overlay *rh_overlay_from_device(struct ntfs_device *dev)
+ 	return dev->d_private;
+ }
+ 
++#define RH_FIXED_METADATA_UPCASE_BIT 0x1U
++#define RH_FIXED_METADATA_ATTRDEF_BIT 0x2U
++#define RH_FIXED_METADATA_ALL_BITS \
++	(RH_FIXED_METADATA_UPCASE_BIT | RH_FIXED_METADATA_ATTRDEF_BIT)
++
++static unsigned int rh_overlay_fixed_metadata_bit(enum rh_write_kind kind)
++{
++	if (kind == RH_WRITE_UPCASE_DATA)
++		return RH_FIXED_METADATA_UPCASE_BIT;
++	if (kind == RH_WRITE_ATTRDEF_DATA)
++		return RH_FIXED_METADATA_ATTRDEF_BIT;
++	return 0;
++}
++
+ static int rh_overlay_open(struct ntfs_device *dev, int flags)
+ {
+ 	struct rh_ntfs_overlay *overlay = rh_overlay_from_device(dev);
+@@ -229,7 +243,12 @@ static int rh_ntfs_overlay_mount_device(struct rh_ntfs_overlay *overlay)
+ 	if (ntfs_device_roothealth_install_plan_write(overlay->device,
+ 			rh_overlay_plan_write, overlay))
+ 		goto fail;
+-	overlay->volume = ntfs_device_mount(overlay->device,
++	if (overlay->fixed_metadata_startup_only)
++		overlay->volume = ntfs_volume_startup(overlay->device,
++			overlay->diagnostic_flags | NTFS_MNT_RDONLY |
++			NTFS_MNT_FORENSIC | NTFS_MNT_FS_NO_REPAIR);
++	else
++		overlay->volume = ntfs_device_mount(overlay->device,
+ 			overlay->diagnostic_flags | NTFS_MNT_RDONLY |
+ 			NTFS_MNT_FORENSIC | NTFS_MNT_FS_NO_REPAIR);
+ 	if (!overlay->volume)
+@@ -253,8 +272,9 @@ fail:
+ 	return -1;
+ }
+ 
+-int rh_ntfs_overlay_mount(struct rh_ntfs_overlay *overlay,
+-		struct rh_writer *writer, ntfs_mount_flags diagnostic_flags)
++static int rh_ntfs_overlay_mount_mode(struct rh_ntfs_overlay *overlay,
++		struct rh_writer *writer, ntfs_mount_flags diagnostic_flags,
++		int fixed_metadata_startup_only)
+ {
+ 	ntfs_mount_flags forbidden = NTFS_MNT_FS_AUTO_REPAIR |
+ 		NTFS_MNT_FS_ASK_REPAIR | NTFS_MNT_FS_YES_REPAIR;
+@@ -268,9 +288,25 @@ int rh_ntfs_overlay_mount(struct rh_ntfs_overlay *overlay,
+ 	overlay->writer = writer;
+ 	overlay->active_kind = RH_WRITE_KIND_COUNT;
+ 	overlay->diagnostic_flags = diagnostic_flags;
++	overlay->fixed_metadata_startup_only = fixed_metadata_startup_only;
++	overlay->fixed_metadata_batch_checkpoint =
++		rh_writer_plan_checkpoint(writer);
+ 	return rh_ntfs_overlay_mount_device(overlay);
+ }
+ 
++int rh_ntfs_overlay_mount(struct rh_ntfs_overlay *overlay,
++		struct rh_writer *writer, ntfs_mount_flags diagnostic_flags)
++{
++	return rh_ntfs_overlay_mount_mode(overlay, writer, diagnostic_flags, 0);
++}
++
++int rh_ntfs_overlay_mount_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay, struct rh_writer *writer,
++		ntfs_mount_flags diagnostic_flags)
++{
++	return rh_ntfs_overlay_mount_mode(overlay, writer, diagnostic_flags, 1);
++}
++
+ static int rh_ntfs_overlay_begin_action(struct rh_ntfs_overlay *overlay,
+ 		const struct rh_overlay_action_expectation *expectation)
+ {
+@@ -284,6 +320,13 @@ static int rh_ntfs_overlay_begin_action(struct rh_ntfs_overlay *overlay,
+ 		errno = EINVAL;
+ 		return -1;
+ 	}
++	if (overlay->fixed_metadata_startup_only &&
++			(!rh_overlay_fixed_metadata_bit(expectation->kind) ||
++			(overlay->fixed_metadata_examined_mask &
++				rh_overlay_fixed_metadata_bit(expectation->kind)))) {
++		errno = EPERM;
++		return -1;
++	}
+ 	for (i = 0; i < expectation->write_count; i++) {
+ 		if (!expectation->writes[i].length ||
+ 			expectation->writes[i].target.seal_version != 1 ||
+@@ -312,6 +355,7 @@ static int rh_ntfs_overlay_begin_action(struct rh_ntfs_overlay *overlay,
+ static int rh_ntfs_overlay_finish_action(struct rh_ntfs_overlay *overlay,
+ 		int helper_result)
+ {
++	size_t i;
+ 	int success;
+ 	int refused;
+ 	enum rh_write_kind kind;
+@@ -326,6 +370,24 @@ static int rh_ntfs_overlay_finish_action(struct rh_ntfs_overlay *overlay,
+ 		overlay->observed_write_calls == overlay->expected_write_count &&
+ 		overlay->writer->operation_count - overlay->action_checkpoint ==
+ 			overlay->expected_write_count;
++	if (success && overlay->fixed_metadata_startup_only) {
++		/*
++		 * The writer captured every raw target into `before` while the
++		 * startup-only view was active.  Only those exact typed operations may
++		 * enable the subsequent ordinary full mount of the staged view.
++		 */
++		if (kind != RH_WRITE_UPCASE_DATA && kind != RH_WRITE_ATTRDEF_DATA)
++			success = 0;
++		for (i = overlay->action_checkpoint;
++				success && i < overlay->writer->operation_count; i++) {
++			const struct rh_write_operation *operation =
++				&overlay->writer->operations[i];
++
++			if (operation->kind != kind || !operation->before ||
++					!operation->after || !operation->length)
++				success = 0;
++		}
++	}
+ 	refused = helper_result == RH_OVERLAY_ACTION_REFUSED && !overlay->failed;
+ 	if (!success) {
+ 		if (rh_writer_discard_after(overlay->writer,
+@@ -341,6 +403,11 @@ static int rh_ntfs_overlay_finish_action(struct rh_ntfs_overlay *overlay,
+ 	overlay->expected_writes = NULL;
+ 	overlay->expected_write_count = 0;
+ 	overlay->observed_write_calls = 0;
++	if (success && overlay->fixed_metadata_startup_only) {
++		overlay->fixed_metadata_examined_mask |=
++			rh_overlay_fixed_metadata_bit(kind);
++		return RH_OVERLAY_ACTION_OK;
++	}
+ 	if (success) {
+ 		/*
+ 		 * Never derive policy facts from helper-mutated libntfs caches.  A
+@@ -356,6 +423,8 @@ static int rh_ntfs_overlay_finish_action(struct rh_ntfs_overlay *overlay,
+ 		}
+ 		overlay->volume = NULL;
+ 		overlay->device = NULL;
++		/* The staged bytes now exist in writer reads; use normal mount logic. */
++		overlay->fixed_metadata_startup_only = 0;
+ 		if (rh_ntfs_overlay_mount_device(overlay)) {
+ 			overlay->failed = 1;
+ 			return RH_OVERLAY_ACTION_ERROR;
+@@ -386,6 +455,86 @@ static int rh_ntfs_overlay_finish_action(struct rh_ntfs_overlay *overlay,
+ 	return 0;
+ }
+ 
++int rh_ntfs_overlay_fixed_metadata_note_clean(
++		struct rh_ntfs_overlay *overlay, enum rh_write_kind kind)
++{
++	unsigned int bit = rh_overlay_fixed_metadata_bit(kind);
++
++	if (!overlay || !overlay->volume || !overlay->fixed_metadata_startup_only ||
++			overlay->action_active || overlay->failed || !bit ||
++			(overlay->fixed_metadata_examined_mask & bit) ||
++			overlay->writer->operation_count <
++				overlay->fixed_metadata_batch_checkpoint) {
++		errno = EPERM;
++		return -1;
++	}
++	overlay->fixed_metadata_examined_mask |= bit;
++	return 0;
++}
++
++int rh_ntfs_overlay_finish_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay)
++{
++	if (!overlay || !overlay->volume || !overlay->writer ||
++			!overlay->fixed_metadata_startup_only || overlay->action_active ||
++			overlay->failed || overlay->fixed_metadata_examined_mask !=
++				RH_FIXED_METADATA_ALL_BITS ||
++			overlay->writer->operation_count <
++				overlay->fixed_metadata_batch_checkpoint) {
++		errno = EPERM;
++		return -1;
++	}
++	ntfs_device_roothealth_remove_plan_write(overlay->volume->dev);
++	/*
++	 * ntfs_umount() always destroys a startup volume and its device, but the
++	 * pinned implementation can report EINVAL for fields intentionally never
++	 * loaded by ntfs_volume_startup().  This read-only private teardown has no
++	 * dirty state, so the diagnostic return is not a persistence failure.
++	 */
++	(void)ntfs_umount(overlay->volume, TRUE);
++	overlay->volume = NULL;
++	overlay->device = NULL;
++	overlay->fixed_metadata_startup_only = 0;
++	if (!rh_ntfs_overlay_mount_device(overlay))
++		return 0;
++	if (rh_writer_discard_after(overlay->writer,
++			overlay->fixed_metadata_batch_checkpoint))
++		overlay->failed = 1;
++	overlay->fixed_metadata_examined_mask = 0;
++	overlay->planned_calls[RH_WRITE_UPCASE_DATA] = 0;
++	overlay->planned_calls[RH_WRITE_ATTRDEF_DATA] = 0;
++	overlay->failed = 1;
++	errno = EIO;
++	return -1;
++}
++
++int rh_ntfs_overlay_abort_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay)
++{
++	size_t discarded;
++
++	if (!overlay || !overlay->writer || !overlay->fixed_metadata_startup_only ||
++			overlay->action_active || overlay->writer->operation_count <
++				overlay->fixed_metadata_batch_checkpoint) {
++		errno = EINVAL;
++		return -1;
++	}
++	discarded = overlay->writer->operation_count -
++		overlay->fixed_metadata_batch_checkpoint;
++	overlay->fixed_metadata_abort_examined_mask =
++		overlay->fixed_metadata_examined_mask;
++	overlay->fixed_metadata_abort_discarded_operations = discarded;
++	if (rh_writer_discard_after(overlay->writer,
++			overlay->fixed_metadata_batch_checkpoint)) {
++		overlay->failed = 1;
++		return -1;
++	}
++	overlay->fixed_metadata_examined_mask = 0;
++	overlay->planned_calls[RH_WRITE_UPCASE_DATA] = 0;
++	overlay->planned_calls[RH_WRITE_ATTRDEF_DATA] = 0;
++	return 0;
++}
++
+ int rh_ntfs_overlay_run_action(struct rh_ntfs_overlay *overlay,
+ 		const struct rh_overlay_action_expectation *expectation,
+ 		rh_overlay_action_fn action, void *opaque)
+diff --git a/src/roothealth_overlay.h b/src/roothealth_overlay.h
+index 79517f3e839b683f614e27558884d347f7569555..9434d294c51d93f767baeaeaa9b401ca3d16b6c6 100644
+--- a/src/roothealth_overlay.h
++++ b/src/roothealth_overlay.h
+@@ -39,13 +39,34 @@ struct rh_ntfs_overlay {
+ 	size_t expected_write_count;
+ 	size_t observed_write_calls;
+ 	size_t action_checkpoint;
++	size_t fixed_metadata_batch_checkpoint;
++	size_t fixed_metadata_abort_discarded_operations;
+ 	ntfs_mount_flags diagnostic_flags;
++	unsigned int fixed_metadata_examined_mask;
++	unsigned int fixed_metadata_abort_examined_mask;
++	int fixed_metadata_startup_only;
+ 	int action_active;
+ 	int failed;
+ };
+ 
+ int rh_ntfs_overlay_mount(struct rh_ntfs_overlay *overlay,
+ 		struct rh_writer *writer, ntfs_mount_flags diagnostic_flags);
++/*
++ * Mount only the boot sector and $MFT.  This private bootstrap view is used
++ * to capture corrupt $UpCase/$AttrDef bytes before a typed staged operation
++ * exists.  Only after both fixed targets have been examined as clean or
++ * captured by typed actions may the bounded batch force one ordinary full
++ * forensic remount through the staged writer overlay.
++ */
++int rh_ntfs_overlay_mount_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay, struct rh_writer *writer,
++		ntfs_mount_flags diagnostic_flags);
++int rh_ntfs_overlay_fixed_metadata_note_clean(
++		struct rh_ntfs_overlay *overlay, enum rh_write_kind kind);
++int rh_ntfs_overlay_finish_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay);
++int rh_ntfs_overlay_abort_fixed_metadata_bootstrap(
++		struct rh_ntfs_overlay *overlay);
+ int rh_ntfs_overlay_run_action(struct rh_ntfs_overlay *overlay,
+ 		const struct rh_overlay_action_expectation *expectation,
+ 		rh_overlay_action_fn action, void *opaque);
+diff --git a/tests/roothealth_fixed_metadata_mutate.c b/tests/roothealth_fixed_metadata_mutate.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..931948a3a27e7c876c4aa318c3ea51785a637641
+--- /dev/null
++++ b/tests/roothealth_fixed_metadata_mutate.c
+@@ -0,0 +1,87 @@
++#include "config.h"
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include "roothealth_fixed_metadata.h"
++
++int main(int argc, char **argv)
++{
++	struct rh_writer writer;
++	struct rh_ntfs_overlay overlay;
++	struct rh_fixed_metadata_inspection inspection;
++	enum rh_fixed_metadata_kind kind;
++	uint64_t logical, physical = 0;
++	unsigned char byte;
++	size_t i;
++	int fd = -1, mounted = 0, result = 1;
++
++	memset(&inspection, 0, sizeof(inspection));
++	if (argc != 3)
++		return 5;
++	if (!strcmp(argv[2], "upcase-tail")) {
++		kind = RH_FIXED_METADATA_UPCASE;
++		logical = RH_UPCASE_CANONICAL_SIZE - 1U;
++	} else if (!strcmp(argv[2], "upcase-ascii")) {
++		kind = RH_FIXED_METADATA_UPCASE;
++		logical = 2U * (uint64_t)'a';
++	} else if (!strcmp(argv[2], "attrdef")) {
++		kind = RH_FIXED_METADATA_ATTRDEF;
++		logical = RH_ATTRDEF_CANONICAL_SIZE - 1U;
++	} else if (!strcmp(argv[2], "attrdef-structural")) {
++		kind = RH_FIXED_METADATA_ATTRDEF;
++		logical = 0x8cU;
++	} else
++		return 5;
++	if (rh_writer_open(&writer, argv[1]))
++		return 3;
++	if (rh_ntfs_overlay_mount(&overlay, &writer, 0))
++		goto out_writer;
++	mounted = 1;
++	if (rh_fixed_metadata_inspect(overlay.volume, &writer, kind,
++			&inspection) || !inspection.canonical) {
++		fprintf(stderr, "fixed metadata inspect failed: %s canonical=%d\n",
++			strerror(errno), inspection.canonical);
++		goto out;
++	}
++	for (i = 0; i < inspection.slice_count; i++) {
++		const struct rh_fixed_metadata_slice *slice = &inspection.slices[i];
++
++		if (logical >= slice->logical_offset &&
++				logical - slice->logical_offset < slice->length) {
++			physical = slice->physical_offset + logical -
++				slice->logical_offset;
++			break;
++		}
++	}
++	if (!physical || rh_writer_read(&writer, physical, 1, &byte))
++		goto out;
++	rh_fixed_metadata_inspection_destroy(&inspection);
++	rh_ntfs_overlay_unmount(&overlay);
++	mounted = 0;
++	rh_writer_close(&writer);
++	byte ^= 0x5aU;
++	fd = open(argv[1], O_RDWR | O_CLOEXEC | O_NOFOLLOW);
++	if (fd < 0 || pwrite(fd, &byte, 1, (off_t)physical) != 1 || fsync(fd) ||
++			close(fd)) {
++		if (fd >= 0)
++			close(fd);
++		return 3;
++	}
++	printf("fixed-metadata-mutated kind=%u logical=%llu physical=%llu\n",
++		(unsigned int)kind, (unsigned long long)logical,
++		(unsigned long long)physical);
++	return 0;
++out:
++	rh_fixed_metadata_inspection_destroy(&inspection);
++	if (mounted)
++		rh_ntfs_overlay_unmount(&overlay);
++out_writer:
++	rh_writer_close(&writer);
++	return result;
++}
+diff --git a/tests/roothealth_fixed_metadata_plan.c b/tests/roothealth_fixed_metadata_plan.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..0bba21e82d30fef2be2837b30c7e5f599b8df82b
+--- /dev/null
++++ b/tests/roothealth_fixed_metadata_plan.c
+@@ -0,0 +1,486 @@
++#include "config.h"
++
++#include <errno.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++
++#include "problem.h"
++#include "roothealth_fixed_metadata.h"
++#include "roothealth_policy.h"
++
++static void tagged_hash(const char *label, enum rh_fixed_metadata_kind kind,
++		enum rh_fixed_metadata_view view, uint64_t serial,
++		unsigned char output[32])
++{
++	char text[160];
++
++	snprintf(text, sizeof(text), "%s:%u:%u:%016llx", label,
++		(unsigned int)kind, (unsigned int)view,
++		(unsigned long long)serial);
++	rh_sha256(text, strlen(text), output);
++}
++
++static int flagless_mount_probe(struct rh_writer *writer, int expected,
++		int *mounted_out)
++{
++	struct rh_ntfs_overlay ordinary;
++	int mounted;
++
++	errno = 0;
++	mounted = !rh_ntfs_overlay_mount(&ordinary, writer, 0);
++	if (mounted)
++		rh_ntfs_overlay_unmount(&ordinary);
++	if ((expected >= 0 && mounted != expected) || writer->operation_count ||
++			writer->write_boundaries)
++		return -1;
++	*mounted_out = mounted;
++	return 0;
++}
++
++static int make_authority(enum rh_fixed_metadata_kind kind,
++		enum rh_fixed_metadata_view view, uint64_t generation, uint64_t serial,
++		struct rh_fixed_metadata_authority *authority)
++{
++	struct rh_fixed_metadata_census census;
++
++	memset(&census, 0, sizeof(census));
++	census.kind = kind;
++	census.view = view;
++	census.coverage_ledger_format = RH_FIXED_METADATA_LEDGER_FORMAT;
++	census.generation = generation;
++	census.volume_serial = serial;
++	census.coverage_complete = 1;
++	census.identity_bound = 1;
++	census.no_io_uncertainty = 1;
++	census.target_runs_complete = 1;
++	census.target_ownership_exact = 1;
++	census.targets_outside_wal = 1;
++	census.mft_slots_expected = census.mft_slots_completed = 32;
++	census.attributes_expected = census.attributes_completed = 96;
++	census.extents_expected = census.extents_completed = 96;
++	census.runs_expected = census.runs_completed = 24;
++	tagged_hash("ledger", kind, view, serial, census.coverage_ledger_hash);
++	tagged_hash("raw-census", kind, view, serial, census.raw_census_hash);
++	tagged_hash("target-mapping", kind, view, serial,
++		census.target_mapping_hash);
++	tagged_hash("allocation-bitmap", kind, view, serial,
++		census.allocation_bitmap_hash);
++	tagged_hash("identity", kind, view, serial, census.identity_graph_hash);
++	if (kind == RH_FIXED_METADATA_UPCASE) {
++		census.namespace_links_expected = 18;
++		census.namespace_links_completed = 18;
++		census.namespace_links_reciprocal = 18;
++		census.indexes_expected = census.indexes_completed = 4;
++		census.index_blocks_allocated = 2;
++		census.index_blocks_reachable = 2;
++		census.index_blocks_examined = 2;
++		census.canonical_ordered_indexes = 4;
++		tagged_hash("namespace", kind, view, serial,
++			census.namespace_manifest_hash);
++		tagged_hash("indexes", kind, view, serial,
++			census.index_census_hash);
++	} else {
++		census.attribute_types_expected = 14;
++		census.attribute_types_examined = 14;
++		tagged_hash("type-use", kind, view, serial,
++			census.attribute_type_use_hash);
++	}
++	return rh_fixed_metadata_authority_seal(&census, authority);
++}
++
++static int incomplete_authorities_refused(
++		const struct rh_fixed_metadata_authority *valid)
++{
++	struct rh_fixed_metadata_census census;
++	struct rh_fixed_metadata_authority rejected;
++	int cases = 0;
++
++	census = valid->census;
++	census.coverage_ledger_format = 2;
++	if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++		return -1;
++	cases++;
++	census = valid->census;
++	if (census.kind == RH_FIXED_METADATA_UPCASE) {
++		census.namespace_links_reciprocal--;
++		if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++			return -1;
++		cases++;
++		census = valid->census;
++		census.canonical_ordered_indexes--;
++		if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++			return -1;
++		cases++;
++	} else {
++		census.attribute_types_examined--;
++		if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++			return -1;
++		cases++;
++		census = valid->census;
++		census.custom_attribute_types = 1;
++		if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++			return -1;
++		cases++;
++		census = valid->census;
++		census.incompatible_attribute_bounds = 1;
++		if (!rh_fixed_metadata_authority_seal(&census, &rejected))
++			return -1;
++		cases++;
++	}
++	return cases == (valid->census.kind == RH_FIXED_METADATA_UPCASE ? 3 : 4) ?
++		0 : -1;
++}
++
++static void writer_pretransaction_view(const struct rh_writer *writer,
++		struct rh_writer *pre)
++{
++	*pre = *writer;
++	pre->write_fd = -1;
++	pre->operations = NULL;
++	pre->operation_count = 0;
++	pre->operation_capacity = 0;
++	pre->planned_bytes = 0;
++	pre->backend = NULL;
++	pre->backend_opaque = NULL;
++	pre->commit_started = 0;
++	pre->commit_completed = 0;
++}
++
++static int recovery_entries(const struct rh_writer *writer,
++		const struct rh_fixed_metadata_plan *plan,
++		struct rh_fixed_metadata_recovery_entry **entries_out)
++{
++	struct rh_fixed_metadata_recovery_entry *entries;
++	size_t i;
++
++	entries = calloc(plan->operation_count, sizeof(*entries));
++	if (!entries)
++		return -1;
++	for (i = 0; i < plan->operation_count; i++) {
++		const struct rh_write_operation *operation = &writer->operations[
++			plan->first_operation_ordinal - 1U + i];
++		entries[i].kind = operation->kind;
++		entries[i].target_offset = operation->offset;
++		entries[i].length = operation->length;
++		rh_sha256(operation->before, operation->length, entries[i].old_hash);
++		rh_sha256(operation->after, operation->length, entries[i].new_hash);
++		entries[i].target = operation->target;
++		entries[i].old_bytes = operation->before;
++	}
++	*entries_out = entries;
++	return 0;
++}
++
++static int negative_recovery_cases(struct rh_ntfs_overlay *pre_overlay,
++		struct rh_writer *pre_writer,
++		const struct rh_fixed_metadata_authority *pre_authority,
++		struct rh_ntfs_overlay *post_overlay, struct rh_writer *post_writer,
++		const struct rh_fixed_metadata_authority *post_authority,
++		const struct rh_fixed_metadata_recovery_entry *entries,
++		size_t entry_count)
++{
++	struct rh_fixed_metadata_recovery_entry *mutated;
++	int cases = 0;
++
++	mutated = malloc(entry_count * sizeof(*mutated));
++	if (!mutated)
++		return -1;
++#define EXPECT_REJECT(mutation) do { \
++	memcpy(mutated, entries, entry_count * sizeof(*mutated)); \
++	mutation; \
++	errno = 0; \
++	if (!rh_fixed_metadata_rederive_recovery(pre_overlay->volume, pre_writer, \
++		pre_authority, post_overlay->volume, post_writer, post_authority, \
++		mutated, entry_count, 1)) { \
++		free(mutated); \
++		return -1; \
++	} \
++	cases++; \
++} while (0)
++	EXPECT_REJECT(mutated[0].target_offset += 512U);
++	EXPECT_REJECT(mutated[0].new_hash[0] ^= 1U);
++	EXPECT_REJECT(mutated[0].length -= 512U);
++	EXPECT_REJECT(mutated[0].target.attribute_name_length = 1U);
++	EXPECT_REJECT(mutated[0].target.owner_mft_record += 1U);
++	EXPECT_REJECT(mutated[0].target.evidence_hash[0] ^= 1U);
++	EXPECT_REJECT(mutated[0].target.staged_view_hash[0] ^= 1U);
++#undef EXPECT_REJECT
++	free(mutated);
++	return cases == 7 ? 0 : -1;
++}
++
++static int partial_second_refusal_probe(const char *path,
++		const struct rh_fixed_metadata_authority *upcase_authority,
++		const struct rh_fixed_metadata_authority *attrdef_authority,
++		int first_corrupt)
++{
++	struct rh_writer writer;
++	struct rh_ntfs_overlay overlay;
++	struct rh_fixed_metadata_batch batch;
++	unsigned char zero[sizeof(batch)];
++	enum rh_fixed_metadata_stage_result stage_result =
++		RH_FIXED_METADATA_STAGE_ERROR;
++	int mounted = 0, result = -1;
++
++	memset(&overlay, 0, sizeof(overlay));
++	memset(&batch, 0xa5, sizeof(batch));
++	memset(zero, 0, sizeof(zero));
++	if (rh_writer_open(&writer, path))
++		return -1;
++	if (rh_ntfs_overlay_mount_fixed_metadata_bootstrap(&overlay, &writer, 0))
++		goto out;
++	mounted = 1;
++	if (setenv("ROOTHEALTH_FIXED_METADATA_TEST_REFUSE_SECOND", "1", 1))
++		goto out;
++	stage_result = rh_fixed_metadata_stage_batch(&overlay, upcase_authority,
++		attrdef_authority, &batch);
++	unsetenv("ROOTHEALTH_FIXED_METADATA_TEST_REFUSE_SECOND");
++	if (stage_result != RH_FIXED_METADATA_STAGE_REFUSED ||
++			writer.operation_count || writer.write_boundaries ||
++			overlay.fixed_metadata_examined_mask ||
++			overlay.fixed_metadata_abort_examined_mask != 0x1U ||
++			!!overlay.fixed_metadata_abort_discarded_operations !=
++				!!first_corrupt || memcmp(&batch, zero, sizeof(batch)))
++		goto out;
++	result = 0;
++out:
++	unsetenv("ROOTHEALTH_FIXED_METADATA_TEST_REFUSE_SECOND");
++	if (mounted)
++		rh_ntfs_overlay_unmount(&overlay);
++	rh_writer_close(&writer);
++	return result;
++}
++
++int main(int argc, char **argv)
++{
++	struct rh_writer writer, pre_writer;
++	struct rh_ntfs_overlay overlay, pre_overlay;
++	struct rh_fixed_metadata_inspection upcase_inspection, attrdef_inspection;
++	struct rh_fixed_metadata_authority pre_upcase, pre_attrdef;
++	struct rh_fixed_metadata_authority post_upcase, post_attrdef, tampered;
++	struct rh_fixed_metadata_batch batch, probe_batch;
++	struct rh_fixed_metadata_recovery_entry *upcase_entries = NULL;
++	struct rh_fixed_metadata_recovery_entry *attrdef_entries = NULL;
++	const struct rh_policy_definition *definition;
++	enum rh_fixed_metadata_stage_result stage_result;
++	uint64_t generation = 7;
++	int mounted = 0, pre_mounted = 0, writer_opened = 0;
++	int expect_upcase_corrupt = 0;
++	int expect_attrdef_corrupt = 0, flagless_expected, flagless_mounted = 0;
++	int recovery_negatives = 0, result = 1;
++	const char *failure = "arguments";
++
++	memset(&upcase_inspection, 0, sizeof(upcase_inspection));
++	memset(&attrdef_inspection, 0, sizeof(attrdef_inspection));
++	memset(&overlay, 0, sizeof(overlay));
++	memset(&pre_overlay, 0, sizeof(pre_overlay));
++	if (argc != 5)
++		return 5;
++	if (!strcmp(argv[3], "corrupt")) {
++		expect_upcase_corrupt = !strcmp(argv[2], "upcase") ||
++			!strcmp(argv[2], "both");
++		expect_attrdef_corrupt = !strcmp(argv[2], "attrdef") ||
++			!strcmp(argv[2], "both");
++		if (!expect_upcase_corrupt && !expect_attrdef_corrupt)
++			return 5;
++	} else if (strcmp(argv[3], "clean") ||
++			(strcmp(argv[2], "upcase") && strcmp(argv[2], "attrdef")))
++		return 5;
++	if (!strcmp(argv[4], "flagless-success"))
++		flagless_expected = 1;
++	else if (!strcmp(argv[4], "flagless-fail"))
++		flagless_expected = 0;
++	else if (!strcmp(argv[4], "flagless-any"))
++		flagless_expected = -1;
++	else
++		return 5;
++	if (strcmp(rh_fixed_metadata_check_id(RH_FIXED_METADATA_UPCASE),
++			RH_FIXED_METADATA_UPCASE_CHECK_ID) ||
++			strcmp(rh_fixed_metadata_check_id(RH_FIXED_METADATA_ATTRDEF),
++				RH_FIXED_METADATA_ATTRDEF_CHECK_ID))
++		return 1;
++	definition = rh_policy_problem(PR_UPCASE_CORRUPTED);
++	if (!definition || rh_policy_implementation(definition))
++		return 1;
++	definition = rh_policy_problem(PR_ATTRDEF_CORRUPTED);
++	if (!definition || rh_policy_implementation(definition))
++		return 1;
++	if (rh_writer_open(&writer, argv[1]))
++		return 3;
++	writer_opened = 1;
++	failure = "flagless-or-bootstrap";
++	if (flagless_mount_probe(&writer, flagless_expected, &flagless_mounted) ||
++			rh_ntfs_overlay_mount_fixed_metadata_bootstrap(&overlay,
++				&writer, 0))
++		goto out_writer;
++	mounted = 1;
++	failure = "raw-inspection-or-authority";
++	if (rh_fixed_metadata_inspect(overlay.volume, &writer,
++			RH_FIXED_METADATA_UPCASE, &upcase_inspection) ||
++			rh_fixed_metadata_inspect(overlay.volume, &writer,
++				RH_FIXED_METADATA_ATTRDEF, &attrdef_inspection) ||
++			upcase_inspection.canonical == expect_upcase_corrupt ||
++			attrdef_inspection.canonical == expect_attrdef_corrupt ||
++			upcase_inspection.volume_serial != attrdef_inspection.volume_serial ||
++			make_authority(RH_FIXED_METADATA_UPCASE,
++				RH_FIXED_METADATA_PRETRANSACTION, generation,
++				upcase_inspection.volume_serial, &pre_upcase) ||
++			make_authority(RH_FIXED_METADATA_ATTRDEF,
++				RH_FIXED_METADATA_PRETRANSACTION, generation,
++				attrdef_inspection.volume_serial, &pre_attrdef) ||
++			incomplete_authorities_refused(&pre_upcase) ||
++			incomplete_authorities_refused(&pre_attrdef))
++		goto out;
++	rh_fixed_metadata_inspection_destroy(&upcase_inspection);
++	rh_fixed_metadata_inspection_destroy(&attrdef_inspection);
++	rh_ntfs_overlay_unmount(&overlay);
++	mounted = 0;
++	rh_writer_close(&writer);
++	writer_opened = 0;
++	if (partial_second_refusal_probe(argv[1], &pre_upcase, &pre_attrdef,
++			expect_upcase_corrupt) || rh_writer_open(&writer, argv[1]))
++		goto out;
++	writer_opened = 1;
++	if (rh_ntfs_overlay_mount_fixed_metadata_bootstrap(&overlay, &writer, 0))
++		goto out;
++	mounted = 1;
++	failure = "reopened-raw-inspection";
++	if (rh_fixed_metadata_inspect(overlay.volume, &writer,
++			RH_FIXED_METADATA_UPCASE, &upcase_inspection) ||
++			rh_fixed_metadata_inspect(overlay.volume, &writer,
++				RH_FIXED_METADATA_ATTRDEF, &attrdef_inspection))
++		goto out;
++	rh_fixed_metadata_inspection_destroy(&upcase_inspection);
++	rh_fixed_metadata_inspection_destroy(&attrdef_inspection);
++	failure = "missing-authority-probe";
++	stage_result = rh_fixed_metadata_stage_batch(&overlay, NULL, &pre_attrdef,
++		&probe_batch);
++	if (stage_result != RH_FIXED_METADATA_STAGE_REFUSED ||
++			writer.operation_count || overlay.fixed_metadata_examined_mask)
++		goto out;
++	tampered = pre_upcase;
++	tampered.seal[0] ^= 1U;
++	failure = "tampered-authority-probe";
++	stage_result = rh_fixed_metadata_stage_batch(&overlay, &tampered,
++		&pre_attrdef, &probe_batch);
++	if (stage_result != RH_FIXED_METADATA_STAGE_REFUSED ||
++			writer.operation_count || overlay.fixed_metadata_examined_mask)
++		goto out;
++	failure = "batch-stage-or-finalize";
++	stage_result = rh_fixed_metadata_stage_batch(&overlay, &pre_upcase,
++		&pre_attrdef, &batch);
++	if (stage_result != (expect_upcase_corrupt || expect_attrdef_corrupt ?
++			RH_FIXED_METADATA_STAGE_PLANNED : RH_FIXED_METADATA_STAGE_CLEAN) ||
++			!batch.staged || overlay.fixed_metadata_startup_only ||
++			batch.upcase.clean == expect_upcase_corrupt ||
++			batch.attrdef.clean == expect_attrdef_corrupt ||
++			writer.write_boundaries ||
++			make_authority(RH_FIXED_METADATA_UPCASE, RH_FIXED_METADATA_STAGED,
++				generation, batch.upcase.volume_serial, &post_upcase) ||
++			make_authority(RH_FIXED_METADATA_ATTRDEF, RH_FIXED_METADATA_STAGED,
++				generation, batch.attrdef.volume_serial, &post_attrdef) ||
++			rh_fixed_metadata_verify_finalize_batch(&overlay, &post_upcase,
++				&post_attrdef, &batch) || !batch.finalized ||
++			writer.write_boundaries)
++		goto out;
++	if (!expect_upcase_corrupt && !expect_attrdef_corrupt) {
++		if (writer.operation_count)
++			goto out;
++		printf("fixed-metadata-clean actions=20,21 operations=0 "
++			"checks=system.upcase,system.attrdef flagless_mount_unchanged=1 "
++			"raw_batch=2 ordinary_full_remount=1 source_writes=0 "
++			"first_clean_second_refused_aborted=1 "
++			"missing_authority_refused=1 tampered_authority_refused=1 "
++			"incomplete_census_refused=2 policy_closed=1\n");
++		result = 0;
++		goto out;
++	}
++	failure = "whole-stream-operation-shape";
++	if ((expect_upcase_corrupt &&
++			(batch.upcase.operation_count != 1U ||
++			 writer.operations[batch.upcase.first_operation_ordinal - 1U].length !=
++				RH_UPCASE_CANONICAL_SIZE ||
++			 writer.operations[batch.upcase.first_operation_ordinal - 1U].
++				target.logical_offset ||
++			 writer.operations[batch.upcase.first_operation_ordinal - 1U].
++				target.logical_length != RH_UPCASE_CANONICAL_SIZE)) ||
++			(expect_attrdef_corrupt &&
++			(batch.attrdef.operation_count != 1U ||
++			 writer.operations[batch.attrdef.first_operation_ordinal - 1U].length !=
++				RH_ATTRDEF_CANONICAL_SIZE ||
++			 writer.operations[batch.attrdef.first_operation_ordinal - 1U].
++				target.logical_offset ||
++			 writer.operations[batch.attrdef.first_operation_ordinal - 1U].
++				target.logical_length != RH_ATTRDEF_CANONICAL_SIZE)))
++		goto out;
++	failure = "recovery-entry-build";
++	if ((expect_upcase_corrupt && (!batch.upcase.operation_count ||
++			recovery_entries(&writer, &batch.upcase, &upcase_entries))) ||
++			(expect_attrdef_corrupt && (!batch.attrdef.operation_count ||
++			recovery_entries(&writer, &batch.attrdef, &attrdef_entries))))
++		goto out;
++	writer_pretransaction_view(&writer, &pre_writer);
++	failure = "recovery-bootstrap";
++	if (rh_ntfs_overlay_mount_fixed_metadata_bootstrap(&pre_overlay,
++			&pre_writer, 0))
++		goto out;
++	pre_mounted = 1;
++	failure = "recovery-rederivation";
++#define CHECK_RECOVERY(plan, entries, pre_auth, post_auth) do { \
++	if (rh_fixed_metadata_rederive_recovery(pre_overlay.volume, &pre_writer, \
++		&(pre_auth), overlay.volume, &writer, &(post_auth), (entries), \
++		(plan).operation_count, 0) || \
++		rh_fixed_metadata_rederive_recovery(pre_overlay.volume, &pre_writer, \
++			&(pre_auth), overlay.volume, &writer, &(post_auth), (entries), \
++			(plan).operation_count, 1) || \
++		negative_recovery_cases(&pre_overlay, &pre_writer, &(pre_auth), \
++			&overlay, &writer, &(post_auth), (entries), \
++			(plan).operation_count)) \
++		goto out; \
++	recovery_negatives += 7; \
++} while (0)
++	if (expect_upcase_corrupt)
++		CHECK_RECOVERY(batch.upcase, upcase_entries, pre_upcase, post_upcase);
++	if (expect_attrdef_corrupt)
++		CHECK_RECOVERY(batch.attrdef, attrdef_entries, pre_attrdef, post_attrdef);
++#undef CHECK_RECOVERY
++	printf("fixed-metadata-plan actions=20,21 operations=%zu "
++		"checks=system.upcase,system.attrdef corrupt_upcase=%d "
++		"corrupt_attrdef=%d flagless_mounted=%d raw_batch=2 "
++		"staged_overlay_only=1 source_writes=%zu ordinary_full_remount=1 "
++		"first_%s_second_refused_aborted=1 "
++		"preparing_rederived=1 committed_rederived=1 recovery_negatives=%d "
++		"missing_authority_refused=1 tampered_authority_refused=1 "
++		"incomplete_census_refused=2 policy_closed=1\n",
++		writer.operation_count, expect_upcase_corrupt, expect_attrdef_corrupt,
++		flagless_mounted, writer.write_boundaries,
++		expect_upcase_corrupt ? "corrupt" : "clean", recovery_negatives);
++	result = 0;
++out:
++	if (result)
++		fprintf(stderr, "fixed-metadata-test-failure step=%s errno=%d "
++			"stage_result=%d operations=%zu examined=%u startup=%d failed=%d "
++			"batch_checkpoint=%zu writer_checkpoint=%zu abort_mask=%u "
++			"abort_ops=%zu\n", failure,
++			errno, (int)stage_result, writer.operation_count,
++			overlay.fixed_metadata_examined_mask,
++			overlay.fixed_metadata_startup_only, overlay.failed,
++			overlay.fixed_metadata_batch_checkpoint,
++			rh_writer_plan_checkpoint(&writer),
++			overlay.fixed_metadata_abort_examined_mask,
++			overlay.fixed_metadata_abort_discarded_operations);
++	free(attrdef_entries);
++	free(upcase_entries);
++	rh_fixed_metadata_inspection_destroy(&attrdef_inspection);
++	rh_fixed_metadata_inspection_destroy(&upcase_inspection);
++	if (pre_mounted)
++		rh_ntfs_overlay_unmount(&pre_overlay);
++	if (mounted)
++		rh_ntfs_overlay_unmount(&overlay);
++out_writer:
++	if (writer_opened)
++		rh_writer_close(&writer);
++	return result;
++}
+diff --git a/tests/roothealth_fixed_metadata_qualification.sh b/tests/roothealth_fixed_metadata_qualification.sh
+new file mode 100755
+index 0000000000000000000000000000000000000000..21c025c0d4ccf2334eb3f03c781420d03dbe29c5
+--- /dev/null
++++ b/tests/roothealth_fixed_metadata_qualification.sh
+@@ -0,0 +1,103 @@
++#!/usr/bin/env bash
++set -euo pipefail
++
++top=$(cd "$(dirname "$0")/.." && pwd)
++scratch=$(mktemp -d /var/tmp/roothealth-fixed-metadata-qualification.XXXXXX)
++trap 'case "$scratch" in /var/tmp/roothealth-fixed-metadata-qualification.*) rm -rf -- "$scratch";; esac' EXIT
++
++common=(
++	-std=gnu11 -DHAVE_CONFIG_H -D_GNU_SOURCE
++	-DROOTHEALTH_REPAIR_TESTING
++	-I"$top" -I"$top/include" -I"$top/src" -I"$top/libntfs"
++	-Wall -Wextra -Werror -Wno-address-of-packed-member -fno-common
++)
++strict="$scratch/strict"
++san="$scratch/san"
++mkdir -p "$strict" "$san"
++
++make -C "$top/libntfs" libntfs.la >/dev/null
++
++gcc "${common[@]}" -c "$top/src/roothealth_fixed_metadata.c" -o "$strict/fixed.o"
++gcc "${common[@]}" -c "$top/src/roothealth_write.c" -o "$strict/write.o"
++gcc "${common[@]}" -c "$top/src/roothealth_overlay.c" -o "$strict/overlay.o"
++gcc "${common[@]}" -c "$top/src/roothealth_policy.c" -o "$strict/policy.o"
++gcc "${common[@]}" -c "$top/src/roothealth_coverage.c" -o "$strict/coverage.o"
++gcc "${common[@]}" -c "$top/src/attrdef.c" -o "$strict/attrdef.o"
++gcc "${common[@]}" -c "$top/tests/roothealth_fixed_metadata_mutate.c" \
++	-o "$strict/mutate.o"
++gcc "${common[@]}" -c "$top/tests/roothealth_fixed_metadata_plan.c" \
++	-o "$strict/plan.o"
++gcc -o "$strict/mutate" "$strict/mutate.o" "$strict/fixed.o" \
++	"$strict/overlay.o" "$strict/write.o" "$strict/attrdef.o" \
++	"$strict/coverage.o" \
++	"$top/libntfs/.libs/libntfs.a"
++gcc -o "$strict/plan" "$strict/plan.o" "$strict/fixed.o" \
++	"$strict/overlay.o" "$strict/write.o" "$strict/policy.o" \
++	"$strict/attrdef.o" "$strict/coverage.o" "$top/libntfs/.libs/libntfs.a"
++
++truncate -s 64M "$scratch/base.ntfs"
++"$top/src/mkntfs" -F -q -s 512 -c 4096 -L T1OS \
++	"$scratch/base.ntfs" >/dev/null
++upcase_hash=$("$top/src/ntfscat" -f -i 10 "$scratch/base.ntfs" | sha256sum | cut -d' ' -f1)
++attrdef_hash=$("$top/src/ntfscat" -f -i 4 "$scratch/base.ntfs" | sha256sum | cut -d' ' -f1)
++upcase_size=$("$top/src/ntfscat" -f -i 10 "$scratch/base.ntfs" | wc -c)
++attrdef_size=$("$top/src/ntfscat" -f -i 4 "$scratch/base.ntfs" | wc -c)
++test "$upcase_hash" = 41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742
++test "$attrdef_hash" = d7de5b1b2f79f45f235ceb1adbc46908ed64eae174eb90ed66aefe5f25165da3
++test "$upcase_size" -eq 131072
++test "$attrdef_size" -eq 2560
++
++sha256sum "$scratch/base.ntfs" >"$scratch/base.sha256"
++"$strict/plan" "$scratch/base.ntfs" upcase clean flagless-success
++"$strict/plan" "$scratch/base.ntfs" attrdef clean flagless-success
++(cd "$scratch" && sha256sum -c base.sha256 >/dev/null)
++
++run_corrupt_plan() {
++	local name=$1 mutation=$2 kind=$3 flagless=$4
++	cp --reflink=auto "$scratch/base.ntfs" "$scratch/$name.ntfs"
++	"$strict/mutate" "$scratch/$name.ntfs" "$mutation"
++	sha256sum "$scratch/$name.ntfs" >"$scratch/$name.sha256"
++	"$strict/plan" "$scratch/$name.ntfs" "$kind" corrupt "$flagless"
++	(cd "$scratch" && sha256sum -c "$name.sha256" >/dev/null)
++}
++
++run_corrupt_plan upcase-tail upcase-tail upcase flagless-any
++run_corrupt_plan upcase-ascii upcase-ascii upcase flagless-fail
++run_corrupt_plan attrdef-tail attrdef attrdef flagless-any
++run_corrupt_plan attrdef-structural attrdef-structural attrdef flagless-any
++
++cp --reflink=auto "$scratch/base.ntfs" "$scratch/both-corrupt.ntfs"
++"$strict/mutate" "$scratch/both-corrupt.ntfs" attrdef-structural
++"$strict/mutate" "$scratch/both-corrupt.ntfs" upcase-ascii
++sha256sum "$scratch/both-corrupt.ntfs" >"$scratch/both-corrupt.sha256"
++"$strict/plan" "$scratch/both-corrupt.ntfs" both corrupt flagless-fail
++(cd "$scratch" && sha256sum -c both-corrupt.sha256 >/dev/null)
++
++# shellcheck disable=SC2054 # comma belongs to GCC's sanitizer option
++sanflags=(-g3 -O1 -fno-omit-frame-pointer -fsanitize=address,undefined)
++for source in roothealth_fixed_metadata roothealth_write roothealth_overlay roothealth_policy roothealth_coverage; do
++	gcc "${common[@]}" "${sanflags[@]}" -c "$top/src/$source.c" \
++		-o "$san/$source.o"
++done
++gcc "${common[@]}" "${sanflags[@]}" -c "$top/src/attrdef.c" \
++	-o "$san/attrdef.o"
++gcc "${common[@]}" "${sanflags[@]}" \
++	-c "$top/tests/roothealth_fixed_metadata_plan.c" -o "$san/plan.o"
++gcc "${sanflags[@]}" -o "$san/plan" "$san/plan.o" \
++	"$san/roothealth_fixed_metadata.o" "$san/roothealth_overlay.o" \
++	"$san/roothealth_write.o" "$san/roothealth_policy.o" \
++	"$san/roothealth_coverage.o" "$san/attrdef.o" \
++	"$top/libntfs/.libs/libntfs.a"
++ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
++UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
++	"$san/plan" "$scratch/upcase-ascii.ntfs" upcase corrupt flagless-fail
++ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
++UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
++	"$san/plan" "$scratch/attrdef-structural.ntfs" attrdef corrupt flagless-any
++ASAN_OPTIONS=detect_leaks=1:abort_on_error=1 \
++UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
++	"$san/plan" "$scratch/both-corrupt.ntfs" both corrupt flagless-fail
++
++printf 'fixed-metadata-qualification canonical=2 fixed_checks=2 clean_noop=2 '
++printf 'corrupt_plans=5 both_corrupt=1 no_write_probes=7 '
++printf 'recovery_negative_cases=42 werror=1 asan_ubsan=1 passed=1\n'

@@ -1,0 +1,3 @@
+cd /mnt/c/users/edward/onedrive/reference/projects/t1os/environment && sudo mount -o loop storage.img /mnt/t1fs
+
+sudo umount /mnt/t1fs && sudo losetup -D

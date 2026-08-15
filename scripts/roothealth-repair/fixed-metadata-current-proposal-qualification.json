@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "status": "PROPOSED_FAIL_CLOSED",
+  "verdict": "PASS_SAFE_CLOSED_FIXED_METADATA_PROPOSAL",
+  "release_qualified": false,
+  "repair_enabled": false,
+  "generated_date": "2026-08-09",
+  "scope": "FIXED_SYSTEM_UPCASE_ATTRDEF_TYPED_PLANNER_WITH_CLOSED_WAL_RECOVERY",
+  "findings": [],
+  "registered_wal_action_ids": [23, 24, 25],
+  "blockers": [
+    {
+      "id": "RHCOV3_FIXED_AUTHORITY_PUBLISHER_NOT_MERGED",
+      "effect": "The typed constructor can consume and cross-check a complete release-green RHCOV3 ledger, raw MFT, namespace/I30 and cluster census, but product orchestration does not yet publish one immutable fixed-system authority into the planner.",
+      "completion_gate": "Main must construct the complete RHCOV3 ledger from all release censuses, permit only system.upcase/system.attrdef as normalized failures, and publish pretransaction and post-overlay typed authority without caller-authored counters or digests."
+    },
+    {
+      "id": "ID20_ID21_VIRTUAL_PREIMAGE_FULL_LEDGER_REDERIVATION_NOT_MERGED",
+      "effect": "WAL action IDs 20 and 21 are unregistered. PREPARING, APPLYING and COMMITTED recovery all refuse EOPNOTSUPP before a write boundary.",
+      "completion_gate": "One exact group verifier must use only the approved opaque virtual-preimage accessors to rebuild the complete raw MFT, namespace/I30, cluster-allocation, target mapping and AttrDef type-use ledgers, reproduce both semantic descriptors and staged-view seals, and reject every mismatch with no generic digest fallback."
+    }
+  ],
+  "baseline_sources": {
+    "libntfs/unistr.c": "1f40ffcf68a0decb95af39d0f3b0663e7378e6bdd8a803afdd56f119c051e625",
+    "src/attrdef.c": "27d5fa53b6e63abffa6226f9c46bae867a64919c42c97e216e4f847f13ff9f6b",
+    "src/roothealth_bitmap.c": "aea4d4c4cf6fbe08299cd590344536c49cde6a15fea65b3d968870e0c7f5ff92",
+    "src/roothealth_bitmap.h": "cad5514dcd130a2454c3d46d9d180442d555a64ecb824023121eb9629b351073",
+    "src/roothealth_coverage.c": "34ea46ae5c7ef78ef00f3c8966563c5a9b8fb2ecc4875d0c42586787c1c05d97",
+    "src/roothealth_coverage.h": "a03893d27cec2a7722e949bc06e2daaefd5b701277f5a24d77c524723054316b",
+    "src/roothealth_hash_stream.c": "20407dc2554ff561145d178d3af6d0f4b6d2ccf4a45f4dd9fad80befe2f24008",
+    "src/roothealth_index_bitmap.c": "f155e1748a16da5911efd84a7c9e07f113ae740bd3691648d143bf7ca355c32f",
+    "src/roothealth_namespace.c": "ede21815c1e3440b27061db1c76cf185b7f8c2da8ce3da2fbc3656f36bfc3a52",
+    "src/roothealth_namespace.h": "1f10044c9f5d1102a4cc49edec30368daa6b9684a812b97a7386a0abf94d7255",
+    "src/roothealth_overlay.c": "4f45bd8cb4c5babfc3560446349fd8a84633c43efc24f13025f37f9269cf248a",
+    "src/roothealth_overlay.h": "b3bf3d31f31bbb10e64df972a53a8d20f38c670d780121df5ac3f8e18677fd40",
+    "src/roothealth_policy.c": "cd95e44404acc49696c49ba27cea870b53545f7d281b50315e90a7430b92d368",
+    "src/roothealth_raw_mft.c": "40fe297b59fe14a4ac13b4919e7536ea530a75e4613690415fe03617520f94d7",
+    "src/roothealth_raw_mft.h": "e408f6f40bea497fa37ef214c8f474887cfb995342022520a0b5b58390e1d538",
+    "src/roothealth_wal.c": "c1473450074cc8817107ea4b08e7585bdee0320e594df20c27ea1fa18681a5ea",
+    "src/roothealth_wal.h": "095930a1ed4842abf12cd301ad1767c8866d09a9be1b64855a5e9efe2b8d2d9a",
+    "src/roothealth_write.c": "0895ffc676290198a66e33e1465d8f1df5c14be5c460a44d039083e1e05cddb5",
+    "src/roothealth_write.h": "5580ff285bff48b38bfbd80be83867d2b334fc01e181de4b9ed5290e0e96ba42"
+  },
+  "result_sources": {
+    "FIXED-METADATA-SLICE.md": "4e67e1cb457016b82e47569088c18f234ba3ea7b7a3248a44c1082f748409863",
+    "libntfs/unistr.c": "1f40ffcf68a0decb95af39d0f3b0663e7378e6bdd8a803afdd56f119c051e625",
+    "src/attrdef.c": "27d5fa53b6e63abffa6226f9c46bae867a64919c42c97e216e4f847f13ff9f6b",
+    "src/roothealth_bitmap.c": "aea4d4c4cf6fbe08299cd590344536c49cde6a15fea65b3d968870e0c7f5ff92",
+    "src/roothealth_bitmap.h": "cad5514dcd130a2454c3d46d9d180442d555a64ecb824023121eb9629b351073",
+    "src/roothealth_coverage.c": "34ea46ae5c7ef78ef00f3c8966563c5a9b8fb2ecc4875d0c42586787c1c05d97",
+    "src/roothealth_coverage.h": "a03893d27cec2a7722e949bc06e2daaefd5b701277f5a24d77c524723054316b",
+    "src/roothealth_fixed_metadata.c": "35ca374781aca94d9654583f511d9a7896521476c1a9ab9686153bde9596c4e2",
+    "src/roothealth_fixed_metadata.h": "405d4bf30f2bacf1072abcdcff60b31e45fed9dd6fa9abcce0295feeb8338917",
+    "src/roothealth_hash_stream.c": "20407dc2554ff561145d178d3af6d0f4b6d2ccf4a45f4dd9fad80befe2f24008",
+    "src/roothealth_index_bitmap.c": "f155e1748a16da5911efd84a7c9e07f113ae740bd3691648d143bf7ca355c32f",
+    "src/roothealth_namespace.c": "ede21815c1e3440b27061db1c76cf185b7f8c2da8ce3da2fbc3656f36bfc3a52",
+    "src/roothealth_namespace.h": "1f10044c9f5d1102a4cc49edec30368daa6b9684a812b97a7386a0abf94d7255",
+    "src/roothealth_overlay.c": "c0bb0f71f47aa5c821922f7aaab771aef00e93dbf74e180fa32dcf99a9d5bdbb",
+    "src/roothealth_overlay.h": "dcc7392c80dd1d1019e62c3a9b413f127b3c65470ca6d7fd074b992bc9db7552",
+    "src/roothealth_policy.c": "cd95e44404acc49696c49ba27cea870b53545f7d281b50315e90a7430b92d368",
+    "src/roothealth_raw_mft.c": "40fe297b59fe14a4ac13b4919e7536ea530a75e4613690415fe03617520f94d7",
+    "src/roothealth_raw_mft.h": "e408f6f40bea497fa37ef214c8f474887cfb995342022520a0b5b58390e1d538",
+    "src/roothealth_wal.c": "c1473450074cc8817107ea4b08e7585bdee0320e594df20c27ea1fa18681a5ea",
+    "src/roothealth_wal.h": "095930a1ed4842abf12cd301ad1767c8866d09a9be1b64855a5e9efe2b8d2d9a",
+    "src/roothealth_write.c": "0895ffc676290198a66e33e1465d8f1df5c14be5c460a44d039083e1e05cddb5",
+    "src/roothealth_write.h": "5580ff285bff48b38bfbd80be83867d2b334fc01e181de4b9ed5290e0e96ba42",
+    "tests/roothealth_fixed_metadata_mutate.c": "c6db06639b0b6c2aced8d9d07527c647e7d5eff92f0002990512faa9cfb4e329",
+    "tests/roothealth_fixed_metadata_plan.c": "3dd6376a3cda665a5f82738dc33ceee1cb30f5db32b07e6c50f15452fc06b564",
+    "tests/roothealth_fixed_metadata_qualification.sh": "6361a95a87494c4fbe7735f2ed08c5d3be1a20664a910ac1ec49389b7794a6ad"
+  },
+  "patch": {
+    "file": "fixed-metadata-current-proposal.patch",
+    "sha256": "24b9f44c11171f2a31ca8126909ba3e5398eeee3d5fd42c9387a6ed414c3b8b1",
+    "bytes": 113350,
+    "paths": [
+      "FIXED-METADATA-SLICE.md",
+      "src/roothealth_fixed_metadata.c",
+      "src/roothealth_fixed_metadata.h",
+      "src/roothealth_overlay.c",
+      "src/roothealth_overlay.h",
+      "tests/roothealth_fixed_metadata_mutate.c",
+      "tests/roothealth_fixed_metadata_plan.c",
+      "tests/roothealth_fixed_metadata_qualification.sh"
+    ],
+    "clean_apply": true,
+    "result_byte_identical": true
+  },
+  "assets": {
+    "fixed-metadata-current-proposal.patch": "24b9f44c11171f2a31ca8126909ba3e5398eeee3d5fd42c9387a6ed414c3b8b1",
+    "check-fixed-metadata-hardware-release.py": "0b670eef48dff98f8cf91c677d87f12e1197885f53a086c0e33933a2c0e7a4d6",
+    "fixed_metadata_hardware_probe.c": "3e0596e5c0cbde0b1712178623afa58e35d6e9746d90f00c51f39a6952ad1588",
+    "fixed_metadata_release_census_probe.c": "6d809f7fd49889c312f1ec001a0177f191204869730883791656488e10b12932",
+    "fixed_metadata_wal_closed_selftest.c": "ab68b386c46fd9158cce2dcb1ccc6b8bf7e51101deb15e38b34a63b5cb5f61e6"
+  },
+  "checker": {
+    "file": "check-fixed-metadata-proposal.py",
+    "sha256": "78908e2950f6efa1c56ad3582f7efb565c91476f072995fe143066ce12bf50d0"
+  },
+  "canonical_targets": {
+    "upcase": {
+      "record": 10,
+      "action_id": 20,
+      "bytes": 131072,
+      "sha256": "41c26bc7a12bdaeb26025c93118697c7e3ef81ee048b00fe5cce2a472e0e0742"
+    },
+    "attrdef": {
+      "record": 4,
+      "action_id": 21,
+      "bytes": 2560,
+      "sha256": "d7de5b1b2f79f45f235ceb1adbc46908ed64eae174eb90ed66aefe5f25165da3"
+    },
+    "target_shape": "one live base record, no attribute list, one unnamed nonresident DATA attribute, one dense exact-size run, unchanged allocation and mapping"
+  },
+  "bounded_batch": {
+    "max_actions": 2,
+    "upcase_action_id": 20,
+    "upcase_bytes": 131072,
+    "attrdef_action_id": 21,
+    "attrdef_bytes": 2560,
+    "max_target_bytes": 133632,
+    "wal_transactions": 1,
+    "requires_batching": false,
+    "partial_commit_allowed": false
+  },
+  "authority_profile": {
+    "generic_counter_sealer": "TEST_ONLY",
+    "production_constructor": "rh_fixed_metadata_authority_build",
+    "required_components": [
+      "complete release-green RHCOV3 ledger",
+      "raw MFT slot/attribute/extent/run census",
+      "T1OS identity and reciprocal namespace/I30 census",
+      "canonical I30 ordering under candidate UpCase",
+      "exact cluster ownership and observed/expected allocation bitmap",
+      "complete AttrDef type-use/residency/size-bound census",
+      "target mapping and WAL-exclusion proof"
+    ],
+    "release_census_probe_excludes_rhcov3_publisher": true,
+    "missing_or_partial_authority": "WHOLE_BATCH_REFUSAL"
+  },
+  "qualification_matrix": {
+    "canonical_artifacts": 2,
+    "fixed_checks": 2,
+    "clean_noops": 2,
+    "corrupt_plans": 5,
+    "both_corrupt": 1,
+    "whole_image_no_write_probes": 7,
+    "recovery_negative_cases": 42,
+    "strict_werror": true,
+    "fanalyzer": true,
+    "asan_ubsan": true,
+    "wal_closed_crash_states": ["PREPARING", "APPLYING", "COMMITTED"],
+    "ordinary_libntfs_mount_unchanged": true,
+    "successful_power_cut_recovery": "BLOCKED_UNTIL_ID20_ID21_GROUP_VERIFIER",
+    "closed_power_cut_result": "EOPNOTSUPP_BEFORE_WRITE_BOUNDARY"
+  },
+  "hardware_release_evidence": {
+    "result": "PASS",
+    "source_writes": 0,
+    "disk_bytes": 10737418240,
+    "disk_sha256_before": "a58dc4e86d12d14e1b09aea90b893587c7146c6f90cecf061c66233d2b727622",
+    "disk_sha256_after": "a58dc4e86d12d14e1b09aea90b893587c7146c6f90cecf061c66233d2b727622",
+    "gpt_disk_guid": "a200ab12-e6e8-4534-b83e-4c7d1dea9216",
+    "partition": {
+      "number": 2,
+      "name": "T1OS 0.31",
+      "guid": "e5020e7c-5529-46ed-a7ba-e656463674f4",
+      "first_lba": 1050624,
+      "last_lba": 20969471,
+      "bytes": 10198450176,
+      "sha256": "f89363dacb77c1227d74dc82e180238b7a4be10767ccb86ab5376bf4ff6a3685"
+    },
+    "hardware_probe": {
+      "ordinary_mount": true,
+      "upcase_lcn": 311380,
+      "upcase_offset": 1275412480,
+      "attrdef_lcn": 311238,
+      "attrdef_offset": 1274830848
+    },
+    "release_census_probe": {
+      "slots": 22062,
+      "attributes": 66853,
+      "runs": 18605,
+      "links": 21957,
+      "indexes": 2225,
+      "bitmap_bits": 2489855,
+      "identity": "MATCH",
+      "cluster_bitmap_clean": true
+    },
+    "method": "primary GPT header and entry-array CRC validation; O_RDONLY sequential container stream; p2 SHA binding; probes compiled from frozen sources and run on byte-identical partition copy; before/after hashes; no loop or mount with write access"
+  },
+  "artifact_state_issue": {
+    "classification": "WHOLE_CONTAINER_OBSERVATION_DRIFT_NOT_FIXED_METADATA_FAILURE",
+    "prior_audit_observation_sha256": "335204ecf119dc424e60eeed5a089f54de323d01a001f2283d4af89e939ce7fa",
+    "frozen_current_sha256": "a58dc4e86d12d14e1b09aea90b893587c7146c6f90cecf061c66233d2b727622",
+    "root_partition_sha256_stable": "f89363dacb77c1227d74dc82e180238b7a4be10767ccb86ab5376bf4ff6a3685",
+    "qualification_effect": "none; current whole container and exact p2 were independently rehashed before and after the read-only gate"
+  }
+}

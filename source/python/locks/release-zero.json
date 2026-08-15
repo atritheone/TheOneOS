@@ -1,0 +1,215 @@
+{
+  "format": 1,
+  "component": "python-release-zero",
+  "release": "3.13.5-t1os.34",
+  "immutable": true,
+  "rebuild_policy": "change the release identifier before replacing this lock",
+  "toolchain": {
+    "patchelf": "patchelf 0.18.0",
+    "builder_python": "3.12.3"
+  },
+  "build_definitions": [
+    {
+      "path": "development/build python runtime.py",
+      "size": 95019,
+      "sha256": "2bebe128cdf8ab61f57b3701b65b2f14b9c3f3ea53cb3ebf1824650330d91b09"
+    },
+    {
+      "path": "development/build python source diagnostic.py",
+      "size": 14920,
+      "sha256": "1ac23af96c5a369abd29b693329a78befaab976a6a7a5ec23c0f1b5fe1664db8"
+    },
+    {
+      "path": "resource/entry/init/init 0.17 hardware.sh",
+      "size": 46678,
+      "sha256": "990e2957f69dbbfc9d97d0686a4f54ff079751a5fcbae6699f77c5f4c22c8534"
+    },
+    {
+      "path": "resource/entry/kernel/tools_lsm 0.14.c",
+      "size": 44142,
+      "sha256": "8185407b8c231c6b62b88bb374763690a4742a333f3412fc14f7a846e9d85fc1"
+    },
+    {
+      "path": "scripts/audit python provenance.ps1",
+      "size": 1055,
+      "sha256": "896f9151371ab15197a5ed60e20b2cd5e2d1ed60137ba7bb59c520911c43c158"
+    },
+    {
+      "path": "scripts/build hardware initramfs.ps1",
+      "size": 26827,
+      "sha256": "22e6d889d02608bd1baa7c97ec2743ccc724d1c136732b9c7a18eb727a8e58ae"
+    },
+    {
+      "path": "scripts/build python runtime.ps1",
+      "size": 2875,
+      "sha256": "c85bebea8294ca79064c35ceef4d1f82104c70424a403f86f3964538c988484c"
+    },
+    {
+      "path": "scripts/build python source diagnostic.ps1",
+      "size": 1096,
+      "sha256": "9c755237a90cd70715384a16224b5b02d64693425dcea35cea091ed8e8e06891"
+    },
+    {
+      "path": "scripts/push managed python to usb.ps1",
+      "size": 26967,
+      "sha256": "ccdc1f229d03ac855db371e027bed02af93c2af3ab4db7b227c175c09bc81351"
+    },
+    {
+      "path": "scripts/push to disk.ps1",
+      "size": 98775,
+      "sha256": "175b7f00f89874767387ed57ef745195e5fe7319c18e82c1e56c25510e249b16"
+    },
+    {
+      "path": "scripts/test hardware build.ps1",
+      "size": 146424,
+      "sha256": "95b280bb16ff7aed10ee161e2fdd6514c79005e584df3cfa195a833a13a82c10"
+    },
+    {
+      "path": "scripts/test python runtime.ps1",
+      "size": 1145,
+      "sha256": "34e66bf38be48b6d2d0eae26c85e3f602c794365536f6ae006897687bba8cb23"
+    },
+    {
+      "path": "source/python/build/portable-python-source.yml",
+      "size": 997,
+      "sha256": "bfc31d492e4ec6277fcadefb98b7efa45878568ea7e579746f74ce26a85144f9"
+    },
+    {
+      "path": "source/python/build/runtime.json",
+      "size": 2661,
+      "sha256": "f4f9757cff98badcdbdb36d819fa0ce4e5a95af6489b85fbd3d1fb0374c805fb"
+    },
+    {
+      "path": "source/python/contracts/imports.json",
+      "size": 1795,
+      "sha256": "4d2124f8e7a6c838565949769bc48058e8ea806638d069791a96c90616a2204b"
+    },
+    {
+      "path": "source/python/locks/inputs.json",
+      "size": 6237,
+      "sha256": "ae36809e8ee09ca76601e5988d14aceab63e6e4b51173c191a7b1d849dce890c"
+    },
+    {
+      "path": "source/python/locks/native-catalogue.json",
+      "size": 59033,
+      "sha256": "c01ffd6bff71f5fdc228b368f1c10c8f1fbc22280ddfe50c61cf31cc144c68a3"
+    },
+    {
+      "path": "source/python/locks/source-rebuild.json",
+      "size": 6424,
+      "sha256": "b049c8cc1123826e8f2fa84ae64d39cae1639558729c0ed9bcb6cfc40d450d73"
+    },
+    {
+      "path": "source/python/locks/system-modules.json",
+      "size": 2872,
+      "sha256": "493a954a2310a6d91791f0bef1e1fa4906d6e928ceaa76390d454f6d972a8f18"
+    },
+    {
+      "path": "source/python/packages/sitecustomize.py",
+      "size": 1588,
+      "sha256": "aa7d7cb4980a979097d1919719e821ebb0395d33b9b5cb2e5aca622f33445397"
+    },
+    {
+      "path": "source/python/packages/t1os-ca-certificates.pth",
+      "size": 91,
+      "sha256": "b4c1ba9ffc917f8e1013b27555de17432198a94f7ccfe8871be5a82a7b490d93"
+    },
+    {
+      "path": "source/python/patches/historical/0001-force-the-one-python-prefix.patch",
+      "size": 1348,
+      "sha256": "414ff70d93b4080d9dbc01c041fa322a747ac40a417bc56a1fdf4e19cd48556b"
+    },
+    {
+      "path": "source/python/provenance/legacy-evidence.json",
+      "size": 9958,
+      "sha256": "bc38ca1d3b0581eae36abbf90a6339e456b2880461d7e7e2cc1126b1fe257ed4"
+    },
+    {
+      "path": "source/python/tests/tls/ca.pem",
+      "size": 1188,
+      "sha256": "78b46bfa70b474bcb99e4ce56b38b784a5905781102286b83b61a0c4df9e8386"
+    },
+    {
+      "path": "source/python/tests/tls/server-cert.pem",
+      "size": 1229,
+      "sha256": "76470539affc29b354e2aead591a0abe016ef7a64219d7e1fa4697dc0c7633a6"
+    },
+    {
+      "path": "source/python/tests/tls/server-key.pem",
+      "size": 1704,
+      "sha256": "76e6aeea2ec73a2bb7df09c0e770896421ffa5da70b5ca204cb53efdcfb7df06"
+    }
+  ],
+  "outputs": {
+    "software_tree": {
+      "algorithm": "t1os-install-tree-sha256-v2",
+      "directories": 181,
+      "files": 1666,
+      "bytes": 75277198,
+      "sha256": "3d59303c0b2c737253d4945ec428ff0d3012ac16972096070ecad82f3c1d4612"
+    },
+    "catalogue_tree": {
+      "algorithm": "t1os-install-tree-sha256-v2",
+      "directories": 1,
+      "files": 90,
+      "bytes": 45877810,
+      "sha256": "b1a0a17582d5e8df88489c63386f0d9b252a4d91b2476065097dddc01e83fd2f"
+    },
+    "python_sha256": "b520757574b409076311fab8764216b6dc59f6ea9aca85f2dc7febaff5627a33",
+    "manifest_sha256": "98f4ede3ac1a7005797dde737ebf0ac0c71dbad2575eb72ed6e12502df9a6646"
+  },
+  "protected_external_roots": [
+    {
+      "name": "image_catalogue",
+      "source": "source/catalogue/image",
+      "destination": "/the one/catalogue/image",
+      "exclude_generated_bytecode": false,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 3,
+        "files": 123,
+        "bytes": 19864034,
+        "sha256": "c2d3104ae9fd41476bc2f04b3d89d43a740b25f8208970a3aa571a0edc9cb6d4"
+      }
+    },
+    {
+      "name": "build_software",
+      "source": "source/build software",
+      "destination": "/the one/build",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 32,
+        "files": 37,
+        "bytes": 4765879,
+        "sha256": "0a38477be08ec471d1c427ffe936d81bd8df6c7c79b7ec108d74a375835a13b7"
+      }
+    },
+    {
+      "name": "boot",
+      "source": "source/boot",
+      "destination": "/boot",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 2,
+        "files": 1,
+        "bytes": 45151,
+        "sha256": "77da96393409deb919d03754505902b68e80052bc6309bb67221cf35624646bf"
+      }
+    },
+    {
+      "name": "virtualbox_software",
+      "source": "source/software/virtualbox",
+      "destination": "/the one/software/virtualbox",
+      "exclude_generated_bytecode": true,
+      "tree": {
+        "algorithm": "t1os-install-tree-sha256-v2",
+        "directories": 1,
+        "files": 4,
+        "bytes": 1484234,
+        "sha256": "bea5dd9f7079645669bebea9b1ee5ae6bf6e2c64dd5f2615fa6d5e694ad0bbc7"
+      }
+    }
+  ]
+}

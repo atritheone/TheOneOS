@@ -1,0 +1,18 @@
+{
+  "format": 1,
+  "chromium_version": "150.0.7871.181",
+  "chromium_revision": "24b04c927b23c39cf9c5227cc8dc6f64a744c8e9",
+  "skia_revision": "587c5b0f5a7b0260826a0c19094c2d952195066e",
+  "chromium_tag": "refs/tags/150.0.7871.181",
+  "depot_tools_revision": "93919990d65a94fd62a5b1bae4e2909df6996e4a",
+  "build_argument": "enable_t1os_video_decoder=true",
+  "runtime_feature": "T1OSVideoDecoder",
+  "browser_switch": "t1os-video-decode-socket",
+  "descriptor_key_prefix": "t1os-media-decode-",
+  "descriptor_pool_size": 8,
+  "protocol_magic": "T1MD",
+  "protocol_version": 1,
+  "protocol_header_sha256": "11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0",
+  "source_overlay_sha256": "597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e",
+  "build_marker": "T1OS_MEDIA_DECODER=T1MD/1;brokered_socket=1;pool=8;chromium=24b04c927b23c39cf9c5227cc8dc6f64a744c8e9;protocol_sha256=11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0;source_sha256=597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e"
+}

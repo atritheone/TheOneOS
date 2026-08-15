@@ -1,0 +1,39 @@
+folders:
+  build: /tmp/t1os-python-3.14.7/build
+  destdir: "{build}"
+  dist: /tmp/t1os-python-3.14.7/dist
+  logs: "{build}/logs"
+  ppp-marker: /ppp-marker/{version}
+  sources: /tmp/t1os-python-3.14.7/cache
+
+ext: gz
+
+cpython-url: https://www.python.org/ftp/python/${version}/Python-${version}.tar.xz
+cpython-src-suffix: tar.xz
+cpython-modules: readline,mpdec
+
+readline-version: "8.2.13"
+readline-url: https://ftp.gnu.org/gnu/readline/readline-${version}.tar.gz
+
+ncurses-version: "6.5"
+ncurses-url: https://ftp.gnu.org/gnu/ncurses/ncurses-${version}.tar.gz
+
+mpdec-version: "4.0.1"
+mpdec-url: https://www.bytereef.org/software/mpdecimal/releases/mpdecimal-${version}.tar.gz
+mpdec-configure: --disable-shared
+
+cpython-configure:
+  - --enable-optimizations
+  - --with-lto
+  - --with-ensurepip=upgrade
+  - --with-system-ffi
+  - --disable-test-modules
+  - --with-dbmliborder=gdbm:bdb:ndbm
+
+env:
+  LC_ALL: C.UTF-8
+  TZ: UTC
+  SOURCE_DATE_EPOCH: "1785928907"
+  PYTHONHASHSEED: "0"
+  LIBREADLINE_CFLAGS: "-I/tmp/t1os-python-3.14.7/build/deps/include"
+  LIBREADLINE_LIBS: "-L/tmp/t1os-python-3.14.7/build/deps/lib -Wl,-Bstatic -lreadline -lncursesw -Wl,-Bdynamic"

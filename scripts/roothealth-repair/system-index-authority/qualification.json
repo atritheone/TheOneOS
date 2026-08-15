@@ -1,0 +1,96 @@
+{
+  "schema": "roothealth.source-bound-qualification.v1",
+  "slice": "system-index-authority",
+  "status": "diagnostic-only-policy-closed",
+  "source_tree": "/var/tmp/roothealth-system-indexes-reader-20260809",
+  "baseline_tree": "/var/tmp/roothealth-system-indexes-reader-base-20260809",
+  "baseline_tree_sha256": "de346cb5af9f7bfa8bae3b533edfd28e4bee1ce5c2df6e4158a5fffed1f512b3",
+  "result_tree_sha256": "39104996d8118c5f95a5a15afd4fcb17ea24d23c5fbd7b7ff0082ecffb98717d",
+  "patch": {
+    "path": "system-index-authority.patch",
+    "sha256": "ce11db42622c60ed8684ba17d19e1b1d3311cd310b9646b70656b3cb1945f294",
+    "replay_exact": true,
+    "git_apply_check_whitespace_error_all": true
+  },
+  "new_source": {
+    "src/roothealth_system_indexes.c": "3c337a55a4a3b72b20100af92f2275f65edf1c4a227dd7ee3b440abe74994f69",
+    "src/roothealth_system_indexes.h": "41ce9cd4961123836cd5eecfafad903e0c25d4c7376998d2b314d44dacdbfbc0",
+    "tests/roothealth_system_indexes_fixture.c": "0547e0c9733ede590520cdfd98f146b7b1f0defa3ec9483bd725fcde643e3329",
+    "tests/roothealth_system_indexes_mutate.c": "8ec890334c99e745e05efc5b9892abbca1fccc7556660aec025e00b3eed569a5",
+    "tests/roothealth_system_indexes_release.c": "9f26f9ac004f9c532bb7dc34bb8c4d54f2e573ed41a4069e18feb88eeb0470e0",
+    "SYSTEM-INDEX-AUTHORITY.md": "7a8095d431b55bc02ca1c4b91e6b6f13a58a15460aee7370c8f3abb97ad75809"
+  },
+  "source_boundary": {
+    "src/roothealth_raw_mft.c": "43577aa87668d92fa9662ea0c5ff4bab9be5de82a95ef0250eda9ffc48b6d15a",
+    "src/roothealth_raw_mft.h": "35860e170172853059ab37f632ccf7d842b3d62dad5a6f23df340ece3a5f1acb",
+    "src/roothealth_namespace.c": "511e15752200c15b69441883d7cb62681c6ad5c9c2c3eebed867cbf20b57fab6",
+    "src/roothealth_namespace.h": "d6a356e930433c91b7209e4c7c609f550a11511d0b51bee792199304b420c977",
+    "src/roothealth_census_device.c": "517fb77e08418457d16320139ee9a6aa266d00523b035fa5ced7ff7bebbf1dde",
+    "src/roothealth_census_device.h": "d56d684f57b8431de3c48c73fa293a243119442a5473071e828301ff61a14bd7",
+    "src/roothealth_free_slot_authority.c": "aa3e7dd03006749fe4be9fea144d1032129ea363bb05be3d699cf57e1a71cdcc",
+    "src/roothealth_free_slot_authority.h": "c320cf76e0067e8d03a7610ee018187b7454a07e334e27621ce45fd6f8cc266e",
+    "src/roothealth_free_slot_authority_internal.h": "50aaeb531e2c43c4c29440fa7410ebbd9afa8e155e475157c2ed55c1a23bb909",
+    "src/roothealth_write.c": "af7c6c3781015e1a552f7ae8a4a09823092e2f6d5c4580920a9a399ac835dc85",
+    "src/roothealth_write.h": "7cc30774d850e4c6cd2060c4809b1a33e9b019ac9aa64eff3b7cbccb29ba31f7",
+    "libntfs/.libs/libntfs.a": "f3a3eeaff6ab32ac2dd9434903d8e8d159fa2fe2abd2e7aaaf23c3f24e34517c"
+  },
+  "release": {
+    "image_sha256": "0596099c95d7d177e95f71852ea1eb644c90f51ca5cee2f52bb9115dc724e2fa",
+    "system_index_census_sha256": "a8ab34c6d112ab54423018615af46e912eb9bdeca76aecfc37480eaed1004d7d",
+    "reparse_live": 0,
+    "reparse_end": 1,
+    "objid_live": 0,
+    "objid_end": 1,
+    "quota_o_live": 1,
+    "quota_o_end": 1,
+    "quota_q_live": 2,
+    "quota_q_end": 1,
+    "standard_information": 22739,
+    "file_names": 22980,
+    "attribute_lists": 317,
+    "extent_records": 323,
+    "operations": 0,
+    "secure_regression": {
+      "legacy_descriptors": 7,
+      "central_live_entries": 29,
+      "structural_end_entries": 1,
+      "referenced_central_ids": 20,
+      "distinct_mft_security_ids": 21,
+      "sdh_sii_exact_lookups": 29,
+      "operations": 0
+    }
+  },
+  "matrix": [
+    "release-clean-zero-write",
+    "nonempty-reparse-objid-seals-1-1-zero-write",
+    "stale-generation-authority-absent-seal-refused",
+    "reparse-index-invalid-seal-refused",
+    "objid-index-invalid-authority-absent-seal-refused",
+    "quota-o-mismatch-q-authority-complete",
+    "quota-q-malformed-authority-absent-policy-closed",
+    "opaque-post-mapping-terminator-tail-preserved"
+  ],
+  "qualification": {
+    "strict_werror": true,
+    "gcc_fanalyzer": true,
+    "asan": true,
+    "ubsan": true,
+    "leak_detection": true,
+    "source_hashes_unchanged": true,
+    "production_mutation_primitive_audit_empty": true,
+    "logs": {
+      "roothealth-system-indexes-reader-20260809-build.log": "9a6a11478b15947066bc121cb8b8b4690288032e480bf9d5a954ed8f8832cbe5",
+      "roothealth-system-indexes-reader-20260809-strict.log": "bae9affbf2df3b47d8bb499df435347bbe7a2ed7dcadd713aff720b31fb5e03e",
+      "roothealth-system-indexes-reader-20260809-analyzer.log": "bd3a63378426fe0a291d96105caebcf2748b5405f3e504f877e4a66e389f3664",
+      "roothealth-system-indexes-reader-20260809-sanitizer.log": "b3601e0ab8b9b3fb8f374f86bb945705ad6f86ab247c3c012cfca01d1f91d7de"
+    }
+  },
+  "closed_boundaries": [
+    "no-write-overlay-wal-action-or-recovery-abi",
+    "no-policy-promotion",
+    "reader-abi-has-no-device-identity-token",
+    "no-common-quota-free-slot-component-constructor",
+    "large-index-parser-not-fixture-qualified",
+    "not-production-makefile-integrated"
+  ]
+}

@@ -1,0 +1,76 @@
+diff --git a/fs/binfmt_script.c b/fs/binfmt_script.c
+--- a/fs/binfmt_script.c
++++ b/fs/binfmt_script.c
+@@ -36,6 +36,7 @@ static int load_script(struct linux_binprm *bprm)
+ 	const char *i_name, *i_sep, *i_arg, *i_end, *buf_end;
+ 	struct file *file;
+ 	int retval;
++	bool quoted_name = false;
+ 
+ 	/* Not ours to exec if we don't start with "#!". */
+ 	if ((bprm->buf[0] != '#') || (bprm->buf[1] != '!'))
+@@ -80,39 +81,60 @@ static int load_script(struct linux_binprm *bprm)
+ 
+ 	/* Is there an optional argument? */
+ 	i_arg = NULL;
+-	i_sep = next_terminator(i_name, i_end);
+-	if (i_sep && (*i_sep != '\0'))
+-		i_arg = next_non_spacetab(i_sep, i_end);
++	if (*i_name == '"') {
++		/* T1OS keeps its interpreter below `/the one`.  A quoted name is
++		 * deliberately narrow: only the interpreter token may be quoted and
++		 * the closing quote must be followed by whitespace or the line end. */
++		quoted_name = true;
++		i_name++;
++		i_sep = strnchr(i_name, i_end - i_name, '"');
++		if (!i_sep || i_sep == i_name)
++			return -ENOEXEC;
++		if (i_sep + 1 < i_end && !spacetab(i_sep[1]))
++			return -ENOEXEC;
++		if (i_sep + 1 < i_end) {
++			i_arg = next_non_spacetab(i_sep + 1, i_end);
++			if (i_arg == i_end)
++				i_arg = NULL;
++		}
++	} else {
++		i_sep = next_terminator(i_name, i_end);
++		if (i_sep && (*i_sep != '\0'))
++			i_arg = next_non_spacetab(i_sep, i_end);
++	}
+ 
+ 	/*
+ 	 * If the script filename will be inaccessible after exec, typically
+ 	 * because it is a "/dev/fd/<fd>/.." path against an O_CLOEXEC fd, give
+ 	 * up now (on the assumption that the interpreter will want to load
+ 	 * this file).
+ 	 */
+ 	if (bprm->interp_flags & BINPRM_FLAGS_PATH_INACCESSIBLE)
+ 		return -ENOENT;
+ 
+ 	/*
+ 	 * OK, we've parsed out the interpreter name and
+ 	 * (optional) argument.
+ 	 * Splice in (1) the interpreter's name for argv[0]
+ 	 *           (2) (optional) argument to interpreter
+ 	 *           (3) filename of shell script (replace argv[0])
+ 	 *
+ 	 * This is done in reverse order, because of how the
+ 	 * user environment and arguments are stored.
+ 	 */
+ 	retval = remove_arg_zero(bprm);
+ 	if (retval)
+ 		return retval;
+ 	retval = copy_string_kernel(bprm->interp, bprm);
+ 	if (retval < 0)
+ 		return retval;
+ 	bprm->argc++;
+ 	*((char *)i_end) = '\0';
++	if (quoted_name)
++		*((char *)i_sep) = '\0';
+ 	if (i_arg) {
+-		*((char *)i_sep) = '\0';
++		if (!quoted_name)
++			*((char *)i_sep) = '\0';
+ 		retval = copy_string_kernel(i_arg, bprm);
+ 		if (retval < 0)
+ 			return retval;

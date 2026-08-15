@@ -1,0 +1,654 @@
+--- a/src/roothealth_wal.c
++++ b/src/roothealth_wal.c
+@@ -41,6 +41,31 @@
+ static const unsigned char rh_wal_magic[16] = "T1ROOTHEALTHWAL";
+ static const unsigned char rh_entry_magic[8] = "RHENTRY1";
+ 
++static int rh_wal_builtin_bitmap_dirty_verifier(
++		const struct rh_wal_action_verifier_context *context);
++
++static void rh_wal_install_builtin_action_verifiers(struct rh_wal *wal)
++{
++	static const enum rh_write_kind kinds[] = {
++		RH_WRITE_BITMAP_CLUSTER,
++		RH_WRITE_VOLUME_DIRTY_SET,
++		RH_WRITE_VOLUME_DIRTY_CLEAR
++	};
++	size_t i;
++
++	for (i = 0; i < sizeof(kinds) / sizeof(kinds[0]); i++)
++		wal->action_verifiers[RH_WRITE_ACTION_ID(kinds[i])].verify =
++			rh_wal_builtin_bitmap_dirty_verifier;
++}
++
++#ifdef ROOTHEALTH_WAL_TEST_HOOKS
++void rh_wal_test_install_builtin_action_verifiers(struct rh_wal *wal)
++{
++	if (wal)
++		rh_wal_install_builtin_action_verifiers(wal);
++}
++#endif
++
+ struct rh_wal_planned_entry {
+ 	uint64_t target_offset;
+ 	uint64_t length;
+@@ -1195,6 +1220,7 @@
+ 		result = RH_RESULT_UNSAFE;
+ 		goto fail_restrictions;
+ 	}
++	rh_wal_install_builtin_action_verifiers(wal);
+ 	observation->fast_path_trusted = 1;
+ 	return RH_RESULT_OK;
+ fail_restrictions:
+@@ -2050,6 +2076,36 @@
+ 	rh_wal_free_planned(wal);
+ }
+ 
++int rh_wal_register_action_verifier(struct rh_wal *wal, uint32_t action_id,
++		rh_wal_action_verifier_fn verify)
++{
++	struct rh_wal_action_verifier_slot *slot;
++
++	if (!wal || !wal->writer || !wal->observation ||
++		wal->observation->valid != 1 || !verify || !action_id ||
++		action_id > RH_WRITE_KIND_COUNT) {
++		errno = EINVAL;
++		return -1;
++	}
++	/*
++	 * Native replay cannot be enabled by registering a digest-only callback.
++	 * These IDs stay closed until the exact namespace/free-slot evidence ABI
++	 * and a source-bound rederivation verifier are frozen together.
++	 */
++	if (action_id == RH_WRITE_ACTION_ID(RH_WRITE_LOGFILE_REDO) ||
++		action_id == RH_WRITE_ACTION_ID(RH_WRITE_LOGFILE_RESTART)) {
++		errno = EOPNOTSUPP;
++		return -1;
++	}
++	slot = &wal->action_verifiers[action_id];
++	if (slot->verify) {
++		errno = EEXIST;
++		return -1;
++	}
++	slot->verify = verify;
++	return 0;
++}
++
+ struct rh_wal_entry {
+ 	uint64_t target_offset;
+ 	uint64_t length;
+@@ -2134,6 +2190,273 @@
+ 	view->operation_capacity = 0;
+ }
+ 
++struct rh_wal_preimage {
++	struct rh_writer *writer;
++	struct rh_wal *wal;
++	struct rh_wal_entry *internal_entries;
++	const unsigned char *const *old_payloads;
++	size_t entry_count;
++};
++
++uint64_t rh_wal_preimage_size(const struct rh_wal_preimage *preimage)
++{
++	return preimage && preimage->writer ? preimage->writer->device_size : 0;
++}
++
++int rh_wal_preimage_read(const struct rh_wal_preimage *preimage,
++		uint64_t offset, size_t length, void *buffer)
++{
++	if (!preimage || !preimage->writer || !buffer || !length ||
++		offset > preimage->writer->device_size ||
++		length > preimage->writer->device_size - offset) {
++		errno = EINVAL;
++		return -1;
++	}
++	return rh_writer_read(preimage->writer, offset, length, buffer);
++}
++
++int rh_wal_entry_old_read(const struct rh_wal_action_verifier_context *context,
++		uint64_t ordinal, uint64_t relative_offset, size_t length,
++		void *buffer)
++{
++	const struct rh_wal_preimage *preimage;
++	const struct rh_wal_recovery_entry_view *entry;
++
++	if (!context || !context->preimage || !buffer || !length || !ordinal ||
++		ordinal > context->entry_count) {
++		errno = EINVAL;
++		return -1;
++	}
++	preimage = context->preimage;
++	if (preimage->entry_count != context->entry_count ||
++		!preimage->old_payloads || !preimage->old_payloads[ordinal - 1U]) {
++		errno = EINVAL;
++		return -1;
++	}
++	entry = &context->entries[ordinal - 1U];
++	if (entry->ordinal != ordinal || relative_offset > entry->length ||
++		length > entry->length - relative_offset) {
++		errno = EINVAL;
++		return -1;
++	}
++	memcpy(buffer, preimage->old_payloads[ordinal - 1U] + relative_offset,
++		length);
++	return 0;
++}
++
++static int rh_wal_recovery_entry_view_valid(
++		const struct rh_wal_recovery_entry_view *entry,
++		const unsigned char *old_payload, const struct rh_writer *preimage)
++{
++	unsigned char digest[32];
++	uint64_t relative;
++	enum rh_write_kind kind;
++
++	if (!entry || !old_payload || !preimage || !entry->ordinal ||
++		!entry->action_id || entry->action_id > RH_WRITE_KIND_COUNT ||
++		entry->reserved32 || !entry->length || entry->length > SIZE_MAX ||
++		entry->target_offset > preimage->device_size ||
++		entry->length > preimage->device_size - entry->target_offset ||
++		entry->target.semantic_target_offset < entry->target_offset ||
++		entry->target.semantic_target_offset - entry->target_offset >
++			entry->length ||
++		entry->target.semantic_target_length > entry->length -
++			(entry->target.semantic_target_offset - entry->target_offset) ||
++		entry->target.semantic_target_length > SIZE_MAX)
++		return 0;
++	kind = (enum rh_write_kind)(entry->action_id - 1U);
++	if (!rh_write_semantic_target_valid(kind, &entry->target,
++			entry->target.semantic_target_offset,
++			(size_t)entry->target.semantic_target_length, 1))
++		return 0;
++	rh_sha256(old_payload, (size_t)entry->length, digest);
++	if (memcmp(digest, entry->old_hash, sizeof(digest)))
++		return 0;
++	relative = entry->target.semantic_target_offset - entry->target_offset;
++	rh_sha256(old_payload + relative,
++		(size_t)entry->target.semantic_target_length, digest);
++	return !memcmp(digest, entry->target.semantic_before_hash,
++		sizeof(digest));
++}
++
++static int rh_wal_callback_errno(int value)
++{
++	switch (value) {
++	case EIO:
++	case ENXIO:
++	case ENODEV:
++	case ENOMEM:
++	case EINVAL:
++	case EOPNOTSUPP:
++		return value;
++	default:
++		return EINVAL;
++	}
++}
++
++/*
++ * Dispatch only after proving that every distinct action ID has an exact
++ * verifier.  Callbacks receive opaque, bounded read access only.  The deep
++ * snapshots below still catch mutation through an accidental caller closure
++ * before recovery can write a sector.
++ */
++static int rh_wal_dispatch_action_verifiers(struct rh_wal *wal,
++		struct rh_writer *preimage,
++		const struct rh_wal_recovery_entry_view *entries,
++		const unsigned char *const *old_payloads,
++		struct rh_wal_entry *internal_entries, size_t count)
++{
++	struct rh_wal_recovery_entry_view *entry_snapshot = NULL;
++	struct rh_write_operation *operation_snapshot = NULL;
++	struct rh_writer writer_snapshot;
++	struct rh_wal_preimage preimage_handle;
++	struct rh_wal_preimage preimage_snapshot;
++	struct rh_wal wal_snapshot;
++	unsigned char seen[RH_WRITE_KIND_COUNT + 1U];
++	unsigned char processed[RH_WRITE_KIND_COUNT + 1U];
++	size_t i;
++	int result = -1;
++
++	if (!wal || !preimage || !entries || !old_payloads || !count ||
++		count > RH_WAL_MAX_ENTRIES || preimage->write_fd >= 0 ||
++		preimage->backend || preimage->backend_opaque ||
++		preimage->commit_started || preimage->commit_completed ||
++		preimage->operation_count != count) {
++		errno = EINVAL;
++		return -1;
++	}
++	memset(seen, 0, sizeof(seen));
++	memset(processed, 0, sizeof(processed));
++	for (i = 0; i < count; i++) {
++		const struct rh_wal_recovery_entry_view *entry = &entries[i];
++		const struct rh_write_operation *operation =
++			&preimage->operations[count - 1U - i];
++
++		if (!rh_wal_recovery_entry_view_valid(entry, old_payloads[i],
++				preimage) || entry->ordinal != i + 1U || !operation->after ||
++			operation->offset != entry->target_offset ||
++			operation->length != entry->length ||
++			memcmp(operation->after, old_payloads[i],
++				(size_t)entry->length)) {
++			errno = EINVAL;
++			return -1;
++		}
++		seen[entry->action_id] = 1U;
++	}
++	/* Registration is all-or-nothing and native IDs remain hard disabled. */
++	for (i = 1; i <= RH_WRITE_KIND_COUNT; i++) {
++		if (!seen[i])
++			continue;
++		if (i == RH_WRITE_ACTION_ID(RH_WRITE_LOGFILE_REDO) ||
++			i == RH_WRITE_ACTION_ID(RH_WRITE_LOGFILE_RESTART) ||
++			!wal->action_verifiers[i].verify) {
++			errno = EOPNOTSUPP;
++			return -1;
++		}
++	}
++	entry_snapshot = malloc(count * sizeof(*entry_snapshot));
++	operation_snapshot = malloc(count * sizeof(*operation_snapshot));
++	if (!entry_snapshot || !operation_snapshot) {
++		if (!errno)
++			errno = ENOMEM;
++		goto out;
++	}
++	memcpy(entry_snapshot, entries, count * sizeof(*entry_snapshot));
++	memcpy(operation_snapshot, preimage->operations,
++		count * sizeof(*operation_snapshot));
++	writer_snapshot = *preimage;
++	wal_snapshot = *wal;
++	memset(&preimage_handle, 0, sizeof(preimage_handle));
++	preimage_handle.writer = preimage;
++	preimage_handle.wal = wal;
++	preimage_handle.internal_entries = internal_entries;
++	preimage_handle.old_payloads = old_payloads;
++	preimage_handle.entry_count = count;
++	preimage_snapshot = preimage_handle;
++	for (i = 1; i <= RH_WRITE_KIND_COUNT; i++) {
++		struct rh_wal_action_verifier_context context;
++		struct rh_wal_action_verifier_context context_snapshot;
++		rh_wal_action_verifier_fn verify;
++		size_t j;
++		int callback_errno;
++		int callback_result;
++
++		if (!seen[i] || processed[i])
++			continue;
++		verify = wal->action_verifiers[i].verify;
++		memset(&context, 0, sizeof(context));
++		context.version = RH_WAL_ACTION_VERIFIER_ABI_VERSION;
++		context.action_id = (uint32_t)i;
++		context.transaction_kind = wal->transaction_kind;
++		context.state = wal->state;
++		context.generation = wal->generation;
++		context.volume_serial = wal->volume_serial;
++		context.journal_record = wal->journal_record;
++		context.journal_sequence = wal->journal_sequence;
++		memcpy(context.journal_uuid, wal->journal_uuid,
++			sizeof(context.journal_uuid));
++		memcpy(context.transaction_uuid, wal->transaction_uuid,
++			sizeof(context.transaction_uuid));
++		memcpy(context.plan_hash, wal->plan_hash,
++			sizeof(context.plan_hash));
++		context.preimage = &preimage_handle;
++		context.entries = entries;
++		context.entry_count = count;
++		context_snapshot = context;
++		errno = 0;
++		callback_result = verify(&context);
++		callback_errno = errno;
++		if (callback_result) {
++			errno = rh_wal_callback_errno(callback_errno);
++			goto out;
++		}
++		if (memcmp(&context, &context_snapshot, sizeof(context)) ||
++			memcmp(&preimage_handle, &preimage_snapshot,
++				sizeof(preimage_handle)) ||
++			memcmp(wal, &wal_snapshot, sizeof(*wal)) ||
++			memcmp(preimage, &writer_snapshot, sizeof(*preimage)) ||
++			memcmp(entries, entry_snapshot,
++				count * sizeof(*entry_snapshot)) ||
++			memcmp(preimage->operations, operation_snapshot,
++				count * sizeof(*operation_snapshot))) {
++			errno = EINVAL;
++			goto out;
++		}
++		for (j = 0; j < count; j++) {
++			unsigned char digest[32];
++
++			rh_sha256(old_payloads[j], (size_t)entries[j].length, digest);
++			if (memcmp(digest, entry_snapshot[j].old_hash,
++					sizeof(digest)) ||
++				memcmp(preimage->operations[count - 1U - j].after,
++					old_payloads[j], (size_t)entries[j].length)) {
++				errno = EINVAL;
++				goto out;
++			}
++		}
++		for (j = i; j <= RH_WRITE_KIND_COUNT; j++)
++			if (seen[j] && wal->action_verifiers[j].verify == verify)
++				processed[j] = 1U;
++	}
++	errno = 0;
++	result = 0;
++out:
++	free(operation_snapshot);
++	free(entry_snapshot);
++	return result;
++}
++
++#ifdef ROOTHEALTH_WAL_TEST_HOOKS
++int rh_wal_test_dispatch_action_verifiers(struct rh_wal *wal,
++		struct rh_writer *preimage,
++		const struct rh_wal_recovery_entry_view *entries,
++		const unsigned char *const *old_payloads, size_t count)
++{
++	return rh_wal_dispatch_action_verifiers(wal, preimage, entries,
++		old_payloads, NULL, count);
++}
++#endif
++
+ static int rh_wal_entry_expected_after(const struct rh_wal_entry *entry,
+ 		const void *semantic_after, size_t semantic_length)
+ {
+@@ -2235,7 +2558,7 @@
+ 		rh_wal_entry_expected_after(entry, &after, sizeof(after));
+ }
+ 
+-static int rh_wal_validate_recovery_targets(struct rh_wal *wal,
++static int rh_wal_validate_legacy_recovery_targets(struct rh_wal *wal,
+ 		struct rh_wal_entry *entries, size_t count)
+ {
+ 	struct rh_writer pre_writer, post_writer;
+@@ -2252,25 +2575,28 @@
+ 	memset(&post_census, 0, sizeof(post_census));
+ 	if (!wal || !entries || !count)
+ 		return -1;
+-	evidence_generation = entries[0].target.evidence_generation;
+-	if (!evidence_generation)
+-		return -1;
++	evidence_generation = 0;
+ 	for (i = 0; i < count; i++) {
+ 		enum rh_write_kind kind =
+ 			(enum rh_write_kind)(entries[i].kind - 1U);
+ 
+-		if (entries[i].target.evidence_generation != evidence_generation)
++		if (kind != RH_WRITE_BITMAP_CLUSTER &&
++			kind != RH_WRITE_VOLUME_DIRTY_SET &&
++			kind != RH_WRITE_VOLUME_DIRTY_CLEAR)
++			continue;
++		if (!evidence_generation)
++			evidence_generation = entries[i].target.evidence_generation;
++		if (!evidence_generation ||
++			entries[i].target.evidence_generation != evidence_generation)
+ 			return -1;
+-		if (kind == RH_WRITE_BITMAP_CLUSTER)
++		if (kind == RH_WRITE_BITMAP_CLUSTER) {
+ 			bitmap_entries++;
+-		else if (kind == RH_WRITE_VOLUME_DIRTY_SET ||
+-				kind == RH_WRITE_VOLUME_DIRTY_CLEAR)
++		} else {
+ 			dirty_entries++;
+-		else {
+-			errno = ENOTSUP;
+-			return -1;
+ 		}
+ 	}
++	if (!bitmap_entries && !dirty_entries)
++		return -1;
+ 	if (rh_wal_view_writer_init(&pre_writer, wal->writer, entries, count, 1))
+ 		goto out;
+ 	pre_initialized = 1;
+@@ -2297,19 +2623,41 @@
+ 			bitmap_entries != pre_census.change_count)
+ 		goto out;
+ 	if (dirty_entries) {
++		size_t dirty_index = 0;
++
+ 		set_dirty = entries[0].kind ==
+ 			RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET);
++		if (!set_dirty && entries[0].kind !=
++				RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_CLEAR)) {
++			for (i = 1; i < count; i++)
++				if (entries[i].kind ==
++						RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET) ||
++					entries[i].kind ==
++						RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_CLEAR)) {
++					set_dirty = entries[i].kind ==
++						RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET);
++					break;
++				}
++		}
+ 		if ((dirty_entries != count && dirty_entries != 2) ||
+ 				rh_volume_dirty_inspect(pre_overlay.volume, &pre_writer,
+ 					set_dirty, &dirty_pair) ||
+ 				(set_dirty ? dirty_pair.initially_dirty :
+ 				 !dirty_pair.initially_dirty))
+ 			goto out;
+-		for (i = 0; i < dirty_entries; i++)
+-			if (!rh_wal_dirty_entry_valid(&entries[i], &dirty_pair, i == 1) ||
++		for (i = 0; i < count; i++) {
++			if (entries[i].kind !=
++					RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET) &&
++				entries[i].kind !=
++					RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_CLEAR))
++				continue;
++			if (!rh_wal_dirty_entry_valid(&entries[i], &dirty_pair,
++					dirty_index == 1U) ||
+ 					memcmp(entries[i].target.evidence_hash,
+ 						pre_census.census_hash, 32))
+ 				goto out;
++			dirty_index++;
++		}
+ 	}
+ 	if (wal->transaction_kind == RH_WAL_TX_DIRTY_CLEAR &&
+ 			(!pre_census.clean || bitmap_entries))
+@@ -2344,7 +2692,10 @@
+ 			post_census.unreadable_slots)
+ 		goto out;
+ 	for (i = 0; i < count; i++)
+-		if (memcmp(entries[i].target.staged_view_hash,
++		if ((entries[i].kind == RH_WRITE_ACTION_ID(RH_WRITE_BITMAP_CLUSTER) ||
++			entries[i].kind == RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET) ||
++			entries[i].kind == RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_CLEAR)) &&
++			memcmp(entries[i].target.staged_view_hash,
+ 				post_census.census_hash, 32))
+ 			goto out;
+ 	if (dirty_entries) {
+@@ -2373,6 +2724,91 @@
+ 	return result;
+ }
+ 
++static int rh_wal_builtin_bitmap_dirty_verifier(
++		const struct rh_wal_action_verifier_context *context)
++{
++	const struct rh_wal_preimage *preimage;
++	size_t i;
++	int found = 0;
++
++	if (!context || !context->preimage ||
++		context->version != RH_WAL_ACTION_VERIFIER_ABI_VERSION) {
++		errno = EINVAL;
++		return -1;
++	}
++	preimage = context->preimage;
++	if (!preimage->wal || !preimage->internal_entries ||
++		preimage->entry_count != context->entry_count) {
++		errno = EINVAL;
++		return -1;
++	}
++	for (i = 0; i < context->entry_count; i++) {
++		uint32_t action_id = context->entries[i].action_id;
++
++		if (action_id == RH_WRITE_ACTION_ID(RH_WRITE_BITMAP_CLUSTER) ||
++			action_id == RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_SET) ||
++			action_id == RH_WRITE_ACTION_ID(RH_WRITE_VOLUME_DIRTY_CLEAR))
++			found = 1;
++	}
++	if (!found) {
++		errno = EINVAL;
++		return -1;
++	}
++	return rh_wal_validate_legacy_recovery_targets(preimage->wal,
++		preimage->internal_entries, preimage->entry_count);
++}
++
++static int rh_wal_validate_recovery_targets(struct rh_wal *wal,
++		struct rh_wal_entry *entries, size_t count)
++{
++	struct rh_wal_recovery_entry_view *views = NULL;
++	const unsigned char **old_payloads = NULL;
++	struct rh_writer preimage;
++	size_t i;
++	int preimage_initialized = 0;
++	int result = -1;
++
++	if (!wal || !entries || !count) {
++		errno = EINVAL;
++		return -1;
++	}
++	/*
++	 * Every transaction, including the existing bitmap/dirty families, enters
++	 * the same exact-ID registry.  There is no digest-only or privileged
++	 * special-case bypass.
++	 */
++	views = calloc(count, sizeof(*views));
++	old_payloads = calloc(count, sizeof(*old_payloads));
++	if (!views || !old_payloads) {
++		if (!errno)
++			errno = ENOMEM;
++		goto out;
++	}
++	for (i = 0; i < count; i++) {
++		views[i].ordinal = i + 1U;
++		views[i].action_id = entries[i].kind;
++		views[i].target_offset = entries[i].target_offset;
++		views[i].length = entries[i].length;
++		memcpy(views[i].old_hash, entries[i].old_hash,
++			sizeof(views[i].old_hash));
++		memcpy(views[i].new_hash, entries[i].new_hash,
++			sizeof(views[i].new_hash));
++		views[i].target = entries[i].target;
++		old_payloads[i] = entries[i].old;
++	}
++	if (rh_wal_view_writer_init(&preimage, wal->writer, entries, count, 1))
++		goto out;
++	preimage_initialized = 1;
++	result = rh_wal_dispatch_action_verifiers(wal, &preimage, views,
++		old_payloads, entries, count);
++out:
++	if (preimage_initialized)
++		rh_wal_view_writer_destroy(&preimage);
++	free(old_payloads);
++	free(views);
++	return result;
++}
++
+ static int rh_wal_dirty_primary_entry_valid(const struct rh_wal *wal,
+ 		const struct rh_wal_entry *entry, int set_dirty)
+ {
+--- a/src/roothealth_wal.h
++++ b/src/roothealth_wal.h
+@@ -12,6 +12,7 @@
+ #define RH_WAL_MAX_RUNS 128U
+ #define RH_WAL_SEMANTIC_SEAL_VERSION 1U
+ #define RH_WAL_DESCRIPTOR_PLAN_BYTES 0x1e0U
++#define RH_WAL_ACTION_VERIFIER_ABI_VERSION 1U
+ 
+ enum rh_wal_state {
+ 	RH_WAL_EMPTY = 0,
+@@ -55,6 +56,56 @@
+ 	uint64_t length;
+ };
+ 
++/*
++ * Immutable recovery view supplied to a semantic action verifier.  Bounded
++ * accessors below expose the exact old payload and the whole transaction's
++ * virtual pre-transaction filesystem; neither underlying writer nor payload
++ * pointer is exposed to callback code.
++ *
++ * A verifier must derive every location and semantic field again from that
++ * virtual filesystem and reproduce evidence_version, evidence_generation,
++ * evidence_hash, staged_view_hash, and both semantic hashes.  Comparing the
++ * stored digests alone is never sufficient.
++ */
++struct rh_wal_recovery_entry_view {
++	uint64_t ordinal;
++	uint32_t action_id;
++	uint32_t reserved32;
++	uint64_t target_offset;
++	uint64_t length;
++	unsigned char old_hash[32];
++	unsigned char new_hash[32];
++	struct rh_write_semantic_target target;
++};
++
++struct rh_wal_preimage;
++
++struct rh_wal_action_verifier_context {
++	uint32_t version;
++	uint32_t action_id;
++	enum rh_wal_transaction_kind transaction_kind;
++	enum rh_wal_state state;
++	uint64_t generation;
++	uint64_t volume_serial;
++	uint64_t journal_record;
++	uint16_t journal_sequence;
++	uint16_t reserved16;
++	uint32_t reserved32;
++	unsigned char journal_uuid[16];
++	unsigned char transaction_uuid[16];
++	unsigned char plan_hash[32];
++	const struct rh_wal_preimage *preimage;
++	const struct rh_wal_recovery_entry_view *entries;
++	size_t entry_count;
++};
++
++typedef int (*rh_wal_action_verifier_fn)(
++		const struct rh_wal_action_verifier_context *context);
++
++struct rh_wal_action_verifier_slot {
++	rh_wal_action_verifier_fn verify;
++};
++
+ struct rh_wal {
+ 	struct rh_writer *writer;
+ 	struct rh_wal_observation *observation;
+@@ -79,6 +130,9 @@
+ 	int degraded_slot;
+ 	struct rh_wal_planned_entry *planned_entries;
+ 	size_t planned_count;
++	/* Indexed by stable on-disk action ID; index zero is never used. */
++	struct rh_wal_action_verifier_slot
++		action_verifiers[RH_WRITE_KIND_COUNT + 1U];
+ };
+ 
+ int rh_uuid_parse(const char *text, unsigned char output[16]);
+@@ -102,4 +156,27 @@
+ int rh_wal_validate_mft_operation_pairs(const struct rh_wal *wal,
+ 		const struct rh_write_operation *operations, size_t count);
+ 
++/*
++ * Register one exact stable action ID after rh_wal_locate_and_validate().
++ * Duplicate registration is rejected.  Native IDs 5/6 intentionally remain
++ * disabled until their namespace/free-slot evidence ABI and verifier are
++ * frozen; no caller can opt them into recovery through this generic API.
++ */
++int rh_wal_register_action_verifier(struct rh_wal *wal, uint32_t action_id,
++		rh_wal_action_verifier_fn verify);
++uint64_t rh_wal_preimage_size(const struct rh_wal_preimage *preimage);
++int rh_wal_preimage_read(const struct rh_wal_preimage *preimage,
++		uint64_t offset, size_t length, void *buffer);
++int rh_wal_entry_old_read(const struct rh_wal_action_verifier_context *context,
++		uint64_t ordinal, uint64_t relative_offset, size_t length,
++		void *buffer);
++
++#ifdef ROOTHEALTH_WAL_TEST_HOOKS
++void rh_wal_test_install_builtin_action_verifiers(struct rh_wal *wal);
++int rh_wal_test_dispatch_action_verifiers(struct rh_wal *wal,
++		struct rh_writer *preimage,
++		const struct rh_wal_recovery_entry_view *entries,
++		const unsigned char *const *old_payloads, size_t count);
++#endif
++
+ #endif

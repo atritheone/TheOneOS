@@ -1,0 +1,148 @@
+{
+  "format": 1,
+  "component": "python",
+  "release": "3.13.5-t1os.1",
+  "upstream": {
+    "cpython": {
+      "version": "3.13.5",
+      "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tgz",
+      "role": "supplied pristine source evidence; not the compression named by the Portable Python manifest",
+      "path": "resource/python/pythonofficial/Python-3.13.5.tgz",
+      "size": 29450781,
+      "sha256": "e6190f52699b534ee203d9f417bdbca05a92f23e35c19c691a50ed2942835385",
+      "pristine_getpath_sha256": "7483bff1382baa27ff1db8dd4b237bc3aa58e64e28996ddab5d83a5e8b642576"
+    },
+    "cpython_declared_portable_build_input": {
+      "version": "3.13.5",
+      "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tar.xz",
+      "filename": "Python-3.13.5.tar.xz",
+      "size": 22856016,
+      "sha256": "93e583f243454e6e9e4588ca2c2662206ad961659863277afcdb96801647d640",
+      "present_in_resource_python": false,
+      "sigstore": {
+        "url": "https://www.python.org/ftp/python/3.13.5/Python-3.13.5.tar.xz.sigstore",
+        "size": 5151,
+        "sha256": "610fbc2236eabeec9a6285360c65643d00b09579ae0b64eefde0e529a127478e",
+        "present_in_resource_python": false
+      }
+    },
+    "portable_python_tool": {
+      "version": "1.9.9",
+      "filename": "portable_python-1.9.9-py3-none-any.whl",
+      "url": "https://files.pythonhosted.org/packages/b6/18/39f14ddbc655cd7851b60df31f8391f25f8e9e521d39fba729e8f17587d3/portable_python-1.9.9-py3-none-any.whl",
+      "size": 41589,
+      "sha256": "38a93e5cd1e2e90a7954dcce72d19dd75b1ad62c7f9d54a845caf6ee4e92bdaf",
+      "transitive_dependencies_recovered": false,
+      "declared_dependency_ranges": [
+        "click~=8.0",
+        "pyyaml~=6.0",
+        "requests<3.0",
+        "runez~=5.0",
+        "urllib3~=1.26"
+      ]
+    },
+    "portable_runtime": {
+      "path": "resource/python/portable python/portable python 3.13.5 linux x86_64.tar.gz",
+      "size": 90218112,
+      "sha256": "b3c0af3cbe8a6e93f3d62ba1b72daf238b14bb6b3265f48ca2811ba5727d30a6",
+      "manifest_sha256": "21ffe754914bdc397bf983f16392f1782b7107b04efcb7c956f3d4574a2bab47",
+      "inspection_report_sha256": "638c92187708c3249a0041daddf7b690473a7aa1502162b59a345b4581ecf772",
+      "original_python_sha256": "5367d01d02ebdd19424e495637a1c1f84f4918d64cb9410675e2b3fbdc8ec6f4",
+      "topology": {
+        "regular_files": 2411,
+        "regular_bytes": 216113591,
+        "directories": 217,
+        "symbolic_links": 8,
+        "hard_links": 0
+      }
+    }
+  },
+  "legacy": {
+    "portable_extracted": "resource/python/portable python/3.13.5",
+    "duplicate_portable_extracted": "resource/python/pythonofficial/3.13.5",
+    "dirty_cpython_tree": "resource/python/pythonofficial/Python-3.13.5",
+    "dirty_getpath": {
+      "path": "Modules/getpath.c",
+      "size": 28339,
+      "sha256": "b03a1e38444b6536a029fa834ba843d880a882de60b199d3f3abc2bc018621c0",
+      "historical_patch": "source/python/patches/historical/0001-force-the-one-python-prefix.patch",
+      "historical_patch_size": 1348,
+      "historical_patch_sha256": "414ff70d93b4080d9dbc01c041fa322a747ac40a417bc56a1fdf4e19cd48556b"
+    },
+    "dirty_generated_files": {
+      "count": 453,
+      "bytes": 147862124,
+      "sha256": "91e3863644f85b6847378fa78400fe1f6538a537cde458c32e8e5624e58f4448"
+    },
+    "readline_stage": "resource/python/T1OS python/python 3.13.5 patched (readline)/software/python",
+    "final_runtime": "resource/python/T1OS python/python 3.13.5 patched (readline, ncurses, and ae time)",
+    "final_python_sha256": "a4b16fad406e91e5a4c795b54e3eaa8f5a06e6b6f1a9fa462fb02a3a52470763",
+    "pre_audit_final_tree": {
+      "algorithm": "legacy-path-size-sha256-v1",
+      "files": 2421,
+      "bytes": 216244322,
+      "sha256": "71349c3a6ace2251f5ccececa102a10581fcecfa80ccb98b5e067ffad8f9dd99",
+      "includes_volatile_bytecode": true
+    },
+    "normalized_stage_locks": {
+      "portable": {
+        "algorithm": "t1os-tree-sha256-v1",
+        "files": 1467,
+        "bytes": 201057698,
+        "sha256": "7c14cb9b78c7f1985b203f5ee914d84e8d40a9079e9b67ca259193cfbd8a06a4",
+        "generated_bytecode_excluded": true
+      },
+      "readline": {
+        "algorithm": "t1os-tree-sha256-v1",
+        "files": 1475,
+        "bytes": 201183555,
+        "sha256": "f13011d0188cc8748fcb9028a52bed9b24005af7bd4d92bea58fb26008c7a690",
+        "generated_bytecode_excluded": true
+      },
+      "final": {
+        "algorithm": "t1os-tree-sha256-v1",
+        "files": 1476,
+        "bytes": 201185143,
+        "sha256": "b0d05a7c7b93e9571970b2722ca499db4f0147dff918fca2c67a4a59cb511200",
+        "generated_bytecode_excluded": true
+      }
+    },
+    "native_catalogue": "resource/python/T1OS python/catalogues/T1OS 0.2/python",
+    "copy_script": "resource/python/T1OS python/catalogues/copylibs.sh",
+    "copy_script_sha256": "edd184e193d6107a533d88385bab1c8a3087cb577bd77d6b565df6f9e054d2bd",
+    "freetype_tree": "resource/python/freetype",
+    "sitecustomize": "resource/python/T1OS python/python 3.13.5 patched (readline, ncurses, and ae time)/lib/python3.13/site-packages/sitecustomize.py",
+    "sitecustomize_sha256": "aa7d7cb4980a979097d1919719e821ebb0395d33b9b5cb2e5aca622f33445397",
+    "native_catalogue_facts": {
+      "files": 90,
+      "bytes": 45956772,
+      "elf_files": 89,
+      "needed_edges": 237,
+      "unresolved_needed": 0,
+      "copy_script_declared_names": 41,
+      "undeclared_files": 49
+    },
+    "historical_relocation": {
+      "patchelf_version": null,
+      "command_sequence": null,
+      "byte_reproduction_possible": false
+    }
+  },
+  "unmodified_glibc_base": {
+    "loader": {
+      "path": "resource/python/python dependencies/ld-linux-x86-64.so.2",
+      "size": 225600,
+      "sha256": "18f7a1256e56b344abb380cbb8b9d3b49ddfdaedf482d2daa3b5a595e1133196"
+    },
+    "libc": {
+      "path": "resource/python/python dependencies/libc.so.6",
+      "size": 2003408,
+      "sha256": "f7314d08154932e809426bce4ff0cc43762ad224123107f147732c1ee671ced5"
+    },
+    "libm": {
+      "path": "resource/python/python dependencies/libm.so.6",
+      "size": 977112,
+      "sha256": "759506ba4ed410f7b926704547db1bd31896ffb4f1a79d6b75884af239bcf21b"
+    }
+  }
+}

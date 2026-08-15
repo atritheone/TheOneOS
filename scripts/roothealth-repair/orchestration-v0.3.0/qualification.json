@@ -1,0 +1,98 @@
+{
+  "schema": "roothealth-orchestration-qualification-v1",
+  "status": "PROPOSED_FAIL_CLOSED",
+  "version": "0.3.0",
+  "date": "2026-08-09",
+  "baseline": {
+    "description": "frozen copy of /var/tmp/roothealth-repair-dev.ntfstooling",
+    "file_count": 512,
+    "manifest_sha256": "7d70fb2cf395012747e669a2708502ac580f9aab5bb65289eb76ddd2cabefacc"
+  },
+  "artifacts": {
+    "roothealth-v0.3.0-proposal.patch": "61876b5d6bdc5935beade94ee337679b90634e743f77ef5bfd1ddb0bc361f384",
+    "complete-source.sha256": "752dfbc8d05e3872ed5ac36a14e79de3ca7a7c59f66ecc318ccbcb869527e0dc",
+    "roothealth-linked-inputs.manifest": "18da9a4a9647395e2b95a939d9934957ae10a1cf1b04e7aa987382da9727f2ba",
+    "roothealth-linked-objects.tsv": "094e7ae9e0bbe4ae9f34bbb400b895c4025414693a356f96ad3c1b549a506863",
+    "roothealth.link.map": "f7502c55b40232338ff2387b761516bb22a986f75951ec4ffe5233fb91293037"
+  },
+  "workspace_inputs": {
+    "scripts/roothealth-repair/validate-report.py": "8956367e9f9fe436ad458a56c30a851682867ec4a6b246cd0ad1d1f89e2c16c3",
+    "resource/entry/roothealth/REPAIR-CONTRACT.md": "674d3b112536e45bbc798cce5dce3209263d7a60def174a540009c95f38668f7"
+  },
+  "changed_files": {
+    "src/Makefile.am": "98e5decc31ddcefae006bf2bb078691332de10ba26c8e803b326746546fbd9f2",
+    "src/roothealth_repair.h": "99cc4fce307e9623191e7f39c751d8687d1c8a7bc1326aaa4e1250a56094a410",
+    "src/roothealth_repair_main.c": "de004d4d1cc974f5da242f65ca0c359b7c0083ac0f41d36a79654e197693c6fb",
+    "src/roothealth_orchestrator.c": "4babbfe502d5b18bf1db6015d97227145ee66465cdf18b8b45db4570e5428f93",
+    "src/roothealth_orchestrator.h": "09254b7446d2082501dbdfc154d79d95ce450a20201c0183df6d18c2fc881b21",
+    "src/roothealth_format3.c": "3ea62d640dd108b5efdd2f906694d84d402f17272f1114505e509118ae5d1e46",
+    "src/roothealth_format3.h": "ea1b9ecdbf5b6e3fdf62ef33a38430e11810dd559064f648201477bfedf419fe",
+    "src/roothealth_report.c": "d3a79d9a7ab82a5764025efb5b5c56b4b07f85c47d18549add64f756459ac6e3",
+    "src/roothealth_report.h": "57ecf6489adad9fd0a02406a77be67461b26361b582025bd4748db3e91b5c126",
+    "src/roothealth_write.c": "ec3c8207ab5a6ae9642ccac398f0f06350e2f8751ecbd371db5b18184d724ee0",
+    "src/roothealth_write.h": "d4f6275a3358f2a7e0a08eb6083ffa7cda8ce0b8adf0c8fcdc88d9bfb823e7e3",
+    "tests/check_roothealth_format3_literals.py": "321516569c8f1890c8ba5252077a8a02138e044a53c079144567d03a27e28ce0",
+    "tests/roothealth_link_manifest.py": "9e610f396ea7110a811111dbce655ba9e00381333887e2dadd058996e1ef9afc",
+    "tests/roothealth_orchestration_test.sh": "6e8572861d813f6732df31f2565c9e799b2754a9ba1447e55ca41403922e16e6",
+    "tests/roothealth_report_test.c": "a71699ea7e35bf802aac30e2f69c2f9929d9c9ba84d8d9614eb547859a7e4323",
+    "tests/roothealth_format3_test.c": "899b22f85c12ea87793a7091227be65edd50a5ab89316018636bec7cc6e07cb0",
+    "tests/roothealth_rescan_packet_test.c": "6842100bb77a049b9463755c7987eed4233699551672d5794c8c31187e336ae2"
+  },
+  "clean_build": {
+    "unstripped_sha256": "c16898170dac2e690392ee7ff4ee87f7091bca2b44df79e8961037234fed3df0",
+    "stripped_sha256": "5e37ac0688bcbbc154d12e57e2a4a25b2e0520e8f35e05565c08d189bbb3d132",
+    "build_id": "d765b43c8b665f94a2c8ff22e52705e481cb1c3b",
+    "elf": "ELF64_X86_64_PIE",
+    "gnu_stack_executable": false,
+    "relro": true,
+    "bind_now": true,
+    "needed": [
+      "libc.so.6"
+    ],
+    "glibc_versions": [
+      "GLIBC_2.2.5",
+      "GLIBC_2.3",
+      "GLIBC_2.3.4",
+      "GLIBC_2.4",
+      "GLIBC_2.7",
+      "GLIBC_2.14",
+      "GLIBC_2.17",
+      "GLIBC_2.25",
+      "GLIBC_2.33",
+      "GLIBC_2.34"
+    ],
+    "linked_translation_units": 49,
+    "linked_objects": 49,
+    "reproducible_clean_runs": 2
+  },
+  "tests": {
+    "format3_literals_checked": 96,
+    "format3_literal_mismatches": 0,
+    "cli_cases": 6,
+    "report_strict_cases": 12,
+    "report_sanitized_cases": 12,
+    "rescan_packet_positive": 6,
+    "rescan_packet_negative": 12,
+    "native_cases": 4,
+    "forced_format_failures": 1,
+    "full_report_cases": 7,
+    "unbound_check_replay_rejected": true,
+    "whole_target_hash_unchanged": true,
+    "git_apply_check_whitespace_error_all": true
+  },
+  "safety": {
+    "production_binary_in_package": false,
+    "production_source_integrated": false,
+    "target_commit_primitive_reachable": false,
+    "repair_success_claimed": false,
+    "unsupported_repairs_exit_fail_closed": true
+  },
+  "release_blockers": [
+    "complete checker and coverage authority are not linked",
+    "non-empty canonical RHTXN3 transaction and rescan evidence are not emitted",
+    "degraded and non-empty WAL recovery/action orchestration is not enabled",
+    "primary-boot staged identity and journal lookup are not enabled",
+    "native ID5/ID6 recovery is not release-qualified in this orchestration",
+    "post-commit child failure, timeout, precedence, and final-report orchestration remain to be integrated and power-cut qualified"
+  ]
+}

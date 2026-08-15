@@ -1,0 +1,62 @@
+
+
+boot
+
+qemu-system-x86_64 \
+  -m 512M \
+  -kernel T1OSkernel \
+  -initrd initramfs.cpio.gz \
+  -append "console=ttyS0 root=/dev/ram0 rw init=/init" \
+  -nographic
+
+
+mnt
+
+qemu-system-x86_64 \
+  -m 512M \
+  -kernel T1OSkernel \
+  -initrd initramfs.cpio.gz \
+  -drive file=storage.img,format=raw,if=virtio \
+  -append "console=ttyS0 root=/dev/vda rw init=/init" \
+  -nographic
+
+
+quiet
+
+qemu-system-x86_64 \
+  -m 512M \
+  -kernel T1OSkernel \
+  -initrd initramfs.cpio.gz \
+  -drive file=storage.img,format=raw,if=virtio \
+  -append "console=ttyS0 root=/dev/vda rw init=/init quiet loglevel=0" \
+  -nographic \
+  -monitor none \
+  -serial stdio \
+  2>/dev/null
+  
+
+vga 
+
+qemu-system-x86_64 \
+  -m 512M \
+  -kernel T1OSkernel \
+  -initrd initramfs.cpio.gz \
+  -drive file=storage.img,format=raw,if=virtio \
+  -append "root=/dev/vda rw init=/init console=tty0 quiet loglevel=0" \
+  -vga std \
+  -display gtk
+  
+
+networking
+
+qemu-system-x86_64 \
+  -m 512M \
+  -kernel image/T1OSkernel0.12 \
+  -initrd image/initramfs.cpio.gz \
+  -drive file=image/storage.img,format=raw,if=virtio \
+  -nic user,model=virtio \
+  -append "console=ttyS0 root=/dev/vda rw init=/init quiet loglevel=0" \
+  -nographic \
+  -monitor none \
+  -serial stdio \
+  2>/dev/null

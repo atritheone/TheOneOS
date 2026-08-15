@@ -1,0 +1,112 @@
+{
+  "format": 1,
+  "python_version": "3.13.5",
+  "active_t1os_sources": {
+    "globs": [
+      "source/build software/**/*.py",
+      "source/boot/**/*.py",
+      "source/software/virtualbox/guestadditions.py"
+    ],
+    "expected_files": 37
+  },
+  "direct_standard_library": [
+    "array",
+    "atexit",
+    "base64",
+    "binascii",
+    "bisect",
+    "codecs",
+    "collections",
+    "contextlib",
+    "ctypes",
+    "datetime",
+    "decimal",
+    "difflib",
+    "errno",
+    "faulthandler",
+    "fcntl",
+    "fnmatch",
+    "functools",
+    "getpass",
+    "glob",
+    "hashlib",
+    "heapq",
+    "hmac",
+    "io",
+    "ipaddress",
+    "json",
+    "math",
+    "mimetypes",
+    "mmap",
+    "os",
+    "pathlib",
+    "queue",
+    "random",
+    "re",
+    "secrets",
+    "select",
+    "selectors",
+    "shlex",
+    "shutil",
+    "signal",
+    "socket",
+    "ssl",
+    "stat",
+    "struct",
+    "subprocess",
+    "sys",
+    "tempfile",
+    "termios",
+    "threading",
+    "time",
+    "traceback",
+    "tty",
+    "urllib",
+    "uuid",
+    "warnings",
+    "zipfile",
+    "zlib",
+    "zoneinfo"
+  ],
+  "supported_optional_standard_library": [
+    "asyncio",
+    "bz2",
+    "curses",
+    "lzma",
+    "multiprocessing",
+    "readline",
+    "sqlite3",
+    "urllib.request"
+  ],
+  "required_system_packages": [
+    "freetype",
+    "pyroute2"
+  ],
+  "external_abi_packages": [
+    {
+      "name": "PIL",
+      "version": "12.3.0",
+      "path": "source/catalogue/image"
+    }
+  ],
+  "intentionally_absent_modules": [
+    "_curses_panel",
+    "_dbm",
+    "_gdbm",
+    "_tkinter",
+    "_uuid",
+    "curses.panel",
+    "dbm.gnu",
+    "dbm.ndbm",
+    "ensurepip",
+    "idlelib",
+    "pip",
+    "turtle",
+    "turtledemo",
+    "venv"
+  ],
+  "required_fallback_behaviour": [
+    "uuid.UUID",
+    "uuid.uuid4"
+  ]
+}
