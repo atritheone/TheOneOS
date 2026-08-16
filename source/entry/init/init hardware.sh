@@ -1522,8 +1522,11 @@ if [ -n "$angel_shutdown_health_action" ]; then
             "$busybox" poweroff -f
             while :; do "$busybox" sleep 60; done
         fi
-        boot_status 'The unmounted shutdown health gate passed. I will continue the requested restart.'
+        boot_status 'The unmounted shutdown health gate passed. I will restart through firmware boot order now.'
         angel_shutdown_health_action=
+        "$busybox" sync
+        "$busybox" reboot -f
+        while :; do "$busybox" sleep 60; done
     else
         rescue "The unmounted shutdown health gate failed with RootHealth code $roothealth_refusal_code."
     fi

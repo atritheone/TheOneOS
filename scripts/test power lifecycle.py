@@ -174,6 +174,7 @@ def main():
     expanse_path = root / "source/build software/expanse/expanse.py"
     brick_path = root / "source/build software/brick/brick.py"
     windowserver_path = root / "source/build software/windows/windowserver.py"
+    init_hardware_path = root / "source/entry/init/init hardware.sh"
 
     sources = {
         "animation": animation_path.read_text(encoding="utf-8"),
@@ -182,6 +183,7 @@ def main():
         "expanse": expanse_path.read_text(encoding="utf-8"),
         "brick": brick_path.read_text(encoding="utf-8"),
         "windowserver": windowserver_path.read_text(encoding="utf-8"),
+        "init_hardware": init_hardware_path.read_text(encoding="utf-8"),
     }
     trees = {
         name: ast.parse(source, filename=str({
@@ -193,6 +195,7 @@ def main():
             "windowserver": windowserver_path,
         }[name]))
         for name, source in sources.items()
+        if name != "init_hardware"
     }
 
     testconsoleoutputrecovery(sources["goddess"], trees["goddess"])
@@ -332,6 +335,27 @@ def main():
         "I armed the unmounted RootHealth shutdown gate",
     ):
         require(sources["goddess"], text, "GODDESS shutdown coordinator")
+
+    restart_gate = sources["init_hardware"][
+        sources["init_hardware"].index(
+            'if [ -n "$angel_shutdown_health_action" ]; then'
+        ):
+        sources["init_hardware"].index(
+            'if [ "$recovery" = 1 ]; then'
+        )
+    ]
+    for text in (
+        "angel_clear_shutdown_health_request",
+        "I will restart through firmware boot order now.",
+        '"$busybox" sync',
+        '"$busybox" reboot -f',
+    ):
+        require(restart_gate, text, "initramfs restart completion")
+    forbid(
+        restart_gate,
+        "continue requested restart",
+        "initramfs restart completion",
+    )
 
     goddesspackage = types.ModuleType("GODDESS")
     goddessmodule = types.ModuleType("GODDESS.GODDESS")

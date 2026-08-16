@@ -4032,9 +4032,10 @@ def main():
 
         writemarker(priorboot)
 
-        if not markeractive():
+        if markeractive():
             raise SystemExit(
-                "valid prior-boot firmware recovery marker was not activated"
+                "prior-boot graphics state incorrectly disabled native GPU "
+                "discovery"
             )
 
         writemarker("")
@@ -4074,10 +4075,9 @@ def main():
 
         writemarker(priorboot)
 
-        if not driverpredicate(recoverypath, bootidpath):
+        if driverpredicate(recoverypath, bootidpath):
             raise SystemExit(
-                "DriverServer did not honor a correlated prior-boot recovery "
-                "marker"
+                "DriverServer honored obsolete prior-boot framebuffer state"
             )
 
     firmwarepin = loadsourcefunctions(
@@ -4787,7 +4787,10 @@ def main():
         "'replacing owner with CPU-rendered KMS before animation'",
         "'boot-animation-client'",
         "'continuing directly to lock screen'",
-        "'firmware-recovery-reboot'",
+        "'gpu-required-retry'",
+        "def graphicsaccelerationrequired():",
+        "def discardlegacyfirmwaregraphicsrecovery():",
+        "persistent next-boot framebuffer recovery is disabled",
         "all driver reinitialization attempts",
         "accelerated lock-screen presentation failed after ",
         "'same-boot-cpu-kms-login'",
@@ -4821,7 +4824,6 @@ def main():
         "def waitdisplayconsolemodehelper(",
         "def firmwaregraphicsrecoveryrequested():",
         "def pinfirmwarerecoveryboot(root=EFIVARFSROOT):",
-        "'firmware-recovery-reboot-unpinned'",
         "f'BootCurrent-{EFIVARGLOBALGUID}'",
         "f'BootNext-{EFIVARGLOBALGUID}'",
         "payload = struct.pack('<IH', 7, current)",
@@ -4835,8 +4837,6 @@ def main():
         "'--graphics-hang-capture'",
         "'--graphics-kernel-capture'",
         "WINDOWSERVERSOFTWARELOG",
-        "'firmware-recovery-reboot'",
-        "rebooting once with native display drivers excluded",
         "def visibleframebufferrecoveryretry(",
         "'visible-framebuffer-retry'",
         "mirrordisplayconsole(force=True)",

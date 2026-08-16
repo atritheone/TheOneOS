@@ -145,6 +145,32 @@ def normaliseservicesettings():
             os.close(descriptor)
 
 
+def normalisedesktopsettings():
+
+    """Repair persistent application state before uid 1000 launches."""
+
+    settingsroot = '/the one/settings'
+    for relative in (
+        'array',
+        'brick',
+        'chromium',
+        'expanse',
+        'operations centre',
+    ):
+        path = os.path.join(settingsroot, relative)
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+            getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            _normaliseownedtree(
+                descriptor, directorymode=0o700, filemode=0o600)
+        finally:
+            os.close(descriptor)
+
+
 def normaliseexistingdesktopownership(masterfile='/the one/master/master.txt'):
 
     """Repair safe ownership boundaries on upgraded installations."""
@@ -1495,6 +1521,18 @@ def kernelcommandlineoption(option):
         return False
 
 
+def graphicsaccelerationrequired():
+
+    """Return true for every ordinary boot; CPU graphics must be explicit."""
+
+    requested = str(os.environ.get('T1OS_GRAPHICS', '')).strip().lower()
+    return not (
+        kernelcommandlineoption('t1os.graphics=framebuffer')
+        or kernelcommandlineoption('t1os.graphics=cpu')
+        or requested in ('framebuffer', 'cpu')
+    )
+
+
 def booleanoption(value):
 
     if isinstance(value, bool):
@@ -2270,7 +2308,7 @@ EARLYSYSTEMOPS = (
 )
 PRESTARTOPS = [
     ('network', NETWORKSCRIPT, 'behind'),
-    ('Python', PYTHONSCRIPT, 'behind'),
+    ('python', PYTHONSCRIPT, 'behind'),
     ('input server', INPUTSERVERSCRIPT, 'behind'),
     ('reign', REIGNSCRIPT, 'behind'),
     ('audio server', AUDIOSERVERSCRIPT, 'behind'),
@@ -2289,7 +2327,7 @@ SERVICESECURITYPROFILES = {
     'media': 'video',
     'driver server': 'driver',
     'network': 'network',
-    'Python': 'python',
+    'python': 'python',
     'input server': 'input',
     'reign': 'reign',
     'audio server': 'audio',
@@ -3381,10 +3419,7 @@ def windowserverenvironment(backend):
 
         if (
             backend == 'framebuffer'
-            and (
-                firmwaregraphicsrecoveryrequested()
-                or kernelcommandlineoption('t1os.graphics=framebuffer')
-            )
+            and kernelcommandlineoption('t1os.graphics=framebuffer')
         ):
             environment['T1OS_FIRMWARE_FRAMEBUFFER_BOOT'] = '1'
 
@@ -4051,29 +4086,44 @@ def currentbootid(paths=BOOTIDPATHS):
 
 def firmwaregraphicsrecoveryrequested():
 
+    # Compatibility query for older diagnostics. Persistent graphics state is
+    # deliberately non-authoritative: every ordinary boot probes the GPU first.
+    return False
+
+
+def discardlegacyfirmwaregraphicsrecovery():
+
+    """Remove obsolete next-boot framebuffer state left by an older build."""
+
     try:
-        with open(GRAPHICSRECOVERYBOOT, 'r', encoding='utf-8') as stream:
-            state = json.load(stream)
-    except (OSError, ValueError, TypeError):
+        os.unlink(GRAPHICSRECOVERYBOOT)
+    except FileNotFoundError:
+        return False
+    except OSError as error:
+        angelprint(
+            f'I could not discard obsolete graphics recovery state. {error}',
+            flush=True,
+        )
         return False
 
-    requested = bool(
-        isinstance(state, dict)
-        and state.get('format') == 1
-        and state.get('mode') == 'firmware-framebuffer'
-        and state.get('state') == 'requested'
+    try:
+        directory = os.open(
+            os.path.dirname(GRAPHICSRECOVERYBOOT),
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
+        )
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    except OSError:
+        pass
+
+    angelprint(
+        'I discarded obsolete next-boot framebuffer state; this boot will '
+        'start with native GPU graphics.',
+        flush=True,
     )
-
-    if not requested:
-        return False
-
-    currentboot = currentbootid()
-    markerboot = normalisebootid(state.get('boot_id', ''))
-
-    # A marker written during this boot requests the *next* boot and must not
-    # make a same-boot stale EFI aperture authoritative. Both IDs must be
-    # present and valid; an uncorrelated marker fails closed.
-    return bool(currentboot and markerboot and markerboot != currentboot)
+    return True
 
 
 def clearfirmwaregraphicsrecovery():
@@ -4265,143 +4315,15 @@ def pinfirmwarerecoveryboot(root=EFIVARFSROOT):
 
 def requestfirmwaregraphicsrecovery(reason, attempt):
 
-    existing = None
-
-    try:
-        with open(GRAPHICSRECOVERYBOOT, 'r', encoding='utf-8') as stream:
-            candidate = json.load(stream)
-
-        if (
-            isinstance(candidate, dict)
-            and candidate.get('mode') == 'firmware-framebuffer'
-            and candidate.get('state') == 'requested'
-        ):
-            existing = candidate
-    except (OSError, ValueError, TypeError):
-        pass
-
-    bootid = currentbootid()
-
-    if not bootid:
-        recordgraphicsrecovery(
-            'framebuffer',
-            attempt,
-            'firmware-recovery-reboot-failed',
-            f'{reason}; current boot identity is unavailable, so a '
-            f'next-boot recovery marker cannot be made authoritative',
-            capturegpu=False,
-        )
-        return False
-
-    # A marker from an earlier boot selects the independent firmware backend
-    # for this boot. Never turn failure of that recovery backend into another
-    # automatic reboot loop. A marker written during this same boot may be
-    # retried because BootNext or the reboot syscall can fail transiently.
-    if existing is not None and (
-        normalisebootid(existing.get('boot_id', '')) != bootid
-    ):
-        return False
-
-    try:
-        graphicsdevices = [
-            {'pci_bdf': bdf, 'driver': driver}
-            for bdf, driver in sorted(_connectedgraphicsdevices())
-        ]
-    except Exception:
-        graphicsdevices = []
-
-    payload = {
-        'format': 1,
-        'mode': 'firmware-framebuffer',
-        'state': 'requested',
-        'timestamp': time.time(),
-        'attempt': int(attempt),
-        'reason': str(reason),
-        'boot_id': bootid,
-        'kernel_release': os.uname().release,
-        'graphics_devices': graphicsdevices,
-    }
-    parent = os.path.dirname(GRAPHICSRECOVERYBOOT)
-    temporary = f'{GRAPHICSRECOVERYBOOT}.{os.getpid()}.new'
-
-    try:
-        os.makedirs(parent, mode=0o700, exist_ok=True)
-
-        with open(temporary, 'w', encoding='utf-8') as stream:
-            json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
-            stream.write('\n')
-            stream.flush()
-            os.fsync(stream.fileno())
-
-        os.replace(temporary, GRAPHICSRECOVERYBOOT)
-        directory = os.open(
-            parent,
-            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0),
-        )
-
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-
-        os.sync()
-    except OSError as error:
-        try:
-            os.unlink(temporary)
-        except OSError:
-            pass
-
-        recordgraphicsrecovery(
-            'framebuffer',
-            attempt,
-            'firmware-recovery-reboot-failed',
-            f'could not persist recovery marker: {error}',
-            capturegpu=False,
-        )
-        return False
-
-    pinned, pindetail = pinfirmwarerecoveryboot()
-
-    if not pinned:
-        recordgraphicsrecovery(
-            'framebuffer',
-            attempt,
-            'firmware-recovery-reboot-unpinned',
-            f'{reason}; recovery marker retained but reboot suppressed because '
-            f'BootNext could not be verified: {pindetail}',
-            capturegpu=False,
-        )
-        angelprint(
-            'I could not direct firmware recovery back to this USB boot because '
-            f'{pindetail}. I will keep recovery within the current boot.',
-            flush=True,
-        )
-        return False
-
+    # Keep recovery within this boot. Never write BootNext and never persist a
+    # decision which can make a later boot skip native GPU discovery.
     recordgraphicsrecovery(
-        'framebuffer',
+        'opengl',
         attempt,
-        'firmware-recovery-reboot',
-        f'{reason}; {pindetail}; rebooting once with native display drivers excluded',
+        'gpu-recovery-contained',
+        f'{reason}; persistent next-boot framebuffer recovery is disabled',
         capturegpu=False,
     )
-    angelprint(
-        'I am restarting into firmware framebuffer recovery so I can restore '
-        'the lock screen.',
-        flush=True,
-    )
-
-    try:
-        kernelpower('reboot')
-    except BaseException as error:
-        recordgraphicsrecovery(
-            'framebuffer',
-            attempt,
-            'firmware-recovery-reboot-failed',
-            f'{type(error).__name__}: {error}',
-            capturegpu=False,
-        )
-
     return False
 
 
@@ -5710,14 +5632,7 @@ def birth(ops):
             graphicsbackend = None
 
             if name == 'window server':
-                if firmwaregraphicsrecoveryrequested():
-                    graphicsbackend = 'framebuffer'
-                    angelprint(
-                        'I selected firmware framebuffer recovery for the window '
-                        'server.',
-                        flush=True,
-                    )
-                elif (
+                if (
                     kernelcommandlineoption('t1os.graphics=framebuffer')
                     or str(
                         os.environ.get('T1OS_GRAPHICS', '')
@@ -5736,7 +5651,7 @@ def birth(ops):
                 environment = windowserverenvironment(graphicsbackend)
 
             elif (
-                name == 'Python'
+                name == 'python'
                 and os.environ.get('T1OS_DEVELOPER') == '1'
                 and os.environ.get('T1OS_ENABLE_VM_TEST_AGENT') == '1'
             ):
@@ -7028,10 +6943,12 @@ def main():
 
     # create ephemeral tier
     createephemeral()
+    discardlegacyfirmwaregraphicsrecovery()
     # Repair upgraded installs before graphics, input, audio and network open
     # their Settings-owned configuration.  Waiting until login is too late for
     # those boot-time consumers.
     normaliseservicesettings()
+    normalisedesktopsettings()
     setuppowerserver()
 
     # OperationsServer starts later. The supervisor will hand it a full TASKS
@@ -7189,11 +7106,29 @@ def main():
     networkcomplete = False
 
     # Reaching a protocol socket is not the boot barrier. Keep replacing the
-    # display owner until either a current accelerated WindowServer proves a
-    # lock-screen KMS presentation, or the bounded accelerated recovery budget
-    # is exhausted and a CPU-rendered KMS WindowServer takes scanout for login.
-    # Legacy fbdev is reserved for systems where DRM scanout cannot be acquired.
+    # display owner until a current accelerated WindowServer proves a
+    # lock-screen KMS presentation. CPU-rendered backends are diagnostics for
+    # an explicitly requested recovery boot, never an automatic login path.
     while True:
+
+        # CPU-rendered backends may be selected only by an explicit boot
+        # option. Automatic recovery remains within the native GPU path and
+        # cannot carry a normal boot into login on software rendering.
+        if graphicsaccelerationrequired() and graphicsbackend != 'opengl':
+            recordgraphicsrecovery(
+                'opengl',
+                max(1, acceleratedattempts),
+                'gpu-required-retry',
+                f'refusing automatic {graphicsbackend} userspace; restarting '
+                'native accelerated graphics',
+                capturegpu=False,
+            )
+            terminateprocess(wsproc)
+            graphicsbackend = 'opengl'
+            acceleratedattempts = max(1, acceleratedattempts)
+            time.sleep(GRAPHICSRECOVERYDELAY)
+            wsproc = replacewindowserver(graphicsbackend)
+            continue
 
         if not waitwindowserver(wsproc):
             retrydelay = GRAPHICSRECOVERYDELAY

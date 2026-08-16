@@ -9897,17 +9897,14 @@ def opsrun(path, args, name, _log, user, mode, await_window=False):
 
     try:
 
+        # Operations owns executable identity, profile, name, log, uid and
+        # state. Array selects only a measured catalogue entry and its bounded
+        # file arguments; the retired arbitrary RUN request cannot launch any
+        # current application.
         payload = {
-            "op": "RUN",
+            "op": "LAUNCH_CATALOGUE",
             "path": path,
             "args": list(args) if args else [],
-            "name": name,
-            # Array never asks Operations to create launch/output logs. Its
-            # own debug-only log() function is the sole log-file writer.
-            "log": None,
-            "user": user,
-            "mode": mode,
-            "state": "starting" if await_window else "running",
         }
 
     except Exception:
@@ -16868,12 +16865,21 @@ def graphicsdiagnostic():
                 "pid": 699,
             }
             pid = opsrun(
-                "/the one/build/example/example.py", [], "example",
+                PLAYERPROG, ["/master/music/example.flac"], "example",
                 "/the one/logs/forbidden.log", "master", "front",
             )
-            if pid != 699 or len(launchpayloads) != 1 or launchpayloads[0].get("log") is not None:
-                raise RuntimeError("Array operations launch can create a log file")
-            result["checks"]["operations_launch_without_log"] = True
+            if (
+                pid != 699
+                or launchpayloads != [{
+                    "op": "LAUNCH_CATALOGUE",
+                    "path": PLAYERPROG,
+                    "args": ["/master/music/example.flac"],
+                }]
+            ):
+                raise RuntimeError(
+                    "Array did not use the typed Operations catalogue launch"
+                )
+            result["checks"]["operations_typed_catalogue_launch"] = True
         finally:
             state["opsrequest"] = originalopsrequest
 

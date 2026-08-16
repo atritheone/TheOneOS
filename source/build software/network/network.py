@@ -241,7 +241,7 @@ def writeinitialstate(value):
             not statmodule.S_ISDIR(status.st_mode)
             or status.st_uid != 0
             or status.st_gid != 0
-            or statmodule.S_IMODE(status.st_mode) & 0o022
+            or statmodule.S_IMODE(status.st_mode) != 0o1733
         ):
             raise PermissionError('initial network state directory is unsafe')
 

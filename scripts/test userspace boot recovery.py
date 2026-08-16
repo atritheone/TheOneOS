@@ -55,6 +55,26 @@ def main():
         function(goddess, 'createephemeral'),
         'os.chmod(EPHEMERALTIER, 0o1777)',
     )
+
+    inputserver = source('source/build software/input/inputserver.py')
+    windowserver = source('source/build software/windows/windowserver.py')
+    pythonmanager = source('source/build software/python/pip.py')
+    network = source('source/build software/network/network.py')
+    for implementation, name in (
+        (function(inputserver, 'makepaths'), 'InputServer'),
+        (function(windowserver, 'securedirectory'), 'WindowServer'),
+        (function(pythonmanager, 'prepare_socket_directory'), 'Python manager'),
+    ):
+        require(
+            implementation,
+            "parent == '/.ephemeral'" if name == 'Python manager'
+            else 'parent == "/.ephemeral"',
+            '0o1777',
+        )
+    require(
+        function(network, 'writeinitialstate'),
+        'statmodule.S_IMODE(status.st_mode) != 0o1733',
+    )
     assert early.index('normaliseservicesettings()') < early.index('birth(PRESTARTOPS)')
     require(
         function(goddess, 'normaliseservicesettings'),

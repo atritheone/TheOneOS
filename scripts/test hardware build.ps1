@@ -41,6 +41,7 @@ $hardwareUsbWorkflow = Join-Path $projectRoot 'scripts\build hardware usb.ps1'
 $kernelBuilder = Join-Path $projectRoot 'scripts\build hardware kernel.ps1'
 $graphicsKernelBuilder = Join-Path $projectRoot 'scripts\build graphics kernel.ps1'
 $rootPushScript = Join-Path $projectRoot 'scripts\push to disk.ps1'
+$hardwareKernelPushScript = Join-Path $projectRoot 'scripts\push hardware kernel to usb.ps1'
 $grubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware 0.2.cfg'
 $encryptedGrubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware encrypted 0.2.cfg'
 $grubTheme = Join-Path $projectRoot 'source\entry\grub\t1os hardware theme.txt'
@@ -1062,8 +1063,7 @@ foreach ($requiredText in @(
     'def angelprint(*values,',
     "recordoutputfailure('angel-print', output, error)",
     'angelprint(',
-    'I am recovering the {backend} graphics backend',
-    'I am restarting into firmware framebuffer recovery'
+    'I am recovering the {backend} graphics backend'
 )) {
     if (-not $goddessText.Contains($requiredText)) {
         throw "GODDESS does not delegate recovery speech to Angel: $requiredText"
@@ -1583,15 +1583,17 @@ foreach ($requiredText in @(
     'NVIDIAPATHPROVIDERSOURCE',
     'def requestfirmwaregraphicsrecovery(reason, attempt):',
     'def pinfirmwarerecoveryboot(root=EFIVARFSROOT):',
+    'def graphicsaccelerationrequired():',
+    'def discardlegacyfirmwaregraphicsrecovery():',
+    "'gpu-required-retry'",
+    'persistent next-boot framebuffer recovery is disabled',
     'FS_IOC_GETFLAGS = 0x80086601',
     'FS_IOC_SETFLAGS = 0x40086602',
     'FS_IMMUTABLE_FL = 0x00000010',
-    "'firmware-recovery-reboot-unpinned'",
     "f'BootCurrent-{EFIVARGLOBALGUID}'",
     "f'BootNext-{EFIVARGLOBALGUID}'",
     "payload = struct.pack('<IH', 7, current)",
     'if verified != payload:',
-    "'firmware-recovery-reboot'",
     "kernelcommandlineoption('t1os.graphics=framebuffer')",
     'WINDOWSERVERREADYMAXTIME = 90.0',
     'WINDOWSERVERGPUFAILUREEXIT = 70',
@@ -1607,7 +1609,6 @@ foreach ($requiredText in @(
     "environment['T1OS_FRAMEBUFFER_CONSOLE_OWNED'] = '1'",
     'def normalisebootid(value):',
     'def currentbootid(paths=BOOTIDPATHS):',
-    'return bool(currentboot and markerboot and markerboot != currentboot)',
     "'early-framebuffer-owner-retirement'",
     "'display-console-ownership'",
     "'display-console-recovery'",
@@ -2301,8 +2302,9 @@ foreach ($requiredText in @(
     'def pcidisplayalias(alias):',
     'def firmwaregraphicsrecoveryrequested(',
     'BOOTIDPATH = Path(os.environ.get(',
-    'return markerboot != currentboot',
-    'one-shot firmware-framebuffer graphics recovery',
+    'A previous boot is never',
+    'explicit command-line framebuffer graphics recovery',
+    "mountoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'",
     'module parameter verified {module}.{name}={actual}',
     'modprobe timed out after',
     "'RESET_GRAPHICS'",
@@ -2594,6 +2596,28 @@ foreach ($option in @(
 
 $kernelPolicyText = Get-Content -LiteralPath $kernelPolicy -Raw
 $rootPushText = Get-Content -LiteralPath $rootPushScript -Raw
+$hardwareKernelPushText = Get-Content -LiteralPath $hardwareKernelPushScript -Raw
+if ($hardwareKernelPushText -match '(?m)^\$updateName\s*=\s*''\d{8}-') {
+    throw 'The USB update script still requires a manually unique transaction identifier.'
+}
+foreach ($transactionNeedle in @(
+    '[DateTime]::UtcNow',
+    '[Guid]::NewGuid()',
+    ".Substring(0, 12)"
+)) {
+    if (-not $hardwareKernelPushText.Contains($transactionNeedle)) {
+        throw "The USB update script does not generate its transaction identifier: $transactionNeedle"
+    }
+}
+foreach ($externalMountPolicy in @(
+    'static bool t1os_external_volume_options(const void *data)',
+    '"uid=1000,gid=1000,dmask=0077,fmask=0177"',
+    't1os_external_volume_options(data)'
+)) {
+    if (-not $kernelPolicyText.Contains($externalMountPolicy)) {
+        throw "T1OS LSM is missing the private uid-1000 removable-volume mount contract: $externalMountPolicy"
+    }
+}
 foreach ($requiredText in @(
     '#define T1OS_WINDOWSERVER_SCRIPT     "/the one/build/windows/windowserver.py"',
     '#define T1OS_BRICK_SCRIPT            "/the one/build/brick/brick.py"',
@@ -2653,7 +2677,7 @@ foreach ($requiredText in @(
     '!t1os_is_efi_bootnext(name)',
     '"/the one/settings/graphics recovery boot.json"',
     '"/the one/drivers/nodes/tty0"',
-    "return !strcmp(suffix, `".new`");",
+    'return path && !strcmp(path, marker);',
     'return t1os_is_goddess_process();',
     'if (!strcmp(path, "/the one/master") ||',
     '!strcmp(path, T1OS_MODPROBE_BINARY) && !current->mm',
@@ -2975,7 +2999,7 @@ if (-not [regex]::IsMatch(
     $kernelPolicyText,
     '(?ms)if \(t1os_is_graphics_recovery_marker\(path\)\)\s*return t1os_is_goddess_process\(\);'
 )) {
-    throw 'The recovery marker and atomic temporary are not exclusive to GODDESS.'
+    throw 'The obsolete recovery marker cleanup is not exclusive to GODDESS.'
 }
 if (-not [regex]::IsMatch(
     $kernelPolicyText,
@@ -3100,9 +3124,10 @@ if (
     -not $kernelReadFileBody.Contains('id != READING_FIRMWARE') -or
     -not $kernelReadFileBody.Contains('t1os_is_driverserver_process()') -or
     -not $kernelReadFileBody.Contains('t1os_domain_is(T1OS_DOMAIN_MODULE_LOADER)') -or
+    -not $kernelReadFileBody.Contains('t1os_kernel_firmware_worker()') -or
     -not $kernelReadFileBody.Contains('strncmp(path, "/the one/drivers/firmware/", 26)')
 ) {
-    throw 'T1OS LSM does not authorize validated firmware reads through the measured module-loader.'
+    throw 'T1OS LSM does not authorize validated firmware reads through the measured loader and its kernel worker.'
 }
 $recursivePolicyStart = $kernelPolicyText.IndexOf(
     'static const char *prot_rec[] = {',

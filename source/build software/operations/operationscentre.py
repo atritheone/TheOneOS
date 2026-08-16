@@ -47,7 +47,7 @@ FONT = '/the one/resources/fonts/atkinsonhyperlegiblenext.ttf'
 # application
 APPNAME = 'operations centre'
 APPROLE = 'window'
-VERSION = 1
+VERSION = 2
 RUNNING = True
 FOCUSED = True
 PAUSED = False
@@ -63,7 +63,7 @@ SEARCHTEXT = ''
 SEARCHCARETPOS = 0
 SEARCHLASTBLINK = None
 SORTCOLUMN = 'name'
-SORTREVERSE = True
+SORTREVERSE = False
 SELECTED = None
 SCROLL = 0
 HOVERROW = None
@@ -366,6 +366,10 @@ def loadsettings():
             SORTCOLUMN = column
 
         SORTREVERSE = bool(settings.get('reverse', SORTREVERSE))
+        # Version 1 accidentally persisted the reverse-alphabetical default.
+        # Preserve deliberate non-name sorts, but migrate that old default.
+        if int(settings.get('version', 0) or 0) < 2 and SORTCOLUMN == 'name':
+            SORTREVERSE = False
         REFRESHINTERVAL = max(0.5, min(5.0, float(settings.get('refresh', REFRESHINTERVAL))))
         widths = settings.get('column_widths', {})
 
@@ -2250,7 +2254,7 @@ def graphicsdiagnostic():
         VIEW = 'operations'
         SELECTED = '101'
         SORTCOLUMN = 'name'
-        SORTREVERSE = True
+        SORTREVERSE = False
         HISTORYCPU = [10.0, 30.0, 20.0]
         HISTORYGPU = [15.0, 35.0, 25.0]
         HISTORYMEMORY = [40.0, 42.0, 41.0]
@@ -2352,8 +2356,8 @@ def graphicsdiagnostic():
 
         result['checks']['gpu_column'] = True
 
-        if SORTCOLUMN != 'name' or not SORTREVERSE:
-            raise RuntimeError('operations did not default to descending operation sort')
+        if SORTCOLUMN != 'name' or SORTREVERSE:
+            raise RuntimeError('operations did not default to alphabetical sort')
 
         result['checks']['default_sort'] = {'column': SORTCOLUMN, 'descending': SORTREVERSE}
         grouped = tableitems()

@@ -1001,11 +1001,22 @@ def securedirectory(path, mode=0o700, group=None):
 
     parent = os.path.dirname(os.path.abspath(path))
     parentinfo = os.lstat(parent)
+    parentmode = stat.S_IMODE(parentinfo.st_mode)
+    trustedephemeral = (
+        parent == "/.ephemeral"
+        and parentinfo.st_uid == 0
+        and parentmode == 0o1777
+    )
     if (
         not stat.S_ISDIR(parentinfo.st_mode)
         or stat.S_ISLNK(parentinfo.st_mode)
-        or parentinfo.st_uid != os.geteuid()
-        or stat.S_IMODE(parentinfo.st_mode) & 0o022
+        or (
+            not trustedephemeral
+            and (
+                parentinfo.st_uid != os.geteuid()
+                or parentmode & 0o022
+            )
+        )
     ):
         raise PermissionError(f"unsafe WindowServer parent directory {parent}")
 

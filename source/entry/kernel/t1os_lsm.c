@@ -611,7 +611,7 @@ static bool t1os_is_special_path(const char *path)
 	if (t1os_is_python_management_path(path))
 		return true;
 
-	/* One-shot firmware-framebuffer graphics recovery marker. */
+	/* Obsolete graphics state may be removed once during an upgraded boot. */
 	if (t1os_is_graphics_recovery_marker(path))
 		return true;
 
@@ -785,28 +785,15 @@ static bool t1os_is_console_multiplexer_name(const char *path)
 }
 
 
-/* GODDESS persists this one-shot marker before rebooting away from a poisoned
- * DRM driver. Permit only the exact marker and its atomic-write temporary
- * name: "<marker>.<decimal-pid>.new". */
+/* Older releases persisted a next-boot framebuffer decision here. The current
+ * release never creates it, but PID 1 may remove the exact stale leaf so it
+ * cannot influence downgraded tooling or diagnostics. */
 static bool t1os_is_graphics_recovery_marker(const char *path)
 {
 	static const char marker[] =
 		"/the one/settings/graphics recovery boot.json";
-	const size_t marker_len = sizeof(marker) - 1;
-	const char *suffix;
 
-	if (!strcmp(path, marker))
-		return true;
-	if (strncmp(path, marker, marker_len) || path[marker_len] != '.')
-		return false;
-
-	suffix = path + marker_len + 1;
-	if (*suffix < '0' || *suffix > '9')
-		return false;
-	while (*suffix >= '0' && *suffix <= '9')
-		suffix++;
-
-	return !strcmp(suffix, ".new");
+	return path && !strcmp(path, marker);
 }
 
 
@@ -938,8 +925,7 @@ static bool t1os_special_write_allowed(const char *path)
 	    !strcmp(path, "/the one/settings/"))
 		return t1os_is_goddess_process();
 
-	/* The graphics recovery marker is the only settings-root file GODDESS may
-	 * create, replace, or remove directly. */
+	/* Permit PID 1 to remove the exact obsolete graphics recovery marker. */
 	if (t1os_is_graphics_recovery_marker(path))
 		return t1os_is_goddess_process();
 
@@ -1424,6 +1410,12 @@ static bool t1os_process_read_allowed(const char *path)
 	return false;
 }
 
+static bool t1os_kernel_firmware_worker(void)
+{
+	return !current->mm && (current->flags & PF_KTHREAD) &&
+	       (current->flags & PF_WQ_WORKER);
+}
+
 static bool t1os_special_read_allowed(const char *path)
 {
 	if (t1os_confidential_read_path(path))
@@ -1446,6 +1438,16 @@ static bool t1os_special_read_allowed(const char *path)
 	 * module-loader domain before the image can run. Userspace callers always
 	 * have an mm and receive no exception here. */
 	if (!strcmp(path, T1OS_MODPROBE_BINARY) && !current->mm)
+		return true;
+
+	/* Asynchronous request_firmware() reads execute in a kernel workqueue,
+	 * after the measured module-loader process has returned from module init.
+	 * Recognize only that kernel-only continuation here; kernel_read_file still
+	 * validates the read purpose, packaged path, owner, type, link count, and
+	 * mode before firmware contents are accepted by a driver. */
+	if ((!strcmp(path, "/the one/drivers/firmware") ||
+	     !strncmp(path, "/the one/drivers/firmware/", 26)) &&
+	    t1os_kernel_firmware_worker())
 		return true;
 
 	if (!strcmp(path, "/the one/drivers/modules") ||
@@ -1891,6 +1893,12 @@ static bool t1os_external_volume_source(const char *source)
 	       t1os_safe_mount_component(source + sizeof(prefix) - 1);
 }
 
+static bool t1os_external_volume_options(const void *data)
+{
+	return data && !strcmp((const char *)data,
+		"uid=1000,gid=1000,dmask=0077,fmask=0177");
+}
+
 static int t1os_mount_path(const struct path *path, char *buffer,
 			   char **resolved)
 {
@@ -1942,7 +1950,8 @@ static int t1os_sb_mount(const char *dev_name, const struct path *path,
 	/* Driver Server's removable-media feature is the sole post-handoff new
 	 * mount.  Bind/overlay/remount/move are excluded, the source and target
 	 * each have one safe component, and the mount is always nosuid/nodev/noexec. */
-	if (t1os_is_driverserver_process() && dev_name && type && !data &&
+	if (t1os_is_driverserver_process() && dev_name && type &&
+	    t1os_external_volume_options(data) &&
 	    t1os_external_volume_source(dev_name) &&
 	    t1os_external_volume_target(target) &&
 	    (!strcmp(type, "ntfs3") || !strcmp(type, "exfat") ||
@@ -2984,13 +2993,14 @@ static int t1os_kernel_read_file(struct file *file,
 	if (id == READING_MODULE || id == READING_MODULE_COMPRESSED)
 		return t1os_domain_is(T1OS_DOMAIN_MODULE_LOADER) ? 0 : -EACCES;
 	/* Driver Server executes the measured modprobe binary in the immutable
-	 * module-loader domain before driver init calls request_firmware().  Keep
-	 * both trusted stages eligible; the file checks below still constrain the
-	 * request to a root-owned, single-linked firmware file in the packaged
-	 * firmware tree. */
+	 * module-loader domain before driver init calls request_firmware(). Some
+	 * drivers defer that request to a kernel workqueue, so keep all three
+	 * trusted stages eligible. The file checks below still constrain the read
+	 * to a root-owned, single-linked firmware file in the packaged tree. */
 	if (id != READING_FIRMWARE ||
 	    (!t1os_is_driverserver_process() &&
-	     !t1os_domain_is(T1OS_DOMAIN_MODULE_LOADER)) ||
+	     !t1os_domain_is(T1OS_DOMAIN_MODULE_LOADER) &&
+	     !t1os_kernel_firmware_worker()) ||
 	    !file)
 		return -EACCES;
 	buffer = (char *)__get_free_page(GFP_KERNEL);

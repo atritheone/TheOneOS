@@ -2508,9 +2508,15 @@ def prepare_socket_directory(directory):
     parent_descriptor = os.open(parent, flags | nofollow)
     try:
         parent_status = os.fstat(parent_descriptor)
+        parent_mode = stat.S_IMODE(parent_status.st_mode)
+        trusted_ephemeral = (
+            parent == '/.ephemeral' and
+            parent_status.st_uid == 0 and
+            parent_mode == 0o1777
+        )
         if (not stat.S_ISDIR(parent_status.st_mode) or
-                parent_status.st_uid != 0 or
-                (parent_status.st_mode & 0o022)):
+                (not trusted_ephemeral and
+                 (parent_status.st_uid != 0 or parent_mode & 0o022))):
             raise ManagerError('The Python manager socket parent is unsafe.',
                                'unsafe_socket')
         try:

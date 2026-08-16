@@ -871,32 +871,10 @@ def firmwaregraphicsrecoveryrequested(
     path=GRAPHICSRECOVERYBOOTPATH,
     bootidpath=BOOTIDPATH,
 ):
-    try:
-        with Path(path).open('r', encoding='utf-8') as handle:
-            state = json.load(handle)
-    except (OSError, ValueError, TypeError):
-        return False
-
-    requested = bool(
-        isinstance(state, dict)
-        and state.get('format') == 1
-        and state.get('mode') == 'firmware-framebuffer'
-        and state.get('state') == 'requested'
-    )
-
-    if not requested:
-        return False
-
-    try:
-        with Path(bootidpath).open('r', encoding='ascii') as handle:
-            currentboot = str(uuid.UUID(handle.read(128).strip()))
-        markerboot = str(uuid.UUID(str(state.get('boot_id', '')).strip()))
-    except (OSError, ValueError, TypeError, AttributeError):
-        return False
-
-    # A marker created by this boot requests recovery on the next boot. Only a
-    # valid marker from a different boot may suppress native display drivers.
-    return markerboot != currentboot
+    # Compatibility query for older diagnostics. A previous boot is never
+    # allowed to suppress native GPU module discovery on this boot.
+    del path, bootidpath
+    return False
 
 
 def parseuevent(payload):
@@ -1623,17 +1601,15 @@ class DriverServer:
         self.commandline = commandline
         self.blacklist = parseblacklist(commandline)
         self.module_parameters = parsemoduleparameters(commandline)
-        markerrecovery = firmwaregraphicsrecoveryrequested()
         commandrecovery = (
             't1os.graphics=framebuffer' in commandline.split()
         )
-        self.firmware_graphics_recovery = bool(
-            markerrecovery or commandrecovery
-        )
+        # State from an earlier boot must never suppress GPU discovery on this
+        # boot. Firmware-framebuffer mode must be selected explicitly in this
+        # boot's kernel command line.
+        self.firmware_graphics_recovery = bool(commandrecovery)
         self.firmware_graphics_recovery_source = (
-            'persistent-marker'
-            if markerrecovery
-            else ('kernel-command-line' if commandrecovery else '')
+            'kernel-command-line' if commandrecovery else ''
         )
         self.display_recovery_modules = set()
         self.early_boot_animation_retired = False
@@ -2978,7 +2954,7 @@ class DriverServer:
                 and module in self.display_recovery_modules
             ):
                 self.skipped[module] = (
-                    'one-shot firmware-framebuffer graphics recovery'
+                    'explicit command-line framebuffer graphics recovery'
                 )
                 log(
                     f'skipped native display module {module} '
@@ -3253,6 +3229,10 @@ class DriverServer:
         filesystem = str(probe['filesystem'])
         readonly = bool(self.volume_policy.get('read_only', False) or not probe.get('safe_write', False))
         baseflags = MS_NOSUID | MS_NODEV | MS_NOEXEC
+        # These removable filesystems do not carry the desktop's Unix identity
+        # reliably. Publish a private uid-1000 view so a volume admitted as
+        # writable is actually writable from Array and its file picker.
+        mountoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'
         libc = ctypes.CDLL(None, use_errno=True)
         if not hasattr(libc, 'mount'):
             raise OSError(errno.ENOSYS, 'mount system call is unavailable')
@@ -3275,7 +3255,7 @@ class DriverServer:
                 os.fsencode(target),
                 filesystem.encode('ascii'),
                 flags,
-                None,
+                mountoptions,
             )
             if result == 0:
                 mountedreadonly = bool(flags & MS_RDONLY)
@@ -3890,7 +3870,9 @@ def diagnostic():
             'state': 'requested',
             'boot_id': priorboot,
         }), encoding='utf-8')
-        assert firmwaregraphicsrecoveryrequested(recovery, bootid)
+        # Persistent state from an earlier boot must never suppress native GPU
+        # discovery on the current boot.
+        assert not firmwaregraphicsrecoveryrequested(recovery, bootid)
         recovery.write_text(json.dumps({
             'format': 1,
             'mode': 'firmware-framebuffer',

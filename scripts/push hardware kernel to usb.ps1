@@ -29,7 +29,13 @@ $initramfsSource = Join-Path $projectRoot 'environment\hardware\boot\initramfs-h
 $modulesSource = Join-Path $projectRoot 'environment\hardware\modules.tar.zst'
 $releaseSource = Join-Path $projectRoot 'environment\hardware\kernel-release.txt'
 $compatibilitySource = Join-Path $projectRoot 'source\drivers\settings\desktop compatibility.json'
-$updateName = '20260816-roothealth-bootadmit052-python64'
+# Transaction paths are internal implementation details. Generate the suffix
+# for every elevated run so deployment never depends on a developer manually
+# changing a release label left in this script.
+$updateName = '{0:yyyyMMdd-HHmmss}-{1}' -f @(
+    [DateTime]::UtcNow,
+    [Guid]::NewGuid().ToString('N').Substring(0, 12)
+)
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -646,29 +652,16 @@ if ($BootFilesOnly) {
 else {
     $recoveryMarker = 'D:\the one\settings\graphics recovery boot.json'
     if (Test-Path -LiteralPath $recoveryMarker -PathType Leaf) {
-        $recoveryState = Get-Content -LiteralPath $recoveryMarker -Raw |
-            ConvertFrom-Json
         $recoveryArchive = (
             "D:\the one\settings\graphics recovery boot.previous-$updateName.json"
         )
-        if (
-            [string]$recoveryState.kernel_release -ceq $release -and
-            [string]$recoveryState.mode -ceq 'firmware-framebuffer' -and
-            [string]$recoveryState.reason -match (
-                '^software KMS WindowServer did not become ready status=71$'
-            )
-        ) {
-            if (Test-Path -LiteralPath $recoveryArchive) {
-                throw "Reserved recovery-marker archive already exists: $recoveryArchive"
-            }
+        if (-not (Test-Path -LiteralPath $recoveryArchive)) {
             Move-Item -LiteralPath $recoveryMarker -Destination $recoveryArchive
-            Write-Host "Archived stale graphics recovery marker: $recoveryArchive"
+            Write-Host "Archived obsolete graphics recovery marker: $recoveryArchive"
         }
         else {
-            Write-Warning (
-                'The graphics recovery marker does not describe the corrected ' +
-                'service-path failure and was left in place.'
-            )
+            Remove-Item -LiteralPath $recoveryMarker -Force
+            Write-Host 'Removed obsolete graphics recovery marker.'
         }
     }
     Write-Host (
