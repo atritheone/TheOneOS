@@ -17,7 +17,7 @@
   },
   "workspace_inputs": {
     "scripts/roothealth-repair/validate-report.py": "8956367e9f9fe436ad458a56c30a851682867ec4a6b246cd0ad1d1f89e2c16c3",
-    "resource/entry/roothealth/REPAIR-CONTRACT.md": "674d3b112536e45bbc798cce5dce3209263d7a60def174a540009c95f38668f7"
+    "source/entry/roothealth/REPAIR-CONTRACT.md": "674d3b112536e45bbc798cce5dce3209263d7a60def174a540009c95f38668f7"
   },
   "changed_files": {
     "src/Makefile.am": "98e5decc31ddcefae006bf2bb078691332de10ba26c8e803b326746546fbd9f2",

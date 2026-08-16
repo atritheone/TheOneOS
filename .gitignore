@@ -9,6 +9,7 @@
 /software/
 /command_centre.exe
 /t1os_usb_flasher.exe
+/flash/
 
 # Generated and downloaded runtime payloads
 /source/software/
@@ -19,8 +20,8 @@
 /resource/cursors/
 
 # Compiled kernel history; retain source, configuration, and patches nearby.
-/resource/entry/kernel/current build/
-/resource/entry/kernel/legacy builds/
+/source/entry/kernel/current build/
+/source/entry/kernel/legacy builds/
 
 # Generated trust bundle and bundled helper executables
 /source/settings/network/cacerts.pem
@@ -30,9 +31,8 @@
 /scripts/roothealth-repair/journal-integration-v2/ntfscp
 /scripts/roothealth-repair/.journal-integration-v2-work/
 
-# Command Centre application-only helpers and assets
+# Command Centre application-only helper
 /scripts/run command centre.ps1
-/flash/t1oscommandcentrelogo.png
 
 # Local IDE, assistant, and machine state
 /.idea/

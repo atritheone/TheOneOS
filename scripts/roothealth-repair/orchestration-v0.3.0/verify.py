@@ -174,7 +174,7 @@ def main() -> int:
     )
     external_hash(
         args.contract,
-        workspace["resource/entry/roothealth/REPAIR-CONTRACT.md"],
+        workspace["source/entry/roothealth/REPAIR-CONTRACT.md"],
         "contract",
     )
     if args.baseline is not None:

@@ -3,7 +3,7 @@ param()
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Path $PSScriptRoot -Parent
-$engine = Join-Path $projectRoot 'resource\entry\init\angel recovery.sh'
+$engine = Join-Path $projectRoot 'source\entry\init\angel recovery.sh'
 $busyboxBinary = Join-Path $projectRoot 'environment\initramfs\bin\busybox'
 
 foreach ($required in @($engine, $busyboxBinary)) {

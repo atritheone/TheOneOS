@@ -14,7 +14,7 @@ $isoPath = Join-Path $environmentRoot 't1os-boot.iso'
 $kernelPath = Join-Path $environmentRoot 'iso\boot\vmlinuz'
 $initramfsPath = Join-Path $environmentRoot 'iso\boot\initramfs'
 $grubConfigPath = Join-Path $environmentRoot 'iso\boot\grub\grub.cfg'
-$initSourcePath = Join-Path $projectRoot 'resource\entry\init\init software.sh'
+$initSourcePath = Join-Path $projectRoot 'source\entry\init\init software.sh'
 $serialPath = Join-Path $environmentRoot 'vbox-serial.log'
 
 function Get-T1OSVirtualBoxVmState {

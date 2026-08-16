@@ -5,7 +5,7 @@
     "commit": "d4f481df6926557f7b18b471a43313652dec6f7e",
     "archive_sha256": "13dc944f477997ae4ecd89e3d0fdaa34b74ebbc1f7beb675657624ed6289eff5"
   },
-  "contract": "resource/entry/roothealth/REPAIR-CONTRACT.md",
+  "contract": "source/entry/roothealth/REPAIR-CONTRACT.md",
   "decision_semantics": {
     "CONDITIONAL": "The action is eligible only when every global gate for its phase and the entry predicate are proven from the current read-only diagnosis; false or unknown means refuse without the target write.",
     "DENY": "No roothealth production path may execute the upstream repair. Report unresolved corruption and keep the volume unavailable."

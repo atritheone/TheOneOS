@@ -13,8 +13,8 @@ if ($Candidate314) {
     )
 }
 $busyBoxSource = Join-Path $projectRoot 'environment\initramfs\bin\busybox'
-$initSource = Join-Path $projectRoot 'resource\entry\init\init hardware.sh'
-$recoverySource = Join-Path $projectRoot 'resource\entry\init\angel recovery.sh'
+$initSource = Join-Path $projectRoot 'source\entry\init\init hardware.sh'
+$recoverySource = Join-Path $projectRoot 'source\entry\init\angel recovery.sh'
 $pythonManifest = if ($Candidate314) {
     Join-Path $projectRoot 'development\python 3.14 candidate\t1os\manifest.json'
 }

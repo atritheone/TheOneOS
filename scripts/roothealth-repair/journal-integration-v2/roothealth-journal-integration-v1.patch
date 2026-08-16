@@ -306,8 +306,8 @@ index 163946a..d739b7d 100755
 +$journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
 +$NtfscpPath = [System.IO.Path]::GetFullPath($NtfscpPath)
 +$NtfscpProvenancePath = [System.IO.Path]::GetFullPath($NtfscpProvenancePath)
- $grubThemePath = Join-Path $projectRoot 'resource\entry\grub\t1os hardware theme.txt'
- $grubBackgroundPath = Join-Path $projectRoot 'resource\entry\grub\t1os black background.png.base64'
+ $grubThemePath = Join-Path $projectRoot 'source\entry\grub\t1os hardware theme.txt'
+ $grubBackgroundPath = Join-Path $projectRoot 'source\entry\grub\t1os black background.png.base64'
  $driveIconPath = Join-Path $projectRoot 'flash\T1OS Logo - Black Transparent.ico'
 @@ -174,7 +183,7 @@ foreach ($artifactPath in $outputArtifactPaths) {
      }

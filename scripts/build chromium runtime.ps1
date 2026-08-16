@@ -38,11 +38,11 @@ $mediaBuildMarker = (
 )
 $protocolHeaderSha256 = '11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0'
 $sourceOverlaySha256 = '597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e'
-$subprocessSource = Join-Path $projectRoot 'resource\entry\chromium\t1os_chrome_subprocess.c'
+$subprocessSource = Join-Path $projectRoot 'source\entry\chromium\t1os_chrome_subprocess.c'
 $subprocessLauncher = Join-Path $destination 'tools\t1os-chrome-subprocess'
-$inputSource = Join-Path $projectRoot 'resource\entry\chromium\t1os_xinput.c'
+$inputSource = Join-Path $projectRoot 'source\entry\chromium\t1os_xinput.c'
 $inputBridge = Join-Path $destination 'tools\t1os-xinput'
-$windowManagerSource = Join-Path $projectRoot 'resource\entry\chromium\t1os_xwm.c'
+$windowManagerSource = Join-Path $projectRoot 'source\entry\chromium\t1os_xwm.c'
 $windowManager = Join-Path $destination 'tools\t1os-xwm'
 $upstreamDirectTools = @(
     (Join-Path $destination 'tools\Xvfb'),
@@ -52,11 +52,11 @@ $upstreamDirectTools = @(
     (Join-Path $destination 'tools\xkbcomp'),
     (Join-Path $destination 'tools\xrandr')
 )
-$fontConfigurationSource = Join-Path $projectRoot 'resource\entry\chromium\fonts.conf'
+$fontConfigurationSource = Join-Path $projectRoot 'source\entry\chromium\fonts.conf'
 $fontConfiguration = Join-Path $destination 'resources\fontconfig-configuration\fonts.conf'
-$providerSource = Join-Path $projectRoot 'resource\entry\chromium\t1os_path_provider.c'
+$providerSource = Join-Path $projectRoot 'source\entry\chromium\t1os_path_provider.c'
 $providerLibrary = Join-Path $destination 't1os-path-provider.so'
-$sandboxSourceRoot = Join-Path $projectRoot 'resource\entry\chromium'
+$sandboxSourceRoot = Join-Path $projectRoot 'source\entry\chromium'
 $sandboxSource = Join-Path $sandboxSourceRoot 'sandbox\linux\suid\sandbox.c'
 $sandboxProcessSource = Join-Path $sandboxSourceRoot 'sandbox\linux\suid\process_util_linux.c'
 $sandboxExecutable = Join-Path $destination 'program\chrome-sandbox'

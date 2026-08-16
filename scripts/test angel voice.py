@@ -9,9 +9,9 @@ import sys
 
 
 ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
-INIT = ROOT / "resource/entry/init/init hardware.sh"
-RECOVERY = ROOT / "resource/entry/init/angel recovery.sh"
-CONTRACT = ROOT / "resource/entry/init/ANGEL.md"
+INIT = ROOT / "source/entry/init/init hardware.sh"
+RECOVERY = ROOT / "source/entry/init/angel recovery.sh"
+CONTRACT = ROOT / "source/entry/init/ANGEL.md"
 GODDESS = ROOT / "source/build software/GODDESS/GODDESS.py"
 
 

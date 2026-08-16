@@ -33,17 +33,17 @@
       "sha256": "3cce51570307656c92fb0f044eb79093ba9c59da132543f6e9288ae2a283a542"
     },
     {
-      "path": "resource/entry/init/init hardware.sh",
+      "path": "source/entry/init/init hardware.sh",
       "size": 68781,
       "sha256": "c0c681105a49b24a40306e3e46918b4f7cb1f5dc811ef1cbd908b7e6a16ac1c4"
     },
     {
-      "path": "resource/entry/init/angel recovery.sh",
+      "path": "source/entry/init/angel recovery.sh",
       "size": 22424,
       "sha256": "1a344bce2fcf03a7b6bb41332adbf38967bebb6974dc3ddd7e88912217443df0"
     },
     {
-      "path": "resource/entry/kernel/t1os_lsm.c",
+      "path": "source/entry/kernel/t1os_lsm.c",
       "size": 105535,
       "sha256": "cef856d2ad26e95722d25cc09b6c173b5f4b0c8257b03fc895b769d0b2dd80c2"
     },

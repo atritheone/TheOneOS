@@ -120,7 +120,7 @@
     "reason_release_qualified_is_false": "this qualifies the linked parser hardening inside the development full engine; it does not by itself authorize repair policy or complete the checker"
   },
   "legacy_bootstrap_pipeline": {
-    "patch": "resource/entry/roothealth/0002-ntfs-3g-2026.7.7-index-hardening.patch",
+    "patch": "source/entry/roothealth/0002-ntfs-3g-2026.7.7-index-hardening.patch",
     "patch_sha256": "b4c2b59b3115adeb422bb47f37ebf064b5440856f97404ba6f083e6432d8dfaa",
     "apply_order": [
       "0001-roothealth-read-only-checker.patch",

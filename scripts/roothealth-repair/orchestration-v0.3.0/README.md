@@ -42,7 +42,7 @@ python3 -B verify.py \
   --baseline /var/tmp/roothealth-orchestration-testdesign-20260809-base \
   --baseline-manifest /var/tmp/roothealth-orchestration-testdesign-20260809.base-sha256 \
   --validator ../validate-report.py \
-  --contract ../../../resource/entry/roothealth/REPAIR-CONTRACT.md
+  --contract ../../../source/entry/roothealth/REPAIR-CONTRACT.md
 ```
 
 The final clean-room matrix passed twice with byte-identical binaries: 96 JSON

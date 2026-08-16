@@ -15,7 +15,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent.parent
 LEGACY_PIPELINE_PATCH = (
-    PROJECT_ROOT / "resource/entry/roothealth/0002-ntfs-3g-2026.7.7-index-hardening.patch"
+    PROJECT_ROOT / "source/entry/roothealth/0002-ntfs-3g-2026.7.7-index-hardening.patch"
 )
 LEGACY_PIPELINE_PATCH_SHA256 = (
     "b4c2b59b3115adeb422bb47f37ebf064b5440856f97404ba6f083e6432d8dfaa"

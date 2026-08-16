@@ -26,7 +26,7 @@ $isoDirectory = Split-Path -Path $isoPath -Parent
 New-Item -ItemType Directory -Path $isoDirectory -Force | Out-Null
 $temporaryIsoPath = Join-Path $isoDirectory ('.t1os-boot-{0}.iso' -f [guid]::NewGuid().ToString('N'))
 $rawImagePath = Join-Path $environmentRoot 'storage.img'
-$initSource = Join-Path $projectRoot 'resource\entry\init\init software.sh'
+$initSource = Join-Path $projectRoot 'source\entry\init\init software.sh'
 $initTarget = Join-Path $environmentRoot 'initramfs\init'
 $busyBoxPath = Join-Path $environmentRoot 'initramfs\bin\busybox'
 $kernelPath = Join-Path $environmentRoot 'iso\boot\vmlinuz'

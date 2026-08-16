@@ -72,14 +72,14 @@ $chromiumSoftwarePath = Join-Path $projectRoot 'source\software\chromium'
 $journalValidatorPath = Join-Path $PSScriptRoot 'validate roothealth journal.py'
 $NtfscpPath = [System.IO.Path]::GetFullPath($NtfscpPath)
 $NtfscpProvenancePath = [System.IO.Path]::GetFullPath($NtfscpProvenancePath)
-$grubThemePath = Join-Path $projectRoot 'resource\entry\grub\t1os hardware theme.txt'
-$grubBackgroundPath = Join-Path $projectRoot 'resource\entry\grub\t1os black background.png.base64'
+$grubThemePath = Join-Path $projectRoot 'source\entry\grub\t1os hardware theme.txt'
+$grubBackgroundPath = Join-Path $projectRoot 'source\entry\grub\t1os black background.png.base64'
 $driveIconPath = Join-Path $projectRoot 'flash\T1OS Logo - Black Transparent.ico'
 $grubTemplate = if ($EncryptRoot) {
-    Join-Path $projectRoot 'resource\entry\grub\grub hardware encrypted 0.2.cfg'
+    Join-Path $projectRoot 'source\entry\grub\grub hardware encrypted 0.2.cfg'
 }
 else {
-    Join-Path $projectRoot 'resource\entry\grub\grub hardware 0.2.cfg'
+    Join-Path $projectRoot 'source\entry\grub\grub hardware 0.2.cfg'
 }
 
 if ([string]::IsNullOrWhiteSpace($OutputPath)) {

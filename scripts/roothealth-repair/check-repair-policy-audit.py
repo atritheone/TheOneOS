@@ -147,7 +147,7 @@ def validate_manifest(data: Any, problem_codes: list[str] | None) -> dict[str, i
         raise AuditError("audit is not bound to the pinned ntfs-next commit")
     if upstream.get("archive_sha256") != PINNED_ARCHIVE_SHA256:
         raise AuditError("audit is not bound to the independently hashed archive")
-    if data.get("contract") != "resource/entry/roothealth/REPAIR-CONTRACT.md":
+    if data.get("contract") != "source/entry/roothealth/REPAIR-CONTRACT.md":
         raise AuditError("audit does not name the normative repair contract")
 
     gates = data.get("global_gates")

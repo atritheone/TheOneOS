@@ -20,12 +20,12 @@
       "sha256": "1ac23af96c5a369abd29b693329a78befaab976a6a7a5ec23c0f1b5fe1664db8"
     },
     {
-      "path": "resource/entry/init/init 0.17 hardware.sh",
+      "path": "source/entry/init/init 0.17 hardware.sh",
       "size": 46678,
       "sha256": "990e2957f69dbbfc9d97d0686a4f54ff079751a5fcbae6699f77c5f4c22c8534"
     },
     {
-      "path": "resource/entry/kernel/tools_lsm 0.14.c",
+      "path": "source/entry/kernel/tools_lsm 0.14.c",
       "size": 44142,
       "sha256": "8185407b8c231c6b62b88bb374763690a4742a333f3412fc14f7a846e9d85fc1"
     },
