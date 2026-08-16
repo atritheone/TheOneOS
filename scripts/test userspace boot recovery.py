@@ -75,13 +75,27 @@ def main():
         function(network, 'writeinitialstate'),
         'statmodule.S_IMODE(status.st_mode) != 0o1733',
     )
-    assert early.index('normaliseservicesettings()') < early.index('birth(PRESTARTOPS)')
+    assert (
+        early.index('normaliseservicesettings()') <
+        early.index('normalisedesktopsettings()') <
+        early.index('birth(PRESTARTOPS)')
+    )
     require(
         function(goddess, 'normaliseservicesettings'),
         'directorymode=0o755, filemode=0o644',
         "if relative == 'network':",
         'os.fchmod(descriptor, 0o777)',
     )
+    require(
+        function(goddess, 'normalisedesktopsettings'),
+        "'array'",
+        "'chromium'",
+        "'expanse'",
+        "'operations centre'",
+        'directorymode=0o700, filemode=0o600',
+    )
+    require(goddess, "('python', PYTHONSCRIPT, 'behind')")
+    assert "('Python', PYTHONSCRIPT" not in goddess
 
     network = source('source/build software/network/network.py')
     require(
@@ -118,6 +132,9 @@ def main():
     )
 
     array = source('source/build software/array/array.py')
+    typedlaunch = function(array, 'opsrun')
+    require(typedlaunch, '"op": "LAUNCH_CATALOGUE"', '"args": list(args)')
+    assert '"op": "RUN"' not in typedlaunch
     require(
         function(array, 'runitem'),
         'prog = BRICKPROG if ispython else target',
@@ -125,6 +142,22 @@ def main():
     )
     brick = source('source/build software/brick/brick.py')
     require(function(brick, 'main'), 'if startupfile is not None:', 'run([str(startupfile)])')
+
+    operationscentre = source(
+        'source/build software/operations/operationscentre.py')
+    require(
+        operationscentre,
+        'VERSION = 2',
+        'SORTREVERSE = False',
+        "< 2 and SORTCOLUMN == 'name'",
+    )
+
+    expanse = source('source/build software/expanse/expanse.py')
+    require(
+        function(expanse, 'masterimagesettingstick'),
+        'loadmasterimagesettings()',
+        'painttaskbar(sock)',
+    )
 
     window = source('source/build software/windows/windowserver.py')
     picker = function(window, 'pickerfinish')
