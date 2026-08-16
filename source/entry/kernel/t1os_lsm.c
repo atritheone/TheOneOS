@@ -52,7 +52,6 @@ static const char *prot_nonrec[] = {
 	"/the one",
 	"/.rubbish",
 	"/.remainder",
-	"/.ephemeral",
 	"/the one/settings",
 	"/the one/logs",
 	"/the one/resources",
@@ -558,9 +557,27 @@ static bool t1os_is_python_management_path(const char *path)
 		 path[sizeof(root) - 1] == '/'));
 }
 
+/* /.ephemeral is a boot-scoped tmpfs scratch tier, not an authority boundary.
+ * DAC ownership and modes still apply, but this LSM must never prevent an
+ * ordinary read, write, metadata operation, or executable mapping anywhere in
+ * the tier.  Mounting or replacing the tier remains separately restricted by
+ * the mount hooks below. */
+static bool t1os_is_ephemeral_path(const char *path)
+{
+	static const char root[] = "/.ephemeral";
+
+	return path &&
+	       (!strcmp(path, root) ||
+		(!strncmp(path, root, sizeof(root) - 1) &&
+		 path[sizeof(root) - 1] == '/'));
+}
+
 /* is this path one of the specifically restricted ones? */
 static bool t1os_is_special_path(const char *path)
 {
+	if (t1os_is_ephemeral_path(path))
+		return false;
+
 	if (!strcmp(path, "/the one/settings") ||
 	    !strcmp(path, "/the one/settings/"))
 		return true;
@@ -856,6 +873,19 @@ static bool t1os_is_efi_bootnext(const char *path)
  
 static bool t1os_special_write_allowed(const char *path)
 {
+	static const char dns_temporary[] =
+		"/the one/settings/network/dns.txt.temporary-";
+
+	if (t1os_is_ephemeral_path(path))
+		return true;
+	/* Network owns the generated resolver file and its PID-suffixed atomic
+	 * replacement.  It does not receive authority over user-authored interface,
+	 * wireless, or certificate settings in the same directory. */
+	if ((!strcmp(path, "/the one/settings/network/dns.txt") ||
+	     !strncmp(path, dns_temporary, sizeof(dns_temporary) - 1)) &&
+	    t1os_is_network_process())
+		return true;
+
 	if (!strcmp(path, "/.ephemeral/authentication") ||
 	    !strcmp(path, "/.ephemeral/authentication/") ||
 	    !strncmp(path, "/.ephemeral/authentication/", 27))
@@ -1193,6 +1223,9 @@ static void t1os_log_denial(const char *operation, const char *path)
 
 static bool t1os_confidential_read_path(const char *path)
 {
+	if (t1os_is_ephemeral_path(path))
+		return false;
+
 	return !strcmp(path, "/the one/master") ||
 	       !strcmp(path, "/the one/master/") ||
 	       !strncmp(path, "/the one/master/", 16) ||
@@ -1210,6 +1243,9 @@ static bool t1os_confidential_read_path(const char *path)
 
 static bool t1os_confidential_read_allowed(const char *path)
 {
+	if (t1os_is_ephemeral_path(path))
+		return true;
+
 	if (!strcmp(path, "/master") || !strcmp(path, "/master/") ||
 	    !strncmp(path, "/master/", 8))
 		return t1os_is_goddess_process() ||
@@ -1492,6 +1528,10 @@ static int t1os_check_struct_path(const struct path *p)
 		free_page((unsigned long)tmp);
 		return -EACCES;
 	}
+	if (t1os_is_ephemeral_path(name)) {
+		free_page((unsigned long)tmp);
+		return 0;
+	}
 
 	/* Special paths use the per-process ACL. */
 	if (t1os_is_special_path(name)) {
@@ -1507,6 +1547,23 @@ static int t1os_check_struct_path(const struct path *p)
 		t1os_log_denial("path operation", name);
 	free_page((unsigned long)tmp);
 	return ret;
+}
+
+static bool t1os_struct_path_is_ephemeral(const struct path *path)
+{
+	char *buffer, *name;
+	bool matched = false;
+
+	if (!path)
+		return false;
+	buffer = (char *)__get_free_page(GFP_KERNEL);
+	if (!buffer)
+		return false;
+	name = d_path(path, buffer, PAGE_SIZE);
+	if (!IS_ERR(name))
+		matched = t1os_is_ephemeral_path(name);
+	free_page((unsigned long)buffer);
+	return matched;
 }
 
 /* devtmpfs materializes kernel-registered devices from its own kernel worker.
@@ -1706,15 +1763,19 @@ static int t1os_path_truncate(const struct path *path)
 	return t1os_check_struct_path(path);
 }
 
-/* T1OS does not permit symbolic links. */
+/* Links remain forbidden outside the scratch tier because path ACLs have no
+ * persistent inode label.  Inside /.ephemeral they are ordinary boot-scoped
+ * filesystem objects and must not be blocked by this LSM. */
 static int t1os_path_symlink(const struct path *dir,
 			     struct dentry *dentry,
 			     const char *old_name)
 {
-	(void)dir;
-	(void)dentry;
+	struct path destination;
+
 	(void)old_name;
-	return -EACCES;
+	destination.mnt = dir->mnt;
+	destination.dentry = dentry;
+	return t1os_struct_path_is_ephemeral(&destination) ? 0 : -EACCES;
 }
 
 /* Make hard link: link */
@@ -1722,11 +1783,18 @@ static int t1os_path_link(struct dentry *old_dentry,
 			  const struct path *new_dir,
 			  struct dentry *new_dentry)
 {
+	struct path source, destination;
+
 	/* Path ACLs have no persistent inode label, so a hard link could alias a
-	 * protected credential or executable into an unprotected pathname. */
-	(void)old_dentry;
-	(void)new_dir;
-	(void)new_dentry;
+	 * protected credential or executable into an unprotected pathname. Permit
+	 * links only when both names stay wholly within the ephemeral tier. */
+	source.mnt = new_dir->mnt;
+	source.dentry = old_dentry;
+	destination.mnt = new_dir->mnt;
+	destination.dentry = new_dentry;
+	if (t1os_struct_path_is_ephemeral(&source) &&
+	    t1os_struct_path_is_ephemeral(&destination))
+		return 0;
 	return -EACCES;
 }
 
@@ -2006,6 +2074,10 @@ static int t1os_file_open(struct file *file)
 		free_page((unsigned long)tmp);
 		return -EACCES;
 	}
+	if (t1os_is_ephemeral_path(name)) {
+		free_page((unsigned long)tmp);
+		return 0;
+	}
 
 	if ((file->f_mode & FMODE_READ) && !t1os_special_read_allowed(name)) {
 		t1os_log_denial("confidential read", name);
@@ -2070,6 +2142,10 @@ static int t1os_file_perm(struct file *file, int mask)
 		t1os_log_denial("inherited runtime-root permission", name);
 		free_page((unsigned long)tmp);
 		return -EACCES;
+	}
+	if (t1os_is_ephemeral_path(name)) {
+		free_page((unsigned long)tmp);
+		return 0;
 	}
 	if ((mask & MAY_READ) && !t1os_special_read_allowed(name)) {
 		t1os_log_denial("confidential permission", name);
@@ -2148,6 +2224,8 @@ static int t1os_check_dentry_metadata(struct dentry *dentry)
 		ret = PTR_ERR(name);
 		goto out;
 	}
+	if (t1os_is_ephemeral_path(name))
+		goto out;
 	if (t1os_unreachable_path(name) ||
 	    t1os_is_forbidden_runtime_path(name) ||
 	    (t1os_is_special_path(name) &&

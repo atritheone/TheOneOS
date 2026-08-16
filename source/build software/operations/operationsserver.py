@@ -86,6 +86,13 @@ STARTUPSCRIPT = '/the one/build/startup/startup.py'
 STARTUPLOG = '/the one/logs/startup.py.log'
 MASTERFILE = '/the one/master/master.txt'
 RTCSETTIME = 0x4024700A
+RTCREADTIME = 0x80247009
+TIMEZONEFILE = '/the one/settings/time/timezone.txt'
+INTERNETTIMEFILE = '/the one/settings/time/internet.txt'
+ZONEINFODIR = '/the one/software/chromium/resources/zoneinfo'
+DEFAULTTIMEZONE = 'Australia/Sydney'
+MINIMUMCLOCKEPOCH = 1609459200.0
+MAXIMUMCLOCKEPOCH = 4102444800.0
 
 # This catalogue is broker-owned.  Callers may select an entry, but may not
 # supply a profile, executable, log destination, uid, gid, or arbitrary
@@ -95,7 +102,7 @@ APPLICATIONCATALOGUE = {
         'name': 'array', 'profile': 'desktop', 'arguments': 'array',
     },
     '/the one/build/brick/brick.py': {
-        'name': 'brick', 'profile': 'brick', 'arguments': 'none',
+        'name': 'brick', 'profile': 'brick', 'arguments': 'brick',
         'environment': {'BRICK_WINDOW': frozenset(('1',))},
     },
     '/the one/build/calculator/calculator.py': {
@@ -299,6 +306,7 @@ ACTIONDOMAINS = {
     'SETTINGS_RECOVERY_AUTHORIZE': frozenset(('settings',)),
     'SETTINGS_HOSTNAME_SET': frozenset(('settings',)),
     'SETTINGS_TIME_SET': frozenset(('settings',)),
+    'TIME_SAMPLE_SET': frozenset(('reign',)),
     'ARCHITECT_AUTHORIZE': frozenset(('brick', 'settings')),
     'ARCHITECT_REVOKE': frozenset(('brick', 'settings')),
     'ARCHITECT_CAPABILITY_CHECK': frozenset(('python',)),
@@ -966,6 +974,19 @@ def cataloguearguments(kind, arguments):
         if len(values) > 1:
             raise ValueError('arguments denied')
         return [userpath(value) for value in values]
+    if kind == 'brick':
+        if not values:
+            return []
+        if len(values) != 2 or values[0] != '--run-file':
+            raise ValueError('arguments denied')
+        target = userpath(values[1])
+        if not target.lower().endswith('.py') or not (
+            target == '/master' or target.startswith('/master/') or
+            target == '/.ephemeral/volumes' or
+            target.startswith('/.ephemeral/volumes/')
+        ):
+            raise ValueError('Python file denied')
+        return ['--run-file', target]
     if kind == 'files':
         return [userpath(value) for value in values]
     if kind == 'array':
@@ -1926,19 +1947,174 @@ def handlesettingshostname(request):
         return {'status': 'error', 'message': str(error) or 'hostname update failed'}
 
 
+def timezonepath(name):
+
+    name = str(name or '').strip().replace('\\', '/')
+    if (
+        not name or name.startswith('/') or
+        any(part in ('', '.', '..') for part in name.split('/'))
+    ):
+        raise ValueError('timezone denied')
+    root = os.path.realpath(ZONEINFODIR)
+    path = os.path.realpath(os.path.join(root, *name.split('/')))
+    if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
+        raise ValueError('Unknown timezone: ' + name)
+    return path
+
+
+def timezoneinfo(name):
+
+    name = str(name or '').strip()
+    with open(timezonepath(name), 'rb') as stream:
+        return zoneinfo.ZoneInfo.from_file(stream, key=name)
+
+
+def configuredtimezone():
+
+    try:
+        with open(TIMEZONEFILE, 'r', encoding='utf-8') as stream:
+            name = stream.read(256).strip()
+    except OSError:
+        name = DEFAULTTIMEZONE
+    if name in ('10', '+10'):
+        name = DEFAULTTIMEZONE
+    timezoneinfo(name)
+    return name
+
+
+def settingenabled(path):
+
+    try:
+        with open(path, 'r', encoding='utf-8') as stream:
+            return stream.read(32).strip().lower() in ('1', 'true', 'yes', 'on')
+    except OSError:
+        return False
+
+
+def rtcwallclockepoch(name):
+
+    zone = timezoneinfo(name)
+    last_error = None
+    for node in ('/the one/drivers/nodes/rtc0', '/the one/drivers/nodes/rtc'):
+        try:
+            descriptor = os.open(
+                node,
+                os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                getattr(os, 'O_CLOEXEC', 0))
+            try:
+                status = os.fstat(descriptor)
+                if not statmodule.S_ISCHR(status.st_mode):
+                    raise OSError('RTC node is not a character device')
+                value = bytearray(struct.calcsize('9i'))
+                fcntl.ioctl(descriptor, RTCREADTIME, value, True)
+            finally:
+                os.close(descriptor)
+            second, minute, hour, day, month, year, _, _, _ = struct.unpack('9i', value)
+            wallclock = datetime.datetime(
+                year + 1900, month + 1, day, hour, minute, second)
+            candidates = []
+            for fold in (0, 1):
+                candidate = wallclock.replace(tzinfo=zone, fold=fold)
+                epoch = candidate.timestamp()
+                if datetime.datetime.fromtimestamp(epoch, zone).replace(tzinfo=None) == wallclock:
+                    candidates.append(epoch)
+            if not candidates:
+                raise ValueError('motherboard time does not exist in ' + name)
+            return max(candidates)
+        except (OSError, ValueError) as error:
+            last_error = error
+    if last_error is not None:
+        raise last_error
+    raise FileNotFoundError('motherboard RTC is unavailable')
+
+
+def writemotherboardclock(epoch, name):
+
+    local = datetime.datetime.fromtimestamp(float(epoch), timezoneinfo(name))
+    timetable = local.timetuple()
+    value = struct.pack(
+        '9i', local.second, local.minute, local.hour, local.day,
+        local.month - 1, local.year - 1900,
+        (local.weekday() + 1) % 7, timetable.tm_yday - 1,
+        1 if local.dst() and local.dst() != datetime.timedelta(0) else 0)
+    for node in ('/the one/drivers/nodes/rtc0', '/the one/drivers/nodes/rtc'):
+        try:
+            descriptor = os.open(
+                node,
+                os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                getattr(os, 'O_CLOEXEC', 0))
+            try:
+                status = os.fstat(descriptor)
+                if not statmodule.S_ISCHR(status.st_mode):
+                    raise OSError('RTC node is not a character device')
+                fcntl.ioctl(descriptor, RTCSETTIME, value)
+                return True
+            finally:
+                os.close(descriptor)
+        except OSError:
+            continue
+    return False
+
+
+def setclockepoch(epoch, name, *, update_motherboard):
+
+    epoch = float(epoch)
+    if not MINIMUMCLOCKEPOCH <= epoch <= MAXIMUMCLOCKEPOCH:
+        raise ValueError('clock value denied')
+    timezoneinfo(name)
+    time.clock_settime(time.CLOCK_REALTIME, epoch)
+    return writemotherboardclock(epoch, name) if update_motherboard else False
+
+
+def initialiseclockfrommotherboard():
+
+    try:
+        name = configuredtimezone()
+        epoch = rtcwallclockepoch(name)
+        setclockepoch(epoch, name, update_motherboard=False)
+        print(
+            f'> operations server initialized system clock from local motherboard time ({name})',
+            file=sys.stderr, flush=True)
+        return True
+    except Exception as error:
+        print(
+            f'> operations server motherboard clock initialization unavailable {error}',
+            file=sys.stderr, flush=True)
+        return False
+
+
+def handletimesample(request):
+
+    try:
+        if str(request.get('source') or '').strip().lower() != 'internet':
+            raise ValueError('time source denied')
+        if not settingenabled(INTERNETTIMEFILE):
+            raise PermissionError('internet time is disabled')
+        name = configuredtimezone()
+        epoch = float(request.get('epoch'))
+        motherboardupdated = setclockepoch(
+            epoch, name, update_motherboard=True)
+        return {
+            'status': 'ok', 'source': 'internet', 'timezone': name,
+            'clock_set': True, 'motherboard_updated': motherboardupdated,
+        }
+    except (OSError, TypeError, ValueError) as error:
+        return {'status': 'error', 'message': str(error) or 'time sample denied'}
+
+
 def handlesettingstime(request):
 
     try:
         timezone = str(request.get('timezone') or '').strip()
         if len(timezone) > 128 or not re.fullmatch(r'[A-Za-z0-9_+.-]+(?:/[A-Za-z0-9_+.-]+)*', timezone):
             raise ValueError('timezone denied')
-        zoneinfo.ZoneInfo(timezone)
+        timezoneinfo(timezone)
         internet = request.get('internet') is True
         virtualbox = request.get('virtualbox') is True
         epoch = request.get('epoch')
         if epoch is not None:
             epoch = float(epoch)
-            if not 0 <= epoch <= 4102444800:
+            if not MINIMUMCLOCKEPOCH <= epoch <= MAXIMUMCLOCKEPOCH:
                 raise ValueError('clock value denied')
             internet = False
             virtualbox = False
@@ -1962,33 +2138,8 @@ def handlesettingstime(request):
             os.replace(temporary, path)
         motherboardupdated = False
         if epoch is not None:
-            time.clock_settime(time.CLOCK_REALTIME, epoch)
-            local = datetime.datetime.fromtimestamp(epoch, zoneinfo.ZoneInfo(timezone))
-            timetable = local.timetuple()
-            value = struct.pack(
-                '9i', local.second, local.minute, local.hour, local.day,
-                local.month - 1, local.year - 1900,
-                (local.weekday() + 1) % 7, timetable.tm_yday - 1,
-                1 if local.dst() and local.dst() != datetime.timedelta(0) else 0)
-            for node in (
-                    '/the one/drivers/nodes/rtc0',
-                    '/the one/drivers/nodes/rtc'):
-                try:
-                    descriptor = os.open(
-                        node,
-                        os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
-                        getattr(os, 'O_CLOEXEC', 0))
-                    try:
-                        status = os.fstat(descriptor)
-                        if not statmodule.S_ISCHR(status.st_mode):
-                            raise OSError('RTC node is not a character device')
-                        fcntl.ioctl(descriptor, RTCSETTIME, value)
-                        motherboardupdated = True
-                        break
-                    finally:
-                        os.close(descriptor)
-                except OSError:
-                    continue
+            motherboardupdated = setclockepoch(
+                epoch, timezone, update_motherboard=True)
         return {
             'status': 'ok', 'timezone': timezone,
             'clock_set': epoch is not None,
@@ -3913,6 +4064,9 @@ def handlerequest(request):
     if op == 'SETTINGS_TIME_SET':
         return handlesettingstime(request)
 
+    if op == 'TIME_SAMPLE_SET':
+        return handletimesample(request)
+
     if op == 'ARCHITECT_AUTHORIZE':
         return handlearchitectauthorize(request)
 
@@ -4534,6 +4688,7 @@ def main():
 
     global SERVERSTOP
 
+    initialiseclockfrommotherboard()
     loadstate()
 
     try:

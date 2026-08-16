@@ -11,6 +11,7 @@ initialised from the motherboard RTC; optional internet time keeps it accurate.
 
 # imports
 import datetime
+import json
 import os
 import socket
 import stat as statmodule
@@ -37,13 +38,11 @@ NTP_TIMEOUT = 3.0
 NTP_EPOCH = 2208988800
 NTP_SYNC_INTERVAL = 6 * 60 * 60
 NTP_RETRY_INTERVAL = 60
+OPERATIONSSOCKET = '/.ephemeral/operations/control.sock'
 RTC_SET_TIME = 0x4024700A
 RTC_RD_TIME = 0x80247009
 TIMEOUTPUTS = frozenset((COMMONTIMEFILE, ATREYANTIMEFILE))
 TIMEOUTPUTMAXIMUM = 128
-CLOCKMUTATIONUNAVAILABLE = (
-    'clock mutation is owned by Operations and is not available from reign'
-)
 _TIMEZONENAME = None
 _TIMEZONE = None
 
@@ -197,9 +196,34 @@ def queryinternettime(server=NTP_SERVER, timeout=NTP_TIMEOUT):
 
 def syncinternettime():
 
-    # Reign deliberately has no clock-mutation authority.  Do not turn an
-    # unauthenticated network sample into a generic clock-setting capability.
-    raise PermissionError(CLOCKMUTATIONUNAVAILABLE)
+    # Reign owns network sampling but not CLOCK_REALTIME.  Submit the bounded
+    # result to Operations, whose peer-domain check, setting check, settime LSM
+    # authority, and RTC ioctl allowlist form the mutation boundary.
+    epoch = queryinternettime()
+    channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        channel.settimeout(NTP_TIMEOUT + 2.0)
+        channel.connect(OPERATIONSSOCKET)
+        request = json.dumps({
+            'action': 'TIME_SAMPLE_SET', 'source': 'internet',
+            'epoch': float(epoch),
+        }, sort_keys=True, separators=(',', ':')).encode('utf-8') + b'\n'
+        channel.sendall(request)
+        response = bytearray()
+        while len(response) < 4096 and b'\n' not in response:
+            chunk = channel.recv(min(4096 - len(response), 1024))
+            if not chunk:
+                break
+            response.extend(chunk)
+        result = json.loads(bytes(response).split(b'\n', 1)[0].decode('utf-8'))
+    finally:
+        channel.close()
+    if not isinstance(result, dict) or result.get('status') != 'ok':
+        raise OSError(str(result.get('message') if isinstance(result, dict) else '') or
+                      'Operations rejected the internet time sample')
+    if not result.get('clock_set'):
+        raise OSError('Operations did not apply the internet time sample')
+    return epoch
 
 
 def rtcnodes():
@@ -276,8 +300,11 @@ def readmotherboardclock(name=None):
 
 def initialisemotherboardtime(name=None):
 
+    # Operations initializes CLOCK_REALTIME directly from the local RTC when
+    # its measured service starts.  Reign intentionally has no RTC descriptor
+    # or settime authority of its own.
     del name
-    raise PermissionError(CLOCKMUTATIONUNAVAILABLE)
+    return False
 
 
 def motherboardclockfields(epoch, name=None):
@@ -300,7 +327,7 @@ def motherboardclockfields(epoch, name=None):
 def writemotherboardclock(epoch, name=None):
 
     del epoch, name
-    raise PermissionError(CLOCKMUTATIONUNAVAILABLE)
+    return False
 
 
 def currentdatetime(epoch=None):
@@ -429,19 +456,22 @@ def writeatreyan():
 
 def internettimeservice():
 
-    unavailableannounced = False
-
     while True:
 
         internet_enabled = internettimeenabled()
-
-        if internet_enabled and not unavailableannounced:
-            print(f'internet time unavailable {CLOCKMUTATIONUNAVAILABLE}', flush=True)
-            unavailableannounced = True
-        elif not internet_enabled:
-            unavailableannounced = False
-
-        time.sleep(1)
+        if not internet_enabled:
+            time.sleep(1)
+            continue
+        try:
+            epoch = syncinternettime()
+            print(
+                'internet time synchronized ' +
+                datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).isoformat(),
+                flush=True)
+            time.sleep(NTP_SYNC_INTERVAL)
+        except Exception as error:
+            print(f'internet time unavailable {error}', flush=True)
+            time.sleep(NTP_RETRY_INTERVAL)
 
 
 def timekeeper():

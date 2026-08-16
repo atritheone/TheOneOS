@@ -81,7 +81,7 @@ trap cleanup EXIT
 mkdir -p "$processes" "$state" "$nodes" "$ephemeral"
 mount -t proc proc "$processes"
 mount --bind /sys "$state"
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "$ephemeral"
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$ephemeral"
 
 # A booted T1OS instance has an authenticated user and measured DRM state
 # before Chromium starts. The live process-chain test uses the software-safe

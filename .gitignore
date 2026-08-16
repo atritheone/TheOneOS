@@ -4,6 +4,9 @@
 # Keep only the authored top-level build programs in development.
 /development/**
 !/development/*.py
+!/development/roothealth/
+!/development/roothealth/engine/
+!/development/roothealth/engine/**
 
 # Applications that are outside this repository's scope
 /software/

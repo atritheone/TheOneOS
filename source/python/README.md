@@ -1,7 +1,7 @@
 # T1OS Python runtime
 
 The canonical production runtime is **CPython 3.14.7**, release
-`3.14.7-t1os.62`, ABI `cp314`.
+`3.14.7-t1os.64`, ABI `cp314`.
 
 The stable T1OS interpreter path is:
 

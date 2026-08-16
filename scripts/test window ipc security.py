@@ -50,7 +50,7 @@ def main():
     require(
         input_source,
         "SO_PEERCRED",
-        "identity.get(\"domain\") == \"window\"",
+        "candidate.get(\"domain\") == \"window\"",
         "RAWINPUTSUBSCRIPTIONS",
         "srv.listen(1)",
         "os.chmod(SOCKPATH, 0o600)",
@@ -104,6 +104,20 @@ def main():
         "standard_dialog = bool(internal and",
         "identity = clients.get(cid, {}).get(\"identity\")",
     )
+
+    pickerfinish = function_source(
+        trees["window"], window_source, "pickerfinish")
+    require(
+        pickerfinish,
+        "The authenticated Picker process has already performed filesystem",
+        "pickerfilematches(path, config[\"filters\"])",
+    )
+    for forbidden_probe in (
+        "os.path.isfile", "os.path.isdir", "os.path.islink",
+        "os.access", "pickerpathwritable",
+    ):
+        assert forbidden_probe not in pickerfinish, (
+            f"WindowServer repeated a Picker filesystem probe: {forbidden_probe}")
 
     clipset = function_source(trees["window"], window_source, "clipset")
     require(clipset, 'req.get("text")', "clienthasclipboardaccess")

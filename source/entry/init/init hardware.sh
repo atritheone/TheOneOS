@@ -939,7 +939,7 @@ prepare_terminfo_runtime() {
     [ -d "$source" ] || rescue 'I cannot continue because the packaged terminal information database is missing.'
     "$busybox" mkdir -p "$ephemeral" || rescue 'I could not create the temporary The One OS mount point.'
     "$busybox" mount -t tmpfs \
-        -o nodev,nosuid,mode=0755 \
+        -o nodev,nosuid,mode=1777 \
         tmpfs "$ephemeral" || rescue 'I could not create the temporary The One OS filesystem.'
     "$busybox" mkdir -m 0700 "$ephemeral/media" || \
         rescue 'I could not prepare the private desktop media runtime.'
@@ -959,6 +959,12 @@ prepare_terminfo_runtime() {
         rescue 'I could not assign the private Expanse runtime.'
     "$busybox" chmod 0711 "$ephemeral/expanse" || \
         rescue 'I could not protect the private Expanse runtime.'
+    "$busybox" mkdir -m 01733 "$ephemeral/network" || \
+        rescue 'I could not prepare the network exchange runtime.'
+    "$busybox" chown 0:0 "$ephemeral/network" || \
+        rescue 'I could not assign the network exchange runtime.'
+    "$busybox" chmod 01733 "$ephemeral/network" || \
+        rescue 'I could not protect the network exchange runtime.'
     "$busybox" mkdir -m 02710 "$ephemeral/audio" || \
         rescue 'I could not prepare the private audio service runtime.'
     "$busybox" chown 0:1000 "$ephemeral/audio" || \

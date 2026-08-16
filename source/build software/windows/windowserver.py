@@ -8173,22 +8173,25 @@ def pickerfinish(cid, req):
 
         valid = bool(paths)
 
+        # The authenticated Picker process has already performed filesystem and
+        # writability checks in its own uid/domain.  WindowServer must not repeat
+        # those probes from the compositor domain: private user tiers can be
+        # inaccessible there even though the picker and requesting application
+        # can legitimately use them.  The recipient remains responsible for
+        # opening or creating the returned path under its own LSM authority.
         if mode == "open_file":
             valid = valid and all(
-                os.path.isfile(path) and pickerfilematches(path, config["filters"])
+                pickerfilematches(path, config["filters"])
                 for path in paths
             )
         elif mode == "select_tier":
-            valid = len(paths) == 1 and os.path.isdir(paths[0])
+            valid = len(paths) == 1
         elif mode == "save_location":
-            valid = len(paths) == 1 and pickerpathwritable(paths[0])
+            valid = len(paths) == 1
         elif mode == "save_as":
             valid = (
                 len(paths) == 1
                 and os.path.basename(paths[0]) not in ("", ".", "..")
-                and pickerpathwritable(os.path.dirname(paths[0]))
-                and not os.path.isdir(paths[0])
-                and not os.path.islink(paths[0])
             )
 
         if not valid:

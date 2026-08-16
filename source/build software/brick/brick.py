@@ -20796,7 +20796,7 @@ def consolediagnosticcommand():
 
 
 # core function
-def main():
+def main(startupfile=None):
 
     global PREV_INPUTBUF, PREV_CURSORPOS, PREV_CURSOR_ON, DIRTY_PROMPT
 
@@ -20830,6 +20830,12 @@ def main():
 
         # initialise input state for the prompt
         initinput()
+
+        # Array opens selected Python source in Brick's already-confined
+        # interactive console.  The mutable source remains an argument to this
+        # measured entrypoint and is never treated as a catalogue executable.
+        if startupfile is not None:
+            run([str(startupfile)])
 
         # draw the header line (cwd/status)
         drawheader()
@@ -20959,4 +20965,10 @@ if __name__ == '__main__':
 
         sys.exit(consolediagnosticcommand())
 
-    main()
+    if len(sys.argv) == 3 and str(sys.argv[1]).strip().lower() == "--run-file":
+
+        main(sys.argv[2])
+
+    else:
+
+        main()

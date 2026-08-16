@@ -297,6 +297,15 @@ def settings_time_set(timezone, internet=False, virtualbox=False, epoch=None,
     return requestoperations(request, timeout=timeout)
 
 
+def time_sample_set(epoch, source='internet', timeout=5.0):
+
+    return requestoperations({
+        'action': 'TIME_SAMPLE_SET',
+        'source': str(source),
+        'epoch': float(epoch),
+    }, timeout=timeout)
+
+
 def python_authorization_policy(operation, arguments=None):
 
     operation = str(operation or '').strip()

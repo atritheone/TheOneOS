@@ -12,7 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Path $PSScriptRoot -Parent
 $kernelRoot = Join-Path $projectRoot 'source\entry\kernel'
-$configSource = Join-Path $kernelRoot 'T10Skernel 0.18 settings.txt'
+$configSource = Join-Path $kernelRoot 'T10Skernel hardware 0.19 settings.txt'
 $policySource = Join-Path $kernelRoot 't1os_lsm.c'
 $quotedShebangPatch = Join-Path $kernelRoot 't1os quoted shebang.patch'
 $settingsTarget = Join-Path $kernelRoot 'T10Skernel hardware 0.19 settings.txt'

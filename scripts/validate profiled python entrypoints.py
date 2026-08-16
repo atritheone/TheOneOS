@@ -151,7 +151,7 @@ def load_policy(repo: Path) -> tuple[dict, dict[str, dict], set[tuple[str, str]]
     if ordered != sorted(ordered):
         raise ValidationFailure("profiled Python inventory is not canonically ordered")
     lsm_paths = active_lsm_script_paths(
-        repo / "resource" / "entry" / "kernel" / "t1os_lsm.c"
+        repo / "source" / "entry" / "kernel" / "t1os_lsm.c"
     )
     if destinations != lsm_paths:
         missing = sorted(lsm_paths - destinations)

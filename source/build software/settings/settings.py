@@ -349,8 +349,9 @@ def atomictext(path, text, mode=0o600):
         raise
 
 
-def atomicjson(path, payload):
-    atomictext(path, json.dumps(payload, indent=2, sort_keys=True) + '\n')
+def atomicjson(path, payload, mode=0o600):
+    atomictext(
+        path, json.dumps(payload, indent=2, sort_keys=True) + '\n', mode=mode)
 
 
 def loadjson(path, defaults):
@@ -2086,7 +2087,7 @@ def savedisplay():
         'saturation': int(applied['saturation']),
         **nightlight,
     }
-    atomicjson(DISPLAYFILE, stored)
+    atomicjson(DISPLAYFILE, stored, mode=0o644)
     DISPLAY.update(applied)
     DISPLAYDRAFT.clear()
     if WINID is not None:
@@ -2190,20 +2191,22 @@ def savenetwork():
     if not NETWORK.get('dhcp'):
         lines.extend(('address=' + NETWORK['address'], 'netmask=' + NETWORK['netmask'], 'gateway=' + NETWORK['gateway']))
     target = os.path.join(NETWORKDIR, interface + '.txt') if interface else NETWORKFILE
-    atomictext(target, '\n'.join(lines) + '\n')
-    atomictext(DNSFILE, ''.join('nameserver ' + server + '\n' for server in dns))
+    atomictext(target, '\n'.join(lines) + '\n', mode=0o644)
+    atomictext(
+        DNSFILE, ''.join('nameserver ' + server + '\n' for server in dns),
+        mode=0o644)
     if newcredential:
         service_secret_put(newcredential, pendingpassphrase, timeout=3.0)
 
     try:
         if wirelesslines is not None:
             wirelesscontent = '\n'.join(wirelesslines) + '\n'
-            atomictext(WIRELESSFILE, wirelesscontent, mode=0o600)
+            atomictext(WIRELESSFILE, wirelesscontent, mode=0o644)
             for name in wirelessinterfaces():
                 atomictext(
                     os.path.join(NETWORKDIR, name + '.wireless.txt'),
                     wirelesscontent,
-                    mode=0o600)
+                    mode=0o644)
     except Exception:
         if newcredential:
             try:
@@ -2225,7 +2228,7 @@ def savenetwork():
         str(key): networkdisplayname(value)
         for key, value in ETHERNETNAMES.items()
         if str(key).startswith('ethernet-') and networkdisplayname(value)
-    })
+    }, mode=0o644)
     atomictext(NETWORKRECONFIGURE, str(int(time.time())) + '\n')
     if wirelesslines is not None:
         wiredonline = any(
@@ -2474,7 +2477,7 @@ def savemouse(live=True):
     atomicjson(MOUSEFILE, {
         'cursor_size': cursorsize,
         'cursor_speed': speed,
-    })
+    }, mode=0o644)
     if live:
         if WINID is not None:
             sendws({

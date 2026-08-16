@@ -586,7 +586,7 @@ if type(report['format']) is not int or report['format'] != 3:
     raise SystemExit('checker report format must be integer 3')
 if report['checker'] != 'roothealth':
     raise SystemExit('checker report product identity differs')
-if report['checker_version'] != '0.5.1':
+if report['checker_version'] != '0.5.2':
     raise SystemExit('checker report version differs from the shipped product')
 if report['mode'] != 'check':
     raise SystemExit('checker report mode must remain check')
@@ -931,7 +931,7 @@ for help_option in --help -h; do
     help_exit=$?
     set -e
     if [ "$help_exit" -ne 0 ] || \
-            ! printf '%s\n' "$help_output" | grep -Fqx 'roothealth v0.5.1' || \
+! printf '%s\n' "$help_output" | grep -Fqx 'roothealth v0.5.2' || \
             ! printf '%s\n' "$help_output" | grep -Fq -- '--preflight' || \
             ! printf '%s\n' "$help_output" | grep -Fq -- '--repair'; then
         echo "Checker help does not expose the v0.3 preflight and repair interfaces for $help_option." >&2
@@ -946,7 +946,7 @@ for version_option in --version -V; do
     set -e
     if [ "$version_exit" -ne 0 ] || \
             ! printf '%s\n' "$version_output" | \
-                grep -Fqx 'roothealth v0.5.1 (ntfs-next d4f481d)'; then
+grep -Fqx 'roothealth v0.5.2 (ntfs-next d4f481d)'; then
         echo "Checker version output differs for $version_option." >&2
         printf '%s\n' "$version_output" >&2
         exit 1

@@ -75,7 +75,7 @@ SHUTDOWNHEALTHREQUEST = os.path.join(
 SESSIONIDENTITY = '/the one/settings/session/identity.json'
 
 
-def _normaliseownedtree(descriptor, *, directorymode=0o700):
+def _normaliseownedtree(descriptor, *, directorymode=0o700, filemode=None):
 
     """Normalize an existing tree without following links or flattening modes."""
 
@@ -93,7 +93,8 @@ def _normaliseownedtree(descriptor, *, directorymode=0o700):
                 dir_fd=descriptor,
             )
             try:
-                _normaliseownedtree(child, directorymode=directorymode)
+                _normaliseownedtree(
+                    child, directorymode=directorymode, filemode=filemode)
             finally:
                 os.close(child)
         elif statmodule.S_ISREG(status.st_mode):
@@ -102,13 +103,46 @@ def _normaliseownedtree(descriptor, *, directorymode=0o700):
                 dir_fd=descriptor, follow_symlinks=False)
             # Preserve owner read/write/execute and all read/execute semantics;
             # remove only set-id and group/other write authority.
-            mode = statmodule.S_IMODE(status.st_mode)
-            mode &= ~(statmodule.S_ISUID | statmodule.S_ISGID | 0o022)
+            if filemode is None:
+                mode = statmodule.S_IMODE(status.st_mode)
+                mode &= ~(statmodule.S_ISUID | statmodule.S_ISGID | 0o022)
+            else:
+                mode = int(filemode)
             os.chmod(name, mode, dir_fd=descriptor, follow_symlinks=False)
         elif statmodule.S_ISLNK(status.st_mode):
             os.chown(
                 name, T1OS_DESKTOP_UID, T1OS_DESKTOP_GID,
                 dir_fd=descriptor, follow_symlinks=False)
+
+
+def normaliseservicesettings():
+
+    """Publish non-secret settings to their root boot-time consumers."""
+
+    settingsroot = '/the one/settings'
+    os.chown(settingsroot, 0, 0, follow_symlinks=False)
+    os.chmod(settingsroot, 0o755, follow_symlinks=False)
+    for relative in ('audio', 'display', 'mouse', 'network'):
+        path = os.path.join(settingsroot, relative)
+        if not os.path.exists(path):
+            os.mkdir(path, mode=0o755)
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+            getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            # These are service-consumed, non-secret settings.  The desktop
+            # Settings process owns mutation, while boot services must be able
+            # to traverse and read them without broad DAC-bypass capability.
+            _normaliseownedtree(
+                descriptor, directorymode=0o755, filemode=0o644)
+            if relative == 'network':
+                # Network atomically replaces only its exact LSM-authorized DNS
+                # output; the directory DAC must permit its root-owned temp.
+                os.fchmod(descriptor, 0o777)
+        finally:
+            os.close(descriptor)
 
 
 def normaliseexistingdesktopownership(masterfile='/the one/master/master.txt'):
@@ -140,22 +174,7 @@ def normaliseexistingdesktopownership(masterfile='/the one/master/master.txt'):
     finally:
         os.close(masterbase)
 
-    settingsroot = '/the one/settings'
-    os.chown(settingsroot, 0, 0, follow_symlinks=False)
-    os.chmod(settingsroot, 0o755, follow_symlinks=False)
-    for relative in ('audio', 'display', 'mouse', 'network'):
-        path = os.path.join(settingsroot, relative)
-        if not os.path.exists(path):
-            os.mkdir(path, mode=0o700)
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
-            getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
-        )
-        try:
-            _normaliseownedtree(descriptor)
-        finally:
-            os.close(descriptor)
+    normaliseservicesettings()
     return username
 
 
@@ -2856,6 +2875,10 @@ def createephemeral():
     # T1OS ephemeral hierarchy. Reuse that filesystem instead of hiding it
     # beneath a second tmpfs mount.
     if os.path.ismount(EPHEMERALTIER):
+        # Applications create private, boot-scoped top-level work areas here.
+        # Sticky tmp semantics let uid 1000 create them without allowing one
+        # application to remove another application's directory.
+        os.chmod(EPHEMERALTIER, 0o1777)
         return
 
     # use mount sys call
@@ -2873,6 +2896,8 @@ def createephemeral():
         err = ctypes.get_errno()
 
         raise OSError(err, f"CREATION OF EPHEMERAL FAILED {os.strerror(err)}")
+
+    os.chmod(EPHEMERALTIER, 0o1777)
 
 
 # window server functions
@@ -7003,6 +7028,10 @@ def main():
 
     # create ephemeral tier
     createephemeral()
+    # Repair upgraded installs before graphics, input, audio and network open
+    # their Settings-owned configuration.  Waiting until login is too late for
+    # those boot-time consumers.
+    normaliseservicesettings()
     setuppowerserver()
 
     # OperationsServer starts later. The supervisor will hand it a full TASKS

@@ -446,6 +446,7 @@ EXTERNALDRAGTARGET = None
 OPERATIONSSOCKET = "/.ephemeral/operations/control.sock"
 WRITEPROG = "/the one/build/write/write.py"
 PLAYERPROG = "/the one/build/player/player.py"
+BRICKPROG = "/the one/build/brick/brick.py"
 VIEWERPROG = "/the one/build/viewer/viewer.py"
 AUDIOEXTENSIONS = MEDIAAUDIOEXTENSIONS
 VIDEOEXTENSIONS = MEDIAVIDEOEXTENSIONS
@@ -16321,8 +16322,12 @@ def runitem(path):
 
     try:
 
-        # normalise target path
-        prog = normalisepath(path)
+        # User Python is data, not a catalogue executable.  Open the measured
+        # Brick shell and let its existing confined console run the file.
+        target = normalisepath(path)
+        ispython = str(target).lower().endswith('.py')
+        prog = BRICKPROG if ispython else target
+        arguments = ['--run-file', target] if ispython else []
 
     except Exception:
 
@@ -16331,7 +16336,7 @@ def runitem(path):
     try:
 
         # derive operation name
-        base = os.path.basename(str(prog))
+        base = os.path.basename(str(target))
         name = os.path.splitext(base)[0]
 
     except Exception:
@@ -16345,7 +16350,7 @@ def runitem(path):
     try:
 
         # run via operations server (foreground)
-        pid = opsrun(prog, [], name, None, user, "front", await_window=True)
+        pid = opsrun(prog, arguments, name, None, user, "front", await_window=True)
 
         if pid is None:
             return
@@ -16929,6 +16934,23 @@ def graphicsdiagnostic():
                 raise RuntimeError("Array video double-click association is invalid")
 
             result["checks"]["video_association_without_log"] = True
+            associationcalls.clear()
+            pythonpath = "/master/development/diagnostic script with spaces.py"
+            openitem(pythonpath)
+
+            if (
+                len(associationcalls) != 1
+                or associationcalls[0].get("path") != BRICKPROG
+                or associationcalls[0].get("args") != ["--run-file", pythonpath]
+                or associationcalls[0].get("name") != "diagnostic script with spaces"
+                or associationcalls[0].get("log") is not None
+                or associationcalls[0].get("mode") != "front"
+                or not associationcalls[0].get("await_window")
+            ):
+
+                raise RuntimeError("Array Python association did not use confined Brick")
+
+            result["checks"]["python_association_through_brick"] = True
             associationcalls.clear()
             openitem(imagepath)
 

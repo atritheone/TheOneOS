@@ -35,7 +35,7 @@ mount -t devpts -o newinstance,gid=1000,ptmxmode=0660,mode=0600 devpts "/mnt/the
 mount -t sysfs -o rw sysfs "/mnt/the one/drivers/control" || exec /bin/busybox sh
 mount -t sysfs -o ro sysfs "/mnt/the one/drivers/state" || exec /bin/busybox sh
 mount -t proc -o ro proc "/mnt/the one/drivers/processes" || exec /bin/busybox sh
-mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "/mnt/.ephemeral" || exec /bin/busybox sh
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "/mnt/.ephemeral" || exec /bin/busybox sh
 /bin/busybox mkdir -m 0700 "/mnt/.ephemeral/media" || exec /bin/busybox sh
 /bin/busybox chown 1000:1000 "/mnt/.ephemeral/media" || exec /bin/busybox sh
 /bin/busybox chmod 0700 "/mnt/.ephemeral/media" || exec /bin/busybox sh
@@ -45,6 +45,9 @@ mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs "/mnt/.ephemeral" || exec /bin/bu
 /bin/busybox mkdir -m 0711 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
 /bin/busybox chown 1000:1000 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
 /bin/busybox chmod 0711 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
+/bin/busybox mkdir -m 01733 "/mnt/.ephemeral/network" || exec /bin/busybox sh
+/bin/busybox chown 0:0 "/mnt/.ephemeral/network" || exec /bin/busybox sh
+/bin/busybox chmod 01733 "/mnt/.ephemeral/network" || exec /bin/busybox sh
 /bin/busybox mkdir -m 0700 "/mnt/.ephemeral/operations" || exec /bin/busybox sh
 /bin/busybox chown 1000:1000 "/mnt/.ephemeral/operations" || exec /bin/busybox sh
 /bin/busybox chmod 0700 "/mnt/.ephemeral/operations" || exec /bin/busybox sh

@@ -540,7 +540,7 @@ ldd "$cryptsetup_binary" | awk '
     cp -L -- "$library" "$destination"
 done
 
-"$ntfs_checker" --version | grep -Fq 'roothealth v0.5.1'
+    "$ntfs_checker" --version | grep -Fq 'roothealth v0.5.2'
 cp -L -- "$ntfs_checker" "$rootfs/sbin/roothealth"
 ldd "$ntfs_checker" | awk '
     /=> \// { print $3 }
@@ -656,7 +656,7 @@ gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'sbin/roothealth'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'lib64/ld-linux-x86-64.so.2'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'protected-roots.tsv'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'profiled-python-entrypoints.tsv'
-"$rootfs/sbin/roothealth" --version | grep -Fq 'roothealth v0.5.1'
+    "$rootfs/sbin/roothealth" --version | grep -Fq 'roothealth v0.5.2'
 "$rootfs/sbin/roothealth" --help | grep -Eq '(^|[[:space:]])--repair([=[:space:]]|$)'
 "$rootfs/sbin/roothealth" --help | grep -Eq '(^|[[:space:]])--preflight([=[:space:]]|$)'
 "$rootfs/sbin/roothealth" --help | grep -Eq '(^|[[:space:]])--boot-repair([=[:space:]]|$)'

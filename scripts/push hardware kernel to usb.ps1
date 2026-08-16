@@ -29,7 +29,7 @@ $initramfsSource = Join-Path $projectRoot 'environment\hardware\boot\initramfs-h
 $modulesSource = Join-Path $projectRoot 'environment\hardware\modules.tar.zst'
 $releaseSource = Join-Path $projectRoot 'environment\hardware\kernel-release.txt'
 $compatibilitySource = Join-Path $projectRoot 'source\drivers\settings\desktop compatibility.json'
-$updateName = '20260816-roothealth-cleanfast051-python62'
+$updateName = '20260816-roothealth-bootadmit052-python64'
 
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()

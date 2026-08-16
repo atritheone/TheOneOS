@@ -1,0 +1,33 @@
+name: ntfsprogs-plus test CI
+
+on:
+  push:
+    branches:
+      - main
+      - ntfs-next
+  pull_request:
+    branches:
+      - main
+      - ntfs-next
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - name: install packages
+      run: |
+        sudo apt-get install libgcrypt20-dev
+        sudo apt-get remove libntfs-3g89
+    - name: build ntfsprogs
+      run: |
+        ./autogen.sh
+        ./configure
+        make
+        sudo make install
+    - name: check ntfs test images
+      run: |
+        cd tests
+        ./test_all_images.sh

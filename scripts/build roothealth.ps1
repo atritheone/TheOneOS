@@ -12,10 +12,10 @@ $sourceBundlePath = Join-Path $outputDirectory 'roothealth-source.tar.gz'
 $linkedInputsPath = Join-Path $outputDirectory 'roothealth-linked-inputs.manifest'
 $obsoleteArchivePath = Join-Path $outputDirectory 'roothealth-upstream.tar.gz'
 $contractPath = Join-Path $projectRoot 'source\entry\roothealth\REPAIR-CONTRACT.md'
-$rolloutPath = Join-Path $projectRoot 'source\entry\roothealth\ROLLOUT-v0.5.1.md'
-$qualificationPath = Join-Path $projectRoot 'source\entry\roothealth\QUALIFICATION-v0.5.1.md'
+$rolloutPath = Join-Path $projectRoot 'source\entry\roothealth\ROLLOUT-v0.5.2.md'
+$qualificationPath = Join-Path $projectRoot 'source\entry\roothealth\QUALIFICATION-v0.5.2.md'
 $failureTaxonomyPath = Join-Path $projectRoot 'source\entry\roothealth\FAILURE-TAXONOMY-v1.md'
-$checkerVersion = '0.5.1'
+$checkerVersion = '0.5.2'
 $upstreamCommit = 'd4f481df6926557f7b18b471a43313652dec6f7e'
 
 function ConvertTo-WslPath {
@@ -125,7 +125,7 @@ make -C libntfs -j"$(nproc)" libntfs.la >/dev/null
 make -C src -j"$(nproc)" roothealth \
     CFLAGS='-O2 -g0 -fstack-protector-strong -fPIE -Wall -Wextra -Werror -Wno-address-of-packed-member -Wno-format-nonliteral' >/dev/null
 
-src/roothealth --version | grep -Fxq 'roothealth v0.5.1 (ntfs-next d4f481d)'
+src/roothealth --version | grep -Fxq 'roothealth v0.5.2 (ntfs-next d4f481d)'
 src/roothealth --help | grep -Eq '(^|[[:space:]])--repair([=[:space:]]|$)'
 src/roothealth --help | grep -Eq '(^|[[:space:]])--preflight([=[:space:]]|$)'
 src/roothealth --help | grep -Eq '(^|[[:space:]])--boot-repair([=[:space:]]|$)'
@@ -181,8 +181,8 @@ chmod 0644 "$license_tmp"
 cp -- "$recipe" "$work/bundle/roothealth-source/build-roothealth.ps1"
 mkdir -p "$work/bundle/roothealth-source/resource"
 cp -- "$contract" "$work/bundle/roothealth-source/resource/REPAIR-CONTRACT.md"
-cp -- "$rollout" "$work/bundle/roothealth-source/resource/ROLLOUT-v0.5.1.md"
-cp -- "$qualification" "$work/bundle/roothealth-source/resource/QUALIFICATION-v0.5.1.md"
+cp -- "$rollout" "$work/bundle/roothealth-source/resource/ROLLOUT-v0.5.2.md"
+cp -- "$qualification" "$work/bundle/roothealth-source/resource/QUALIFICATION-v0.5.2.md"
 cp -- "$failure_taxonomy" "$work/bundle/roothealth-source/resource/FAILURE-TAXONOMY-v1.md"
 cp -- "$work/roothealth.link.map" "$work/bundle/roothealth-source/roothealth.link.map"
 (

@@ -163,7 +163,7 @@ def writeconnectionstate(iface, connected, name='', address='', gateway='', serv
 
     try:
 
-        os.makedirs(NETWORKRUNTIME, mode=0o700, exist_ok=True)
+        ensurenetworkruntime()
         temporary = CONNECTIONSTATE + '.tmp'
 
         with open(temporary, 'w', encoding='utf-8') as handle:
@@ -171,6 +171,7 @@ def writeconnectionstate(iface, connected, name='', address='', gateway='', serv
             handle.flush()
             os.fsync(handle.fileno())
 
+        os.chmod(temporary, 0o644)
         os.replace(temporary, CONNECTIONSTATE)
 
     except Exception as error:
@@ -180,7 +181,7 @@ def writeconnectionstate(iface, connected, name='', address='', gateway='', serv
 
 def atomicjson(path, value):
 
-    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    ensurenetworkruntime()
     temporary = path + '.tmp'
 
     with open(temporary, 'w', encoding='utf-8') as handle:
@@ -188,7 +189,17 @@ def atomicjson(path, value):
         handle.flush()
         os.fsync(handle.fileno())
 
+    os.chmod(temporary, 0o644)
     os.replace(temporary, path)
+
+
+def ensurenetworkruntime():
+
+    # Settings creates fixed request files while Network owns state and the
+    # directory.  Write+traverse without listing, plus sticky deletion rules,
+    # provides the intended boot-scoped exchange using ordinary DAC.
+    os.makedirs(NETWORKRUNTIME, mode=0o1733, exist_ok=True)
+    os.chmod(NETWORKRUNTIME, 0o1733)
 
 
 def writeinitialstate(value):
@@ -213,7 +224,7 @@ def writeinitialstate(value):
         raise ValueError('initial network state is too large')
 
     directory = os.path.dirname(INITIALSTATE)
-    os.makedirs(directory, mode=0o700, exist_ok=True)
+    ensurenetworkruntime()
     directorydescriptor = os.open(
         directory,
         os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
@@ -865,7 +876,7 @@ def startwireless(iface, configuration):
     if existing is not None:
         stopwireless(iface)
 
-    os.makedirs(NETWORKRUNTIME, mode=0o700, exist_ok=True)
+    ensurenetworkruntime()
     control = os.path.join(NETWORKRUNTIME, 'control')
     os.makedirs(control, mode=0o700, exist_ok=True)
     configpath = os.path.join(NETWORKRUNTIME, f'{iface}.wireless.conf')
@@ -1866,7 +1877,7 @@ def configuredns(servers):
 
             os.unlink(temporary)
 
-        except FileNotFoundError:
+        except OSError:
 
             pass
 
@@ -2669,6 +2680,7 @@ def main(force=False):
 # execute main
 if __name__ == '__main__':
 
+    ensurenetworkruntime()
     initialattempt = True
 
     while True:

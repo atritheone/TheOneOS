@@ -1300,7 +1300,7 @@ if (
 $ntfsCheckerBuilderText = Get-Content -LiteralPath $ntfsCheckerBuilder -Raw
 foreach ($requiredText in @(
     'd4f481df6926557f7b18b471a43313652dec6f7e',
-    "`$checkerVersion = '0.5.1'",
+        "`$checkerVersion = '0.5.2'",
     'development\roothealth\engine',
     '-fstack-protector-strong -fPIE',
     '-D_FORTIFY_SOURCE=3',
@@ -1324,7 +1324,7 @@ catch {
 if (
     [int]$ntfsCheckerMetadataObject.format -ne 2 -or
     [string]$ntfsCheckerMetadataObject.product -cne 'roothealth' -or
-    [string]$ntfsCheckerMetadataObject.version -cne '0.5.1' -or
+    [string]$ntfsCheckerMetadataObject.version -cne '0.5.2' -or
     [string]$ntfsCheckerMetadataObject.mode -cne 'qualified-repair' -or
     [string]$ntfsCheckerMetadataObject.upstream.commit -cne 'd4f481df6926557f7b18b471a43313652dec6f7e' -or
     @($ntfsCheckerMetadataObject.enabled_policies) -notcontains 'cluster-bitmap-exhaustive-v1' -or
@@ -2663,9 +2663,11 @@ foreach ($requiredText in @(
     'static const char atreyan[] = "atreyan.txt";',
     'if (t1os_reign_time_output_create_allowed(dir, dentry, mode))',
     'static int t1os_path_symlink(const struct path *dir,',
-    '(void)dir;',
-    '(void)dentry;',
     '(void)old_name;',
+    'static bool t1os_struct_path_is_ephemeral(const struct path *path)',
+    'return t1os_struct_path_is_ephemeral(&destination) ? 0 : -EACCES;',
+    't1os_struct_path_is_ephemeral(&source) &&',
+    't1os_struct_path_is_ephemeral(&destination)',
     '"#!\"/the one/software/python/bin/python\" -B";',
     'static int t1os_path_unlink(const struct path *dir, struct dentry *dentry)',
     'static int t1os_path_rename(const struct path *old_dir,',

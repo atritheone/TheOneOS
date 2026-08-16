@@ -1,7 +1,7 @@
 {
   "format": 1,
   "component": "python-release",
-  "release": "3.14.7-t1os.62",
+  "release": "3.14.7-t1os.64",
   "immutable": true,
   "rebuild_policy": "change the release identifier before replacing this lock",
   "python_version": "3.14.7",
@@ -9,8 +9,8 @@
   "build_definitions": [
     {
       "path": "development/promote python 3.14 runtime.py",
-      "size": 30775,
-      "sha256": "42ff3a8e5d9143483a1baa8a6ae28cdbf86aceaca2f1897fa2ff48dee0f1021e"
+      "size": 30769,
+      "sha256": "2dde4e3f48f23873afa9bc2a6f105d122e33f447bffbe9fe095289a8e0c5e99a"
     },
     {
       "path": "development/package python 3.14 candidate.py",
@@ -34,8 +34,8 @@
     },
     {
       "path": "source/entry/init/init hardware.sh",
-      "size": 68781,
-      "sha256": "c0c681105a49b24a40306e3e46918b4f7cb1f5dc811ef1cbd908b7e6a16ac1c4"
+      "size": 69438,
+      "sha256": "a5d6b1f8c94769aa17437c1f22036b4038178ddc98937f7c2fb9b12040c2f2e7"
     },
     {
       "path": "source/entry/init/angel recovery.sh",
@@ -44,18 +44,18 @@
     },
     {
       "path": "source/entry/kernel/t1os_lsm.c",
-      "size": 105535,
-      "sha256": "cef856d2ad26e95722d25cc09b6c173b5f4b0c8257b03fc895b769d0b2dd80c2"
+      "size": 108025,
+      "sha256": "85e58723e3944b0fc96395f704f80a41278427a05fd0cc64ae762215db320d32"
     },
     {
       "path": "scripts/build hardware initramfs.ps1",
-      "size": 30981,
-      "sha256": "4cbc68ae0777d2b4d9e688dd8e7f743d6bcce34d3a6350b0d5459ce634db966e"
+      "size": 30985,
+      "sha256": "013f626942cd8a6a51d6fb2c4e764cecb789373592f0c4bbef95818ee32d221b"
     },
     {
       "path": "scripts/test hardware build.ps1",
-      "size": 170182,
-      "sha256": "6b0a71ba37ccf8fa112fa7970dc6805a5fca09a18f848125cc5e8664dcc13c73"
+      "size": 170314,
+      "sha256": "e262da810108bb08a4ec4db77f727b43f56f373854a743551388bc8294e87cb4"
     },
     {
       "path": "scripts/test python runtime.ps1",
@@ -64,8 +64,8 @@
     },
     {
       "path": "scripts/validate profiled python entrypoints.py",
-      "size": 11871,
-      "sha256": "d48951ec6abd626373d3be2d241d3ed486b1f66fc6df3aa3fb8d35ff1d8672f3"
+      "size": 11869,
+      "sha256": "2bd05fc9335f98d91bb5488426674b681ac425fbdd30939f2f3795360351f89c"
     },
     {
       "path": "scripts/validate profiled python entrypoints.ps1",
@@ -85,7 +85,7 @@
     {
       "path": "source/python/build/runtime.json",
       "size": 5799,
-      "sha256": "07d61c36c3245a55ea616439d283e0cb75f9583f503b465bcd366ad49c85ad28"
+      "sha256": "00913f2f27125822ba2308b1715684ec72821e8b77811396c823ce5f94d0bd7e"
     },
     {
       "path": "source/python/locks/python-3.14.7-candidate.json",
@@ -109,7 +109,7 @@
       "sha256": "b1a0a17582d5e8df88489c63386f0d9b252a4d91b2476065097dddc01e83fd2f"
     },
     "python_sha256": "cf48ee4d640394b17b081cbcdef2024e19560cc06592cc175cda29aac853c840",
-    "manifest_sha256": "31fa8c539d4f1a788d30f3e793caacf69ff12f1b7b05976e4975794d059bd036"
+    "manifest_sha256": "41d73168a4e58f4f11a4933b985cb098160c0d5837eb1c0173924a3bd80ec424"
   },
   "protected_external_roots": [
     {
@@ -134,8 +134,8 @@
         "algorithm": "t1os-install-tree-sha256-v2",
         "directories": 34,
         "files": 50,
-        "bytes": 7378083,
-        "sha256": "972ebc290beb3199a44dafe095766429c3ca600dcd3bd1c2aa81aa73664e7367"
+        "bytes": 7388573,
+        "sha256": "dad965e6ebdbf78f1a126a98032b69099e9421161e33413353cf0aa891e1e789"
       }
     },
     {

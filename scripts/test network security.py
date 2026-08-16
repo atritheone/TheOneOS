@@ -173,12 +173,14 @@ def main():
         )
         originalnetdir = network.NETDIR
         originalwireless = network.WIRELESSCONF
-        originalloadsecret = network.load_service_secret
+        originalgetsecret = network.service_secret_get
+        originallog = network.log
         try:
             network.NETDIR = directory
             network.WIRELESSCONF = str(settingspath)
-            network.load_service_secret = lambda name: (
-                b'correct horse battery staple' if name == credential else b''
+            network.log = lambda *args, **kwargs: None
+            network.service_secret_get = lambda name, timeout=3.0: (
+                'correct horse battery staple' if name == credential else ''
             )
             loaded = network.wirelesssettings('wlan0')
             require(
@@ -204,7 +206,8 @@ def main():
         finally:
             network.NETDIR = originalnetdir
             network.WIRELESSCONF = originalwireless
-            network.load_service_secret = originalloadsecret
+            network.service_secret_get = originalgetsecret
+            network.log = originallog
 
     class FakeNFTables:
         def __init__(self):
