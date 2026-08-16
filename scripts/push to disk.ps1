@@ -43,6 +43,9 @@ $pythonManifestSource = Join-Path $pythonSoftwareSource 'manifest.json'
 $pythonReleaseLockSource = Join-Path $projectRoot 'source\python\locks\release.json'
 $pythonRuntimeConfigSource = Join-Path $projectRoot 'source\python\build\runtime.json'
 $pythonRuntimeVerifier = Join-Path $PSScriptRoot 'test python runtime.ps1'
+$bootPolicyBuilder = Join-Path $PSScriptRoot 'build boot protected roots.py'
+$bootPolicyDirectory = Join-Path $projectRoot 'development\hardware boot policy'
+$bootPolicyManifest = Join-Path $bootPolicyDirectory 'protected-roots.json'
 $resourceSource = Join-Path $projectRoot 'resource'
 $logoSource = Join-Path $resourceSource 'logos'
 $fatalScreenSource = Join-Path $projectRoot 'flash\red_screen_of_death.png'
@@ -165,6 +168,7 @@ $requiredFiles = @(
     $pythonReleaseLockSource,
     $pythonRuntimeConfigSource,
     $pythonRuntimeVerifier,
+    $bootPolicyBuilder,
     $fatalScreenSource,
     (Join-Path $resourceSource 'fonts\atkinsonhyperlegiblenext.ttf'),
     (Join-Path $resourceSource 'fonts\cambria.ttf'),
@@ -279,6 +283,16 @@ function ConvertTo-WslPath {
     return $translatedPath
 }
 
+New-Item -ItemType Directory -Path $bootPolicyDirectory -Force | Out-Null
+$wslBootPolicyBuilder = ConvertTo-WslPath -WindowsPath $bootPolicyBuilder
+$wslProjectRoot = ConvertTo-WslPath -WindowsPath $projectRoot
+$wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
+& wsl.exe --exec python3 -B $wslBootPolicyBuilder `
+    --repo $wslProjectRoot --output $wslBootPolicyManifest
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $bootPolicyManifest -PathType Leaf)) {
+    throw 'The independent boot protected-root policy build failed.'
+}
+
 $buildFileCount = @(
     Get-ChildItem -LiteralPath $buildSource -File -Recurse |
         Where-Object {
@@ -361,6 +375,7 @@ try {
     $wslPythonSoftwareSource = ConvertTo-WslPath -WindowsPath $pythonSoftwareSource
     $wslPythonCatalogueSource = ConvertTo-WslPath -WindowsPath $pythonCatalogueSource
     $wslPythonRuntimeConfigSource = ConvertTo-WslPath -WindowsPath $pythonRuntimeConfigSource
+    $wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
     $wslResourceSource = ConvertTo-WslPath -WindowsPath $resourceSource
 
     Write-Host "Comparing build software with $buildDestination..."
@@ -430,6 +445,7 @@ preflight_only=${48}
 managed_verify_only=${49}
 managed_sync_only=${50}
 profiled_python_config=${51}
+boot_policy_manifest=${52}
 expanse_resource_destination="$mount_point/the one/resources/expanse"
 cursor_resource_destination="$mount_point/the one/resources/graphics/mouse cursors"
 system_resource_destination="$mount_point/the one/resources/system"
@@ -1358,7 +1374,8 @@ protect_managed_python_release() {
         "$expected_python_manifest_sha256" \
         "$target_mode" \
         "$managed_verify_only" \
-        "$profiled_python_config" <<'PY'
+        "$profiled_python_config" \
+        "$boot_policy_manifest" <<'PY'
 import hashlib
 import json
 import os
@@ -1381,6 +1398,7 @@ expected_manifest_sha256 = sys.argv[9]
 target_mode = sys.argv[10]
 managed_python_only = sys.argv[11] == 'True'
 profiled_python_config = os.path.abspath(sys.argv[12])
+boot_policy_manifest = os.path.abspath(sys.argv[13])
 if target_mode not in ('drive', 'image'):
     raise SystemExit('protected deployment target mode is invalid')
 normalize_metadata = target_mode == 'image'
@@ -1448,13 +1466,15 @@ except (OSError, UnicodeError, json.JSONDecodeError) as error:
 if manifest.get('state') != 'verified' or manifest.get('release') != expected_release:
     fail('deployed Python manifest does not describe the expected verified release')
 try:
-    with open(profiled_python_config, encoding='utf-8') as stream:
-        runtime_config = json.load(stream)
+    with open(boot_policy_manifest, encoding='utf-8') as stream:
+        boot_policy = json.load(stream)
 except (OSError, UnicodeError, json.JSONDecodeError) as error:
-    fail(f'profiled Python policy is unreadable: {error}')
-profile_policy = runtime_config.get('profiled_python_entrypoints')
+    fail(f'boot protected-root policy is unreadable: {error}')
+profile_policy = boot_policy.get('profiled_python_entrypoints')
 if (
-    not isinstance(profile_policy, dict)
+    boot_policy.get('format') != 1
+    or boot_policy.get('component') != 't1os-boot-protected-roots'
+    or not isinstance(profile_policy, dict)
     or set(profile_policy) != {
         'format', 'owner', 'group', 'install_mode', 'shebang', 'entries'
     }
@@ -1465,12 +1485,10 @@ if (
     or profile_policy.get('shebang') != '#!"/the one/software/python/bin/python" -B\n'
     or not isinstance(profile_policy.get('entries'), list)
     or not profile_policy['entries']
-    or manifest.get('profiled_python_entrypoints') != profile_policy
     or manifest.get('install_policy', {}).get('owner') != 0
     or manifest.get('install_policy', {}).get('group') != 0
-    or manifest.get('install_policy', {}).get('profiled_python_mode') != '0555'
 ):
-    fail('deployed manifest differs from the canonical profiled Python policy')
+    fail('independent boot policy or Python ownership contract differs')
 
 def validate_relative(value, *, root_allowed):
     if (
@@ -1560,9 +1578,9 @@ if manifest.get('software', {}).get('destination') != '/the one/software/python'
 if manifest.get('catalogue', {}).get('destination') != '/the one/catalogue/python':
     fail('Python catalogue manifest destination differs')
 
-external = manifest.get('protected_external_roots')
+external = boot_policy.get('roots')
 if not isinstance(external, list) or len(external) != len(expected_external):
-    fail('protected external-root manifest inventory differs')
+    fail('independent boot protected-root inventory differs')
 external_by_name = {}
 for entry, expected in zip(external, expected_external):
     name, source, destination, exclude_generated = expected
@@ -2752,7 +2770,7 @@ sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
     }
     try {
         $normalizedCopyCommand |
-            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource
+            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource $wslBootPolicyManifest
         $copyExitCode = $LASTEXITCODE
         if ($copyExitCode -ne 0) {
             $targetName = if ($UsbDrive) { 'T1OS USB drive' } else { 'disk' }

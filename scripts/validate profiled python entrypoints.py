@@ -249,6 +249,11 @@ def parse_arguments() -> argparse.Namespace:
     )
     parser.add_argument("--manifest", type=Path, action="append", default=[])
     parser.add_argument("--staged-root", type=Path)
+    parser.add_argument(
+        "--policy-only",
+        action="store_true",
+        help="validate the live boot/LSM policy without binding it to a Python release",
+    )
     return parser.parse_args()
 
 
@@ -259,13 +264,13 @@ def main() -> int:
     repo = arguments.repo.resolve()
     policy, _, profiled = load_policy(repo)
     manifests = list(arguments.manifest)
-    if not manifests:
+    if not manifests and not arguments.policy_only:
         defaults = (
             repo / "source" / "software" / "python" / "manifest.json",
             repo / "development" / "python 3.14 candidate" / "t1os" / "manifest.json",
         )
         manifests = [path for path in defaults if path.is_file()]
-    if not manifests:
+    if not manifests and not arguments.policy_only:
         raise ValidationFailure("no candidate or canonical manifest was supplied")
     for manifest in manifests:
         validate_manifest(manifest.resolve(), policy, profiled)

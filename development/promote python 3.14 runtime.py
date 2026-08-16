@@ -372,17 +372,16 @@ def protected_external_roots(
 
 
 def build_definition_records() -> list[dict]:
+    # These records are release-engineering provenance only. Production
+    # verification is anchored to the immutable payload trees below; kernel,
+    # initramfs, LSM and deployment tooling deliberately do not belong to a
+    # Python release identity.
     relative_paths = [
         "development/promote python 3.14 runtime.py",
         "development/package python 3.14 candidate.py",
         "scripts/build python runtime.ps1",
         "scripts/build python 3.14 candidate.ps1",
         "scripts/package python 3.14 candidate.ps1",
-        "source/entry/init/init hardware.sh",
-        "source/entry/init/angel recovery.sh",
-        "source/entry/kernel/t1os_lsm.c",
-        "scripts/build hardware initramfs.ps1",
-        "scripts/test hardware build.ps1",
         "scripts/test python runtime.ps1",
         "scripts/validate profiled python entrypoints.py",
         "scripts/validate profiled python entrypoints.ps1",
@@ -413,8 +412,6 @@ def build_manifest(
     catalogue_root: Path,
     image_root: Path,
 ) -> dict:
-    config = read_json(RUNTIME_CONFIG)
-    policy, _ = profiled_python_policy(config)
     software = payload_inventory(software_root, skip_files={"manifest.json"})
     catalogue = payload_inventory(catalogue_root)
     software["destination"] = "/the one/software/python"
@@ -443,7 +440,7 @@ def build_manifest(
         "transformations": [
             "promoted verified CPython 3.14.7 candidate without rebuilding binaries",
             "retained versionless python and temporary python3.13 compatibility entrypoints",
-            "bound recovery-enabled build, boot, image, and VirtualBox protected roots",
+            "kept boot and LSM protected-root policy outside the Python release identity",
         ],
         "system_packages": [],
         "t1os_components": candidate.get("verification", {}).get(
@@ -459,12 +456,8 @@ def build_manifest(
             "regular_file_mode": "0444",
             "profiled_python_mode": "0555",
         },
-        "profiled_python_entrypoints": policy,
         "software": software,
         "catalogue": catalogue,
-        "protected_external_roots": protected_external_roots(
-            config, source_overrides={"image_catalogue": image_root}
-        ),
         "verification": candidate.get("verification", {}),
     }
 
@@ -487,16 +480,6 @@ def build_release_lock(manifest: dict, manifest_digest: str) -> dict:
             else manifest["software"]["files"][0]["sha256"],
             "manifest_sha256": manifest_digest,
         },
-        "protected_external_roots": [
-            {
-                "name": item["name"],
-                "source": item["source"],
-                "destination": item["destination"],
-                "exclude_generated_bytecode": item["exclude_generated_bytecode"],
-                "tree": item["tree"],
-            }
-            for item in manifest["protected_external_roots"]
-        ],
     }
 
 
@@ -510,8 +493,6 @@ def verify(deployment_only: bool) -> dict:
     manifest_path = SOFTWARE_DESTINATION / "manifest.json"
     manifest = read_json(manifest_path)
     release = read_json(RELEASE_LOCK)
-    config = read_json(RUNTIME_CONFIG)
-    policy, _ = profiled_python_policy(config)
     manifest_digest = sha256_file(manifest_path)
     if (
         manifest.get("state") != "verified"
@@ -521,7 +502,6 @@ def verify(deployment_only: bool) -> dict:
         or release.get("component") != "python-release"
         or release.get("release") != RELEASE
         or release.get("outputs", {}).get("manifest_sha256") != manifest_digest
-        or manifest.get("profiled_python_entrypoints") != policy
         or manifest.get("install_policy", {}).get("owner") != 0
         or manifest.get("install_policy", {}).get("group") != 0
         or manifest.get("install_policy", {}).get("profiled_python_mode") != "0555"
@@ -546,27 +526,6 @@ def verify(deployment_only: bool) -> dict:
     python_hash = sha256_file(SOFTWARE_DESTINATION / "bin" / "python")
     if python_hash != release["outputs"]["python_sha256"]:
         raise PromotionFailure("Versionless Python executable differs from its release lock")
-    if not deployment_only:
-        definitions = build_definition_records()
-        if manifest.get("source", {}).get("build_definitions") != definitions:
-            raise PromotionFailure("Build definitions differ from the canonical manifest")
-        if release.get("build_definitions") != definitions:
-            raise PromotionFailure("Build definitions differ from the release lock")
-        external = protected_external_roots(config)
-        if external != manifest.get("protected_external_roots"):
-            raise PromotionFailure("Protected external roots differ from the manifest")
-        locked = [
-            {
-                "name": item["name"],
-                "source": item["source"],
-                "destination": item["destination"],
-                "exclude_generated_bytecode": item["exclude_generated_bytecode"],
-                "tree": item["tree"],
-            }
-            for item in external
-        ]
-        if locked != release.get("protected_external_roots"):
-            raise PromotionFailure("Protected external roots differ from the release lock")
     return {
         "release": RELEASE,
         "python_version": VERSION,
@@ -576,7 +535,7 @@ def verify(deployment_only: bool) -> dict:
         "catalogue_files": catalogue["tree"]["files"],
         "software_tree": software["tree"],
         "catalogue_tree": catalogue["tree"],
-        "protected_external_roots": len(manifest.get("protected_external_roots", [])),
+        "attestation_scope": "python-payload-only",
         "scope": "deployment" if deployment_only else "full",
     }
 
@@ -662,16 +621,6 @@ def promote() -> dict:
             "python_sha256": hashes.pop(),
             "manifest_sha256": manifest_digest,
         },
-        "protected_external_roots": [
-            {
-                "name": item["name"],
-                "source": item["source"],
-                "destination": item["destination"],
-                "exclude_generated_bytecode": item["exclude_generated_bytecode"],
-                "tree": item["tree"],
-            }
-            for item in manifest["protected_external_roots"]
-        ],
     }
 
     PROMOTION_ROOT.mkdir(parents=True, exist_ok=True)

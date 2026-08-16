@@ -21,7 +21,7 @@ if ([string]::IsNullOrWhiteSpace($wslValidator) -or
     throw 'Could not translate the profiled Python validation paths for WSL.'
 }
 
-& wsl.exe -d Ubuntu --exec python3 -B $wslValidator --repo $wslProjectRoot
+& wsl.exe -d Ubuntu --exec python3 -B $wslValidator --repo $wslProjectRoot --policy-only
 if ($LASTEXITCODE -ne 0) {
     throw "Profiled Python validation failed (exit code $LASTEXITCODE)."
 }

@@ -2,7 +2,8 @@
 param(
     [switch]$Offline,
     [switch]$Rebuild,
-    [switch]$StageOnly
+    [switch]$StageOnly,
+    [switch]$Promote
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +19,31 @@ foreach ($required in @($candidateBuilder, $candidatePackager, $promoter)) {
 }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
     throw 'Required command not found: wsl.exe'
+}
+if ($StageOnly -and $Promote) {
+    throw '-StageOnly and -Promote are mutually exclusive.'
+}
+
+$wslPromoter = (& wsl.exe -d Ubuntu --exec wslpath -a $promoter |
+    Select-Object -First 1).Trim()
+if ([string]::IsNullOrWhiteSpace($wslPromoter)) {
+    throw "Could not translate Python 3.14 promoter path: $promoter"
+}
+
+# The default operation is deliberately read-only. Generic build and deploy
+# workflows may call this command as a gate, but only an explicit Python
+# rebuild, stage, or promotion request may construct a candidate.
+if (-not ($Rebuild -or $StageOnly -or $Promote)) {
+    & wsl.exe -d Ubuntu --exec python3 -B $wslPromoter verify
+    if ($LASTEXITCODE -ne 0) {
+        throw (
+            'The existing Python production release failed verification. ' +
+            'It was not rebuilt automatically; repair its payload or request ' +
+            '-Rebuild/-Promote explicitly.'
+        )
+    }
+    Write-Host 'T1OS Python production is unchanged and verified; no candidate was built.'
+    exit 0
 }
 
 if ($Rebuild) {
@@ -41,11 +67,9 @@ if ($StageOnly) {
     exit 0
 }
 
-$wslPromoter = (& wsl.exe -d Ubuntu --exec wslpath -a $promoter |
-    Select-Object -First 1).Trim()
-if ([string]::IsNullOrWhiteSpace($wslPromoter)) {
-    throw "Could not translate Python 3.14 promoter path: $promoter"
-}
+# -Rebuild preserves the established explicit rebuild-and-promote operation.
+# -Promote supports promotion of an already-built candidate without rebuilding
+# CPython. Neither path can be entered accidentally by the default invocation.
 & wsl.exe -d Ubuntu --exec python3 -B $wslPromoter promote
 if ($LASTEXITCODE -ne 0) {
     throw "Python 3.14.7 promotion failed (exit code $LASTEXITCODE)."

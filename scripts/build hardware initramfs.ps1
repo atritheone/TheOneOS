@@ -29,6 +29,9 @@ else {
 }
 $pythonVerifier = Join-Path $projectRoot 'scripts\test python runtime.ps1'
 $pythonRuntimeConfig = Join-Path $projectRoot 'source\python\build\runtime.json'
+$bootPolicyBuilder = Join-Path $projectRoot 'scripts\build boot protected roots.py'
+$bootPolicyDirectory = Join-Path $projectRoot 'development\hardware boot policy'
+$bootPolicyManifest = Join-Path $bootPolicyDirectory 'protected-roots.json'
 $ntfsCheckerBuilder = Join-Path $projectRoot 'scripts\build roothealth.ps1'
 $ntfsCheckerSource = Join-Path $projectRoot 'environment\hardware\tools\roothealth'
 $firmwareArchive = Join-Path $projectRoot 'environment\hardware\firmware.tar.zst'
@@ -46,7 +49,7 @@ function ConvertTo-WslPath {
     return ([string]($output | Select-Object -First 1)).Trim()
 }
 
-$requiredFiles = @($busyBoxSource, $initSource, $recoverySource, $pythonManifest, $pythonReleaseLock, $pythonRuntimeConfig, $ntfsCheckerBuilder)
+$requiredFiles = @($busyBoxSource, $initSource, $recoverySource, $pythonManifest, $pythonReleaseLock, $pythonRuntimeConfig, $bootPolicyBuilder, $ntfsCheckerBuilder)
 if (-not $Candidate314) {
     $requiredFiles += $pythonVerifier
 }
@@ -62,6 +65,16 @@ if (-not $?) {
 }
 if (-not (Test-Path -LiteralPath $ntfsCheckerSource -PathType Leaf)) {
     throw "The roothealth artifact is missing: $ntfsCheckerSource"
+}
+
+New-Item -ItemType Directory -Path $bootPolicyDirectory -Force | Out-Null
+$wslBootPolicyBuilder = ConvertTo-WslPath -WindowsPath $bootPolicyBuilder
+$wslProjectRoot = ConvertTo-WslPath -WindowsPath $projectRoot
+$wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
+& wsl.exe -d Ubuntu --exec python3 -B $wslBootPolicyBuilder `
+    --repo $wslProjectRoot --output $wslBootPolicyManifest
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $bootPolicyManifest -PathType Leaf)) {
+    throw 'The independent boot protected-root policy build failed.'
 }
 
 try {
@@ -101,9 +114,7 @@ elseif (
     [string]$manifestObject.release -cne [string]$releaseObject.release -or
     $actualManifestHash -cne $lockedManifestHash -or
     [string]$manifestObject.software.tree.sha256 -cne [string]$releaseObject.outputs.software_tree.sha256 -or
-    [string]$manifestObject.catalogue.tree.sha256 -cne [string]$releaseObject.outputs.catalogue_tree.sha256 -or
-    @($manifestObject.protected_external_roots).Count -ne 4 -or
-    @($releaseObject.protected_external_roots).Count -ne 4
+    [string]$manifestObject.catalogue.tree.sha256 -cne [string]$releaseObject.outputs.catalogue_tree.sha256
 ) {
     throw 'The initramfs cannot attest a Python payload that differs from release zero.'
 }
@@ -151,6 +162,7 @@ $wslFirmware = ConvertTo-WslPath -WindowsPath $firmwareArchive
 $wslPythonManifest = ConvertTo-WslPath -WindowsPath $pythonManifest
 $wslPythonReleaseLock = ConvertTo-WslPath -WindowsPath $pythonReleaseLock
 $wslPythonRuntimeConfig = ConvertTo-WslPath -WindowsPath $pythonRuntimeConfig
+$wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
 $wslNtfsChecker = ConvertTo-WslPath -WindowsPath $ntfsCheckerSource
 $wslStage = ConvertTo-WslPath -WindowsPath $stageRoot
 $wslOutput = ConvertTo-WslPath -WindowsPath $outputPath
@@ -170,6 +182,7 @@ ntfs_checker=$8
 candidate_mode=$9
 recovery_script=${10}
 profiled_python_config=${11}
+boot_policy_manifest=${12}
 umask 022
 export LC_ALL=C
 
@@ -212,7 +225,8 @@ python3 - \
     "$rootfs/protected-roots.tsv" \
     "$candidate_mode" \
     "$profiled_python_config" \
-    "$rootfs/profiled-python-entrypoints.tsv" <<'PY'
+    "$rootfs/profiled-python-entrypoints.tsv" \
+    "$boot_policy_manifest" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -229,7 +243,9 @@ manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
 candidate_mode = sys.argv[4] == '1'
 runtime_config_path = Path(sys.argv[5])
 profiled_output_path = Path(sys.argv[6])
+boot_policy_path = Path(sys.argv[7])
 runtime_config = json.loads(runtime_config_path.read_text(encoding='utf-8'))
+boot_policy = json.loads(boot_policy_path.read_text(encoding='utf-8'))
 
 safe_hash = re.compile(r'^[0-9a-f]{64}$')
 
@@ -245,9 +261,11 @@ def validate_path(value: object, *, allow_root: bool) -> str:
         raise SystemExit(f'Non-canonical protected path: {value!r}')
     return value
 
-profile_policy = runtime_config.get('profiled_python_entrypoints')
+profile_policy = boot_policy.get('profiled_python_entrypoints')
 if (
-    not isinstance(profile_policy, dict)
+    boot_policy.get('format') != 1
+    or boot_policy.get('component') != 't1os-boot-protected-roots'
+    or not isinstance(profile_policy, dict)
     or set(profile_policy) != {
         'format', 'owner', 'group', 'install_mode', 'shebang', 'entries'
     }
@@ -258,10 +276,8 @@ if (
     or profile_policy.get('shebang') != '#!"/the one/software/python/bin/python" -B\n'
     or not isinstance(profile_policy.get('entries'), list)
     or not profile_policy['entries']
-    or manifest.get('profiled_python_entrypoints') != profile_policy
     or manifest.get('install_policy', {}).get('owner') != 0
     or manifest.get('install_policy', {}).get('group') != 0
-    or manifest.get('install_policy', {}).get('profiled_python_mode') != '0555'
 ):
     raise SystemExit('Python manifest differs from the canonical profiled-entrypoint policy')
 
@@ -406,20 +422,19 @@ expected_external = [
     ('boot', 'source/boot', '/boot', True),
     ('virtualbox_software', 'source/software/virtualbox', '/the one/software/virtualbox', True),
 ]
-external = manifest.get('protected_external_roots')
-locked_external = release.get('protected_external_roots')
-if not isinstance(external, list) or not isinstance(locked_external, list):
-    raise SystemExit('Protected external root inventories are missing')
-if len(external) != 4 or len(locked_external) != 4:
+external = boot_policy.get('roots')
+if not isinstance(external, list):
+    raise SystemExit('Independent boot protected-root inventories are missing')
+if len(external) != 4:
     raise SystemExit('Exactly four protected external root inventories are required')
 
 root_specs = [
     ('python_software', manifest.get('software'), '/the one/software/python', False),
     ('python_catalogue', manifest.get('catalogue'), '/the one/catalogue/python', False),
 ]
-for expected, item, locked in zip(expected_external, external, locked_external, strict=True):
+for expected, item in zip(expected_external, external, strict=True):
     name, source, destination, exclude_generated = expected
-    if not isinstance(item, dict) or not isinstance(locked, dict):
+    if not isinstance(item, dict):
         raise SystemExit(f'Malformed protected external root: {name}')
     if (
         item.get('name') != name
@@ -428,14 +443,6 @@ for expected, item, locked in zip(expected_external, external, locked_external, 
         or item.get('exclude_generated_bytecode') is not exclude_generated
     ):
         raise SystemExit(f'Protected external root policy differs: {name}')
-    if (
-        locked.get('name') != name
-        or locked.get('source') != source
-        or locked.get('destination') != destination
-        or locked.get('exclude_generated_bytecode') is not exclude_generated
-        or locked.get('tree') != item.get('tree')
-    ):
-        raise SystemExit(f'Protected external root lock differs: {name}')
     root_specs.append((name, item, destination, exclude_generated))
 
 if manifest.get('software', {}).get('tree') != release.get('outputs', {}).get('software_tree'):
@@ -686,7 +693,7 @@ sha256sum "$output"
 $buildExitCode = 1
 $normalizedBuildCommand = $buildCommand.Replace("`r", '') + "`n# end"
 $normalizedBuildCommand |
-    & wsl.exe -d Ubuntu -u root --exec bash -s -- $wslBusyBox $wslInit $wslFirmware $wslStage $wslOutput $wslPythonManifest $wslPythonReleaseLock $wslNtfsChecker $candidateMode $wslRecovery $wslPythonRuntimeConfig
+    & wsl.exe -d Ubuntu -u root --exec bash -s -- $wslBusyBox $wslInit $wslFirmware $wslStage $wslOutput $wslPythonManifest $wslPythonReleaseLock $wslNtfsChecker $candidateMode $wslRecovery $wslPythonRuntimeConfig $wslBootPolicyManifest
 $buildExitCode = $LASTEXITCODE
 if ($buildExitCode -ne 0) {
     throw "Hardware initramfs build failed (exit code $buildExitCode)."

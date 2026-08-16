@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Path $PSScriptRoot -Parent
 $verifier = Join-Path $projectRoot 'development\promote python 3.14 runtime.py'
+$buildWorkflow = Join-Path $PSScriptRoot 'build python runtime.ps1'
 $profiledEntrypointVerifier = Join-Path $PSScriptRoot 'validate profiled python entrypoints.py'
 $managerTest = Join-Path $projectRoot 'source\python\tests\test_python_packages.py'
 $manager = Join-Path $projectRoot 'source\build software\python\pip.py'
@@ -13,9 +14,21 @@ $pythonRoot = Join-Path $projectRoot 'source\software\python'
 $catalogueRoot = Join-Path $projectRoot 'source\catalogue\python'
 $imageRoot = Join-Path $projectRoot 'source\catalogue\image'
 
-foreach ($requiredVerifier in @($verifier, $profiledEntrypointVerifier)) {
+foreach ($requiredVerifier in @($verifier, $buildWorkflow, $profiledEntrypointVerifier)) {
     if (-not (Test-Path -LiteralPath $requiredVerifier -PathType Leaf)) {
         throw "Python 3.14 runtime verifier not found: $requiredVerifier"
+    }
+}
+
+$buildWorkflowText = Get-Content -Raw -LiteralPath $buildWorkflow
+foreach ($requiredText in @(
+    '[switch]$Promote',
+    'if (-not ($Rebuild -or $StageOnly -or $Promote))',
+    '$wslPromoter verify',
+    'no candidate was built'
+)) {
+    if (-not $buildWorkflowText.Contains($requiredText)) {
+        throw "Python production is missing its explicit-build guard: $requiredText"
     }
 }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
@@ -41,13 +54,12 @@ if (
 ) {
     throw "Could not translate Python 3.14 verifier path: $verifier"
 }
-$profiledArguments = @($wslProfiledEntrypointVerifier, '--repo', $wslProjectRoot)
-if ($DeploymentPayloadOnly) {
-    $wslCanonicalManifest = (& wsl.exe -d Ubuntu --exec wslpath -a (
-        Join-Path $pythonRoot 'manifest.json'
-    ) | Select-Object -First 1).Trim()
-    $profiledArguments += @('--manifest', $wslCanonicalManifest)
-}
+$profiledArguments = @(
+    $wslProfiledEntrypointVerifier,
+    '--repo',
+    $wslProjectRoot,
+    '--policy-only'
+)
 $null = & wsl.exe -d Ubuntu --exec python3 -B @profiledArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Profiled Python entrypoint verification failed (exit code $LASTEXITCODE)."

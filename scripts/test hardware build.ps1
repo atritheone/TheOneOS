@@ -22,6 +22,7 @@ $angelContract = Join-Path $projectRoot 'source\entry\init\ANGEL.md'
 $angelVoiceTest = Join-Path $projectRoot 'scripts\test angel voice.py'
 $angelRecoveryTest = Join-Path $projectRoot 'scripts\test angel recovery.ps1'
 $initramfsBuilder = Join-Path $projectRoot 'scripts\build hardware initramfs.ps1'
+$bootPolicyBuilder = Join-Path $projectRoot 'scripts\build boot protected roots.py'
 $ntfsCheckerBuilder = Join-Path $projectRoot 'scripts\build roothealth.ps1'
 $ntfsCheckerTest = Join-Path $projectRoot 'scripts\test roothealth.ps1'
 $ntfsChecker = Join-Path $projectRoot 'environment\hardware\tools\roothealth'
@@ -140,6 +141,10 @@ Get-ChildItem -LiteralPath (Join-Path $projectRoot 'scripts') -Filter '*.ps1' | 
 }
 if ($syntaxErrors.Count) {
     throw ($syntaxErrors -join [Environment]::NewLine)
+}
+
+if (-not (Test-Path -LiteralPath $bootPolicyBuilder -PathType Leaf)) {
+    throw "Required hardware build artifact not found: $bootPolicyBuilder"
 }
 
 foreach ($requiredFile in @($initScript, $angelContract, $initramfsBuilder, $ntfsCheckerBuilder, $ntfsCheckerTest, $ntfsChecker, $ntfsCheckerMetadata, $ntfsCheckerLicense, $ntfsCheckerSourceArchive, $ntfsCheckerProductPatch, $ntfsCheckerSecurityPatch, $ntfsCheckerVerdictPatch, $imageBuilder, $bundleBuilder, $bundleValidator, $imageValidator, $productionPreparer, $hardwareUsbWorkflow, $kernelBuilder, $graphicsKernelBuilder, $grubScript, $encryptedGrubScript, $grubTheme, $grubBackground, $kernelConfig, $kernelPolicy, $goddessScript, $inputServer, $kernel, $initramfs, $firmwareArchive, $firmwareManifest, $moduleArchive, $driverServer, $operationsScript, $moduleLoader, $driverPolicy, $desktopCompatibility, $compatibilityValidator, $driverRuntime, $networkServer, $wirelessEngine, $networkLoader, $networkCertificates, $graphicsCatalogue, $intelVaapi, $r600Vaapi, $nouveauVaapi, $virtioVaapi, $vmwgfxVaapi, $nouveauDrm, $nouveauVulkan, $vulkanLoader, $nvidiaEgl, $nvidiaGles, $nvidiaEglVendor, $nvidiaGbmBackend, $nvidiaPathProvider, $nvidiaPathProviderSource, $nvidiaRuntime, $nvidiaVaapi, $nvidiaCuda, $nvidiaNvcuvid, $nvidiaPtxjit, $gstreamerCore, $gstreamerBase, $gstreamerCodecParsers, $mediaDecodeService, $mediaDecodeWorker, $audioRuntimeManifest, $mediaDecodeServiceSource, $mediaDecodeWorkerSource, $mediaDecodeProtocolSource, $chromiumServer, $chromiumEngine, $chromiumSandbox, $chromiumLibc, $chromiumLibasound, $chromiumProvider, $chromiumProviderSource, $chromiumInputBridge, $chromiumInputBridgeSource, $chromiumWindowManager, $chromiumWindowManagerSource, $windowServer, $brickScript, $chromiumSubprocess, $chromiumSubprocessSource, $runtimePathContract)) {
@@ -1412,7 +1417,9 @@ foreach ($requiredText in @(
     '& $pythonVerifier',
     '$verificationJson | ConvertFrom-Json',
     '[string]$verificationObject.release -cne [string]$manifestObject.release',
-    '@($manifestObject.protected_external_roots).Count -ne 4',
+    '$bootPolicyBuilder',
+    't1os-boot-protected-roots',
+    "boot_policy.get('roots')",
     'did not confirm the locked initramfs payload',
     '$ntfsCheckerBuilder',
     '& $ntfsCheckerBuilder',
@@ -1425,7 +1432,7 @@ foreach ($requiredText in @(
     'profiled_python_entrypoints',
     'validate_python_mode',
     't1os-install-tree-sha256-v2',
-    'protected_external_roots',
+    'Independent boot protected-root inventories are missing',
     'exclude_generated_bytecode',
     'mktemp -d /var/tmp/t1os-hardware-initramfs.XXXXXX',
     'find "$early" "$rootfs" -type d -exec chmod 0755',

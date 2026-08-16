@@ -725,8 +725,7 @@ else {
         [string]$manifest.state -cne 'verified' -or
         [string]$manifest.release -cne $release -or
         $release -notmatch '^[0-9A-Za-z][0-9A-Za-z._+-]{0,127}$' -or
-        [string]$releaseLock.outputs.manifest_sha256 -cne $manifestHash -or
-        @($manifest.protected_external_roots).Count -ne 4
+        [string]$releaseLock.outputs.manifest_sha256 -cne $manifestHash
     ) {
         throw 'The managed Python source is not the immutable verified release.'
     }

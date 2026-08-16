@@ -25,17 +25,32 @@ production lock is `source/python/locks/release.json`. The older
 current build input.
 
 The 3.14 source build first produces a separately verified candidate. Promotion
-then converts that exact candidate into the canonical manifest and binds the
-runtime, native catalogue, ABI-bound image catalogue, build software, boot
-software, image catalogue, and VirtualBox userspace as protected roots.
+then converts that exact candidate into the canonical Python manifest. The
+production identity covers only `source/software/python` and
+`source/catalogue/python`; kernel, initramfs, LSM, build-software, boot,
+deployment, image-catalogue, and VirtualBox changes do not alter the Python
+release and must never trigger a Python rebuild or promotion.
 
-Build and promote from the verified cached source artifact:
+Boot-time executable modes and protected inventories are a separate mutable OS
+policy. `scripts/build boot protected roots.py` derives that policy during an
+initramfs build or deployment, and the hardware workflows attest it alongside
+the unchanged Python release. Legacy external-root fields still present in the
+3.14.7-t1os.66 manifest are retained as historical release metadata only; they
+are not part of production Python verification.
+
+Verify the existing production release without building or promoting anything:
 
 ```powershell
 pwsh -File 'scripts/build python runtime.ps1'
 ```
 
-Rebuild CPython before packaging and promotion:
+Package and promote an already-built Python candidate explicitly:
+
+```powershell
+pwsh -File 'scripts/build python runtime.ps1' -Promote
+```
+
+Rebuild CPython before packaging and promotion (also explicit):
 
 ```powershell
 pwsh -File 'scripts/build python runtime.ps1' -Rebuild
@@ -53,9 +68,12 @@ Verify the complete canonical release:
 pwsh -File 'scripts/test python runtime.ps1'
 ```
 
-The promotion command is idempotent for an unchanged release. Any change to a
-protected source root or release build definition requires a new release
-identifier and lock.
+The default command is a read-only verification gate, so invoking it from a
+larger build or deployment can never reconstruct Python. The explicit promotion
+command is idempotent for an unchanged release. A new release
+identifier and lock are required only when the Python software payload or its
+native Python catalogue changes. OS policy and deployment changes are verified
+and released independently.
 
 ## Module management
 
@@ -175,11 +193,11 @@ than choosing one silently.
 ## Recovery contract
 
 Angel runs independently of Python from the hardware initramfs. The recovery
-partition contains the same canonical manifest and protected inventories as the
-normal root.
+partition contains the canonical Python manifest plus the independently built
+boot protected-root inventory used by the normal root.
 
-- Python repair restores the Python software, native catalogue, and ABI-bound
-  image catalogue together.
+- Python repair restores the Python software and native catalogue. ABI-bound
+  image packages are handled by the image-catalogue deployment policy.
 - Build reset restores the protected build and boot software.
 - OS reset and reinstall restore the complete canonical protected-root set.
 
