@@ -1,7 +1,7 @@
 {
   "format": 1,
   "component": "python-release",
-  "release": "3.14.7-t1os.64",
+  "release": "3.14.7-t1os.66",
   "immutable": true,
   "rebuild_policy": "change the release identifier before replacing this lock",
   "python_version": "3.14.7",
@@ -10,7 +10,7 @@
     {
       "path": "development/promote python 3.14 runtime.py",
       "size": 30769,
-      "sha256": "2dde4e3f48f23873afa9bc2a6f105d122e33f447bffbe9fe095289a8e0c5e99a"
+      "sha256": "bc58a76d8d4d70351808147491f91ef45b75807738901acb5398203e99908730"
     },
     {
       "path": "development/package python 3.14 candidate.py",
@@ -34,8 +34,8 @@
     },
     {
       "path": "source/entry/init/init hardware.sh",
-      "size": 69438,
-      "sha256": "a5d6b1f8c94769aa17437c1f22036b4038178ddc98937f7c2fb9b12040c2f2e7"
+      "size": 69546,
+      "sha256": "daed083689055b89d5f53c27440ac7190c17f1bc1d4633550a3f51d65303100e"
     },
     {
       "path": "source/entry/init/angel recovery.sh",
@@ -44,8 +44,8 @@
     },
     {
       "path": "source/entry/kernel/t1os_lsm.c",
-      "size": 108025,
-      "sha256": "85e58723e3944b0fc96395f704f80a41278427a05fd0cc64ae762215db320d32"
+      "size": 108637,
+      "sha256": "e33a7a625b846aef476ba16bd7246e2810bf643f60892ac032722878cc3779ef"
     },
     {
       "path": "scripts/build hardware initramfs.ps1",
@@ -54,8 +54,8 @@
     },
     {
       "path": "scripts/test hardware build.ps1",
-      "size": 170314,
-      "sha256": "e262da810108bb08a4ec4db77f727b43f56f373854a743551388bc8294e87cb4"
+      "size": 171660,
+      "sha256": "3268865b182137439dbaf3fe93612b09c03f28fb0eadd3a25f0299f2b8dd5272"
     },
     {
       "path": "scripts/test python runtime.ps1",
@@ -85,7 +85,7 @@
     {
       "path": "source/python/build/runtime.json",
       "size": 5799,
-      "sha256": "00913f2f27125822ba2308b1715684ec72821e8b77811396c823ce5f94d0bd7e"
+      "sha256": "1ac12298f16ba7355efce72e7d99b07a25399a3184e2ce0ed234f6e706a70bd7"
     },
     {
       "path": "source/python/locks/python-3.14.7-candidate.json",
@@ -109,7 +109,7 @@
       "sha256": "b1a0a17582d5e8df88489c63386f0d9b252a4d91b2476065097dddc01e83fd2f"
     },
     "python_sha256": "cf48ee4d640394b17b081cbcdef2024e19560cc06592cc175cda29aac853c840",
-    "manifest_sha256": "41d73168a4e58f4f11a4933b985cb098160c0d5837eb1c0173924a3bd80ec424"
+    "manifest_sha256": "472bd8d026b83d81f71f2872a7051d6901629f88c7102d7cf511be36a13e161c"
   },
   "protected_external_roots": [
     {
@@ -134,8 +134,8 @@
         "algorithm": "t1os-install-tree-sha256-v2",
         "directories": 34,
         "files": 50,
-        "bytes": 7388573,
-        "sha256": "dad965e6ebdbf78f1a126a98032b69099e9421161e33413353cf0aa891e1e789"
+        "bytes": 7387648,
+        "sha256": "bdf5a04dcd50f7711d5fec39e5a4d69c073ea877d3ff346509b6d0828be49088"
       }
     },
     {

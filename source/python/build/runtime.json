@@ -1,7 +1,7 @@
 {
   "format": 1,
   "component": "python",
-  "release": "3.14.7-t1os.64",
+  "release": "3.14.7-t1os.66",
   "python_version": "3.14.7",
   "python_abi": "cp314",
   "architecture": "x86_64",
