@@ -495,8 +495,10 @@ LIBC = ctypes.CDLL(None, use_errno=True)
 
 def logline(message, software='chromium'):
     try:
-        with open(LOGFILE, "a", encoding="utf-8") as stream:
-            stream.write(formatlog(software, message) + '\n')
+        # Operations owns Chromium's combined stdout/stderr log.  The
+        # Chromium domain cannot append to /the one/logs directly, and the old
+        # swallowed PermissionError made every engine failure invisible.
+        print(formatlog(software, message), file=sys.stderr, flush=True)
     except Exception:
         pass
 

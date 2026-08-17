@@ -130,6 +130,7 @@ enum t1os_exec_state {
 enum t1os_cred_class {
 	T1OS_CRED_ROOT = 0,
 	T1OS_CRED_UNPRIVILEGED,
+	T1OS_CRED_VIDEO_WORKER,
 	T1OS_CRED_CHROMIUM,
 	T1OS_CRED_CHROMIUM_SANDBOX,
 };
@@ -169,8 +170,6 @@ static struct lsm_blob_sizes t1os_blob_sizes __ro_after_init = {
 #define T1OS_PLAYER_SCRIPT           "/the one/build/player/player.py"
 #define T1OS_MEDIA_SCRIPT            "/the one/build/media/media.py"
 #define T1OS_PYTHON_BINARY           "/the one/software/python/bin/python"
-#define T1OS_FFMPEG_BINARY           "/the one/software/audio/ffmpeg"
-#define T1OS_FFPROBE_BINARY          "/the one/software/audio/ffprobe"
 #define T1OS_VIDEO_DECODER_BINARY    "/the one/software/audio/t1-video-decode"
 #define T1OS_MEDIA_DECODER_DAEMON    "/the one/software/audio/t1-media-decoderd"
 #define T1OS_CHROMIUM_BINARY         "/the one/software/chromium/program/chrome"
@@ -199,15 +198,6 @@ static struct lsm_blob_sizes t1os_blob_sizes __ro_after_init = {
 #define T1OS_EXCHANGE_SCRIPT         "/the one/build/exchange/exchange.py"
 #define T1OS_EXPANSE_SCRIPT          "/the one/build/expanse/expanse.py"
 #define T1OS_VIRTUALBOX_SCRIPT       "/the one/software/virtualbox/guestadditions.py"
-#define T1OS_SETTINGS_SCRIPT         "/the one/build/settings/settings.py"
-#define T1OS_ARRAY_SCRIPT            "/the one/build/array/array.py"
-#define T1OS_CALCULATOR_SCRIPT       "/the one/build/calculator/calculator.py"
-#define T1OS_OPERATIONSCENTRE_SCRIPT "/the one/build/operations/operationscentre.py"
-#define T1OS_CHROMIUM_SCRIPT         "/the one/build/chromium/chromium.py"
-#define T1OS_SNAP_SCRIPT             "/the one/build/snap/snap.py"
-#define T1OS_VIEWER_SCRIPT           "/the one/build/viewer/viewer.py"
-#define T1OS_WRITE_SCRIPT            "/the one/build/write/write.py"
-#define T1OS_PICKER_SCRIPT           T1OS_ARRAY_SCRIPT
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -363,11 +353,6 @@ static bool t1os_is_operationsserver_process(void)
 	return t1os_domain_is(T1OS_DOMAIN_OPERATIONS);
 }
 
-static bool t1os_is_procedures_process(void)
-{
-	return t1os_domain_is(T1OS_DOMAIN_PROCEDURES);
-}
-
 static bool t1os_is_windowserver_process(void)
 {
 	return t1os_domain_is(T1OS_DOMAIN_WINDOW);
@@ -402,20 +387,6 @@ static bool t1os_is_video_client_process(void)
 static bool t1os_is_media_decoder_daemon_process(void)
 {
 	return t1os_is_executable_process(T1OS_MEDIA_DECODER_DAEMON);
-}
-
-static bool t1os_is_chromium_engine_process(void)
-{
-	return t1os_is_executable_process(T1OS_CHROMIUM_BINARY) ||
-	       t1os_is_executable_process(T1OS_CHROMIUM_SANDBOX) ||
-	       t1os_is_executable_process(T1OS_CHROMIUM_XSERVER) ||
-	       t1os_is_executable_process(T1OS_CHROMIUM_WINDOWMANAGER);
-}
-
-static bool t1os_is_chromium_uvm_process(void)
-{
-	return t1os_domain_is(T1OS_DOMAIN_CHROMIUM) &&
-	       t1os_is_executable_process(T1OS_CHROMIUM_BINARY);
 }
 
 static bool t1os_is_wireless_engine_process(void)
@@ -582,6 +553,17 @@ static bool t1os_is_special_path(const char *path)
 	    !strcmp(path, "/the one/settings/"))
 		return true;
 
+	/* Settings is a protected namespace root, not an inventory of every T1OS
+	 * application.  Descendants use normal ownership and mode checks so new
+	 * software can create and maintain its own settings without a kernel-policy
+	 * change.  Keep only genuinely system-authoritative leaves in this LSM. */
+	if (!strcmp(path, "/the one/settings/session/identity.json") ||
+	    t1os_is_graphics_recovery_marker(path))
+		return true;
+	if (!strncmp(path, "/the one/settings/",
+		     sizeof("/the one/settings/") - 1))
+		return false;
+
 	if (!strcmp(path, "/.ephemeral/authentication") ||
 	    !strcmp(path, "/.ephemeral/authentication/") ||
 	    !strncmp(path, "/.ephemeral/authentication/", 27))
@@ -653,51 +635,6 @@ static bool t1os_is_special_path(const char *path)
 		return true;
 
 
-	/* ===== /the one/settings/operations ===== */
-
-	/* exact dir without slash */
-	if (!strcmp(path, "/the one/settings/operations"))
-		return true;
-
-	/* exact dir with slash */
-	if (!strcmp(path, "/the one/settings/operations/"))
-		return true;
-
-	/* children: /the one/settings/operations/... */
-	if (!strncmp(path, "/the one/settings/operations/", 29))
-		return true;
-
-	/* ===== /the one/settings/windowserver ===== */
-
-	if (!strcmp(path, "/the one/settings/windowserver"))
-		return true;
-
-	if (!strcmp(path, "/the one/settings/windowserver/"))
-		return true;
-
-	if (!strncmp(path, "/the one/settings/windowserver/", 31))
-		return true;
-
-	/* Ordinary Settings UI state is writable only by the Settings domain. */
-	if (!strcmp(path, "/the one/settings/audio") ||
-	    !strncmp(path, "/the one/settings/audio/", 24) ||
-	    !strcmp(path, "/the one/settings/display") ||
-	    !strncmp(path, "/the one/settings/display/", 26) ||
-	    !strcmp(path, "/the one/settings/mouse") ||
-	    !strncmp(path, "/the one/settings/mouse/", 24) ||
-	    !strcmp(path, "/the one/settings/network") ||
-	    !strncmp(path, "/the one/settings/network/", 26) ||
-	    !strcmp(path, "/the one/settings/master") ||
-	    !strncmp(path, "/the one/settings/master/", 25) ||
-	    !strcmp(path, "/the one/settings/time") ||
-	    !strncmp(path, "/the one/settings/time/", 23) ||
-	    !strcmp(path, "/the one/settings/terminal") ||
-	    !strncmp(path, "/the one/settings/terminal/", 27) ||
-	    !strcmp(path, "/the one/settings/session") ||
-	    !strncmp(path, "/the one/settings/session/", 26))
-		return true;
-
-
 	/* ===== /the one/drivers ===== */
 
 	if (!strcmp(path, "/the one/drivers"))
@@ -742,23 +679,6 @@ static bool t1os_is_nvidia_device_node_name(const char *path)
 	while (*digit >= '0' && *digit <= '9')
 		digit++;
 	return *digit == '\0';
-}
-
-static bool t1os_is_nvidia_decode_device_node_name(const char *path)
-{
-	static const char modeset[] =
-		"/the one/drivers/nodes/nvidia-modeset";
-	static const char uvm[] =
-		"/the one/drivers/nodes/nvidia-uvm";
-
-	return t1os_is_nvidia_device_node_name(path) &&
-	       strcmp(path, modeset) &&
-	       strcmp(path, uvm);
-}
-
-static bool t1os_is_nvidia_uvm_device_node_name(const char *path)
-{
-	return !strcmp(path, "/the one/drivers/nodes/nvidia-uvm");
 }
 
 static bool t1os_is_console_device_node_name(const char *path)
@@ -860,17 +780,7 @@ static bool t1os_is_efi_bootnext(const char *path)
  
 static bool t1os_special_write_allowed(const char *path)
 {
-	static const char dns_temporary[] =
-		"/the one/settings/network/dns.txt.temporary-";
-
 	if (t1os_is_ephemeral_path(path))
-		return true;
-	/* Network owns the generated resolver file and its PID-suffixed atomic
-	 * replacement.  It does not receive authority over user-authored interface,
-	 * wireless, or certificate settings in the same directory. */
-	if ((!strcmp(path, "/the one/settings/network/dns.txt") ||
-	     !strncmp(path, dns_temporary, sizeof(dns_temporary) - 1)) &&
-	    t1os_is_network_process())
 		return true;
 
 	if (!strcmp(path, "/.ephemeral/authentication") ||
@@ -924,6 +834,9 @@ static bool t1os_special_write_allowed(const char *path)
 	if (!strcmp(path, "/the one/settings") ||
 	    !strcmp(path, "/the one/settings/"))
 		return t1os_is_goddess_process();
+	if (!strcmp(path, "/the one/settings/session/identity.json"))
+		return t1os_is_goddess_process() ||
+		       t1os_is_operationsserver_process();
 
 	/* Permit PID 1 to remove the exact obsolete graphics recovery marker. */
 	if (t1os_is_graphics_recovery_marker(path))
@@ -941,45 +854,6 @@ static bool t1os_special_write_allowed(const char *path)
 	if (!strcmp(path, "/the one/master") ||
 	    !strcmp(path, "/the one/master/"))
 		return t1os_is_startup_process();
-
-	if (!strcmp(path, "/the one/settings/audio") ||
-	    !strncmp(path, "/the one/settings/audio/", 24) ||
-	    !strcmp(path, "/the one/settings/display") ||
-	    !strncmp(path, "/the one/settings/display/", 26) ||
-	    !strcmp(path, "/the one/settings/mouse") ||
-	    !strncmp(path, "/the one/settings/mouse/", 24) ||
-	    !strcmp(path, "/the one/settings/network") ||
-	    !strncmp(path, "/the one/settings/network/", 26))
-		return t1os_domain_is(T1OS_DOMAIN_SETTINGS) ||
-		       t1os_is_operationsserver_process() ||
-		       t1os_is_goddess_process();
-
-	/* Reign owns only the two generated display-clock leaves.  It must never
-	 * inherit authority over timezone, internet, VirtualBox, or future time
-	 * settings merely because they share this directory. */
-	if (!strcmp(path, "/the one/settings/time/common.txt") ||
-	    !strcmp(path, "/the one/settings/time/atreyan.txt"))
-		return t1os_domain_is(T1OS_DOMAIN_REIGN) ||
-		       t1os_domain_is(T1OS_DOMAIN_SETTINGS) ||
-		       t1os_is_operationsserver_process() ||
-		       t1os_is_goddess_process();
-
-	if (!strcmp(path, "/the one/settings/time") ||
-	    !strncmp(path, "/the one/settings/time/", 23))
-		return t1os_domain_is(T1OS_DOMAIN_SETTINGS) ||
-		       t1os_is_operationsserver_process() ||
-		       t1os_is_goddess_process();
-
-	if (!strcmp(path, "/the one/settings/master") ||
-	    !strncmp(path, "/the one/settings/master/", 25) ||
-	    !strcmp(path, "/the one/settings/terminal") ||
-	    !strncmp(path, "/the one/settings/terminal/", 27))
-		return t1os_is_operationsserver_process();
-
-	if (!strcmp(path, "/the one/settings/session") ||
-	    !strncmp(path, "/the one/settings/session/", 26))
-		return t1os_is_goddess_process() ||
-		       t1os_is_operationsserver_process();
 
 	/* The devpts instance is mode-restricted and contains only interactive
 	 * console endpoints. Brick opens the multiplexer; its executed children
@@ -1038,50 +912,29 @@ static bool t1os_special_write_allowed(const char *path)
 		return false;
 	}
 
-	/* /the one/settings/windowserver/ and children */
-	if (!strncmp(path, "/the one/settings/windowserver/", 31)) {
-		if (t1os_is_windowserver_process())
-			return true;
-		return false;
-	}
-
-	/* WindowServer owns NVIDIA's display nodes. Hardware video clients get
-	 * nvidiactl, a numeric per-GPU node, and the one primary UVM node required
-	 * by CUDA/NVDEC. Chromium receives UVM only in its measured GPU or zygote
-	 * process, never in Xvfb, its window manager, or an arbitrary renderer.
-	 * No client receives nvidia-uvm-tools or nvidia-caps authority. Driver
-	 * Server's authority remains metadata-only below. */
+	/* NVIDIA's control, per-GPU and UVM nodes are the vendor equivalent of DRM
+	 * render nodes: they provide rendering, compute and decode to applications.
+	 * Access therefore follows ordinary DAC permissions and never depends on an
+	 * executable name.  nvidia-modeset remains display authority and belongs to
+	 * WindowServer.  Driver creation and metadata changes remain separately
+	 * restricted by the structural hooks below. */
 	if (t1os_is_nvidia_device_node_name(path)) {
-		if (!t1os_is_nvidia_uvm_device_node_name(path) &&
-		    t1os_is_windowserver_process())
-			return true;
-		if (t1os_is_nvidia_decode_device_node_name(path) &&
-		    (t1os_is_video_client_process() ||
-		     t1os_is_executable_process(T1OS_CHROMIUM_BINARY)))
-			return true;
-		if (t1os_is_nvidia_uvm_device_node_name(path) &&
-		    (t1os_is_video_client_process() ||
-		     t1os_is_chromium_uvm_process()))
-			return true;
-		return false;
+		if (!strcmp(path, "/the one/drivers/nodes/nvidia-modeset"))
+			return t1os_is_windowserver_process();
+		return true;
 	}
 	
-	/* Render nodes expose command submission and decode but no KMS display
-	 * ownership. Player/media, the measured native video decoder, and
-	 * Chromium's measured GPU executable may submit decode work. */
-	if (!strncmp(path, "/the one/drivers/nodes/dri/renderD", 34)) {
-		if (t1os_is_video_client_process() ||
-		    t1os_is_executable_process(T1OS_CHROMIUM_BINARY))
-			return true;
-	}
+	/* Render nodes expose command submission, rendering, compute and decode but
+	 * no KMS display ownership.  They are a general application facility. */
+	if (!strncmp(path, "/the one/drivers/nodes/dri/renderD", 34))
+		return true;
 
 	/* DRM/KMS devices are owned by the window server and the narrowly
 	 * scoped VirtualBox layout bridge.  This also handles render nodes for
 	 * those two processes without granting video clients primary-card access. */
 	if (!strcmp(path, "/the one/drivers/nodes/dri") ||
 	    !strcmp(path, "/the one/drivers/nodes/dri/"))
-		return t1os_is_windowserver_process() ||
-		       t1os_domain_is(T1OS_DOMAIN_VIRTUALBOX);
+		return true;
 	if (!strncmp(path, "/the one/drivers/nodes/dri/card", 31) ||
 	    !strncmp(path, "/the one/drivers/nodes/dri/renderD", 34)) {
 		if (t1os_is_windowserver_process())
@@ -1125,25 +978,17 @@ static bool t1os_special_write_allowed(const char *path)
 		return false;
 	}
 
-	/* Chromium's upstream engine and the measured native video service may
-	 * use only these harmless character devices. The decoder daemon needs the
-	 * null node solely to establish closed standard streams before it drops to
-	 * the unprivileged worker identity; this does not grant another device. */
-	if (!strcmp(path, "/the one/drivers/nodes/null")) {
-		if (t1os_is_chromium_engine_process() ||
-		    t1os_is_media_decoder_daemon_process())
-			return true;
-		return false;
-	}
+	/* These standard character devices are ordinary operating-system
+	 * facilities. Their DAC modes remain authoritative; application names are
+	 * not a security boundary. */
+	if (!strcmp(path, "/the one/drivers/nodes/null"))
+		return true;
 	if (!strcmp(path, "/the one/drivers/nodes/zero") ||
 	    !strcmp(path, "/the one/drivers/nodes/full") ||
 	    !strcmp(path, "/the one/drivers/nodes/random") ||
 	    !strcmp(path, "/the one/drivers/nodes/urandom") ||
-	    !strcmp(path, "/the one/drivers/nodes/tty")) {
-		if (t1os_is_chromium_engine_process())
-			return true;
-		return false;
-	}
+	    !strcmp(path, "/the one/drivers/nodes/tty"))
+		return true;
 
 	/* The packaged wireless engine needs the radio kill-switch node, but no
 	 * broader driver-tree write access. */
@@ -1202,9 +1047,16 @@ static bool t1os_special_write_allowed(const char *path)
 
 static void t1os_log_denial(const char *operation, const char *path)
 {
+	const struct cred *cred = current_cred();
+
 	pr_warn_ratelimited(
-		"T1OS LSM: denied %s path=%s pid=%d comm=%s\n",
-		operation, path, current->pid, current->comm);
+		"T1OS LSM: denied %s path=%s domain=%s pid=%d comm=%s uid=%u euid=%u gid=%u\n",
+		operation, path ?: "<none>",
+		t1os_domain_name(t1os_task_domain(current)),
+		current->pid, current->comm,
+		from_kuid_munged(&init_user_ns, cred->uid),
+		from_kuid_munged(&init_user_ns, cred->euid),
+		from_kgid_munged(&init_user_ns, cred->gid));
 }
 
 static bool t1os_confidential_read_path(const char *path)
@@ -1327,14 +1179,16 @@ static bool t1os_process_component_is_current(const char *value, size_t length)
 	return parsed == (unsigned long)current_pid;
 }
 
-/* The procfs bind is an identity oracle, not a general process-inspection API.
- * Keep both the reader-domain and leaf set explicit.  In particular, mem,
- * fd, map_files, pagemap, syscall, stack and namespace handles stay denied. */
+/* The procfs bind provides ordinary read-only system discovery and lets every
+ * process inspect its own non-invasive identity leaves.  Cross-process reads
+ * remain a service facility and invasive leaves such as mem, fd, map_files,
+ * pagemap, syscall, stack and namespace handles remain denied. */
 static bool t1os_process_read_allowed(const char *path)
 {
 	static const char prefix[] = "/the one/drivers/processes/";
 	const char *relative, *slash, *leaf;
 	size_t component_length;
+	bool own_process;
 
 	/* libkmod reads only the global kernel command line to apply fixed module
 	 * options and blacklists before finit_module().  Keep this exception on the
@@ -1343,8 +1197,13 @@ static bool t1os_process_read_allowed(const char *path)
 	if (!strcmp(path, "/the one/drivers/processes/cmdline") &&
 	    t1os_domain_is(T1OS_DOMAIN_MODULE_LOADER))
 		return true;
-	if (!t1os_process_reader_domain())
-		return false;
+	/* Read-only NVIDIA discovery is part of the public GPU application ABI.
+	 * The process mount is read-only; mutation and driver administration stay
+	 * behind DriverServer and the capability hooks. */
+	if (!strcmp(path, "/the one/drivers/processes/driver/nvidia") ||
+	    !strncmp(path, "/the one/drivers/processes/driver/nvidia/",
+		     sizeof("/the one/drivers/processes/driver/nvidia/") - 1))
+		return true;
 	if (!strcmp(path, "/the one/drivers/processes") ||
 	    !strcmp(path, "/the one/drivers/processes/"))
 		return true;
@@ -1357,6 +1216,38 @@ static bool t1os_process_read_allowed(const char *path)
 	    !strcmp(relative, "loadavg") || !strcmp(relative, "mounts") ||
 	    !strcmp(relative, "sys/kernel/random/boot_id"))
 		return true;
+
+	slash = strchr(relative, '/');
+	if (!slash) {
+		if (!strcmp(relative, "self") ||
+		    !strcmp(relative, "thread-self") ||
+		    t1os_process_component_is_current(relative, strlen(relative)))
+			return true;
+		return t1os_process_reader_domain() &&
+		       t1os_decimal_component(relative, strlen(relative));
+	}
+	component_length = slash - relative;
+	if (!t1os_decimal_component(relative, component_length) &&
+	    !(component_length == 4 && !strncmp(relative, "self", 4)) &&
+	    !(component_length == 11 && !strncmp(relative, "thread-self", 11)))
+		return false;
+	leaf = slash;
+	own_process =
+		(component_length == 4 && !strncmp(relative, "self", 4)) ||
+		(component_length == 11 && !strncmp(relative, "thread-self", 11)) ||
+		t1os_process_component_is_current(relative, component_length);
+	if (own_process &&
+	    (!strcmp(leaf, "/stat") || !strcmp(leaf, "/status") ||
+	     !strcmp(leaf, "/cmdline") || !strcmp(leaf, "/comm") ||
+	     !strcmp(leaf, "/wchan") || !strcmp(leaf, "/attr") ||
+	     !strcmp(leaf, "/attr/current") || !strcmp(leaf, "/exe") ||
+	     !strcmp(leaf, "/cwd") || !strcmp(leaf, "/mounts") ||
+	     !strcmp(leaf, "/mountinfo") || !strcmp(leaf, "/maps") ||
+	     !strcmp(leaf, "/environ")))
+		return true;
+	if (!t1os_process_reader_domain())
+		return false;
+
 	/* DriverServer reconstructs the NVIDIA nodes normally created by udev from
 	 * these two read-only kernel inventories. GODDESS reads modules only when it
 	 * captures a bounded graphics-failure diagnostic. */
@@ -1365,24 +1256,10 @@ static bool t1os_process_read_allowed(const char *path)
 		       t1os_is_driverserver_process();
 	if (!strcmp(relative, "devices"))
 		return t1os_is_driverserver_process();
-	if (!strcmp(relative, "driver/nvidia/gpus") ||
-	    !strncmp(relative, "driver/nvidia/gpus/", 19))
-		return t1os_is_driverserver_process();
 	if (!strcmp(relative, "asound") || !strncmp(relative, "asound/", 7))
 		return t1os_is_goddess_process() ||
 		       t1os_is_driverserver_process() ||
 		       t1os_is_audioserver_process();
-
-	slash = strchr(relative, '/');
-	if (!slash)
-		return t1os_decimal_component(relative, strlen(relative)) ||
-		       !strcmp(relative, "self") || !strcmp(relative, "thread-self");
-	component_length = slash - relative;
-	if (!t1os_decimal_component(relative, component_length) &&
-	    !(component_length == 4 && !strncmp(relative, "self", 4)) &&
-	    !(component_length == 11 && !strncmp(relative, "thread-self", 11)))
-		return false;
-	leaf = slash;
 	if (!strcmp(leaf, "/stat") || !strcmp(leaf, "/status") ||
 	    !strcmp(leaf, "/cmdline") || !strcmp(leaf, "/comm") ||
 	    !strcmp(leaf, "/wchan") || !strcmp(leaf, "/attr") ||
@@ -1399,10 +1276,6 @@ static bool t1os_process_read_allowed(const char *path)
 	if (!strcmp(leaf, "/io"))
 		return t1os_is_goddess_process() ||
 		       t1os_is_operationsserver_process();
-	if (!strcmp(leaf, "/maps") && t1os_is_windowserver_process() &&
-	    ((component_length == 4 && !strncmp(relative, "self", 4)) ||
-	     t1os_process_component_is_current(relative, component_length)))
-		return true;
 	if (!strcmp(leaf, "/maps") || !strcmp(leaf, "/environ"))
 		return t1os_domain_is(T1OS_DOMAIN_CHROMIUM);
 	if (!strncmp(leaf, "/fdinfo/", 8))
@@ -1431,7 +1304,7 @@ static bool t1os_special_read_allowed(const char *path)
 
 	if (!strcmp(path, "/the one/drivers/state") ||
 	    !strncmp(path, "/the one/drivers/state/", 23))
-		return t1os_task_domain(current) != T1OS_DOMAIN_UNTRUSTED;
+		return true;
 
 	/* request_module() opens the fixed native loader while still executing in
 	 * a kernel worker with no mm. bprm_check subsequently assigns the measured
@@ -1469,11 +1342,7 @@ static bool t1os_special_read_allowed(const char *path)
 
 	if (!strcmp(path, "/the one/drivers/nodes") ||
 	    !strcmp(path, "/the one/drivers/nodes/"))
-		return t1os_is_goddess_process() ||
-		       t1os_is_driverserver_process() ||
-		       t1os_is_audioserver_process() ||
-		       t1os_is_windowserver_process() ||
-		       t1os_domain_is(T1OS_DOMAIN_INPUT);
+		return true;
 
 	if (!strcmp(path, "/the one/drivers/nodes/input") ||
 	    !strcmp(path, "/the one/drivers/nodes/input/") ||
@@ -1918,7 +1787,7 @@ static int t1os_mount_path(const struct path *path, char *buffer,
 static int t1os_sb_mount(const char *dev_name, const struct path *path,
 			 const char *type, unsigned long flags, void *data)
 {
-	char *buffer, *target;
+	char *buffer, *target = NULL;
 	unsigned long volume_flags = MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC;
 	int ret;
 
@@ -1980,6 +1849,8 @@ static int t1os_sb_mount(const char *dev_name, const struct path *path,
 	}
 	ret = -EACCES;
 out:
+	if (ret)
+		t1os_log_denial("mount", target ?: "<unresolved>");
 	free_page((unsigned long)buffer);
 	return ret;
 }
@@ -1987,7 +1858,7 @@ out:
 static int t1os_sb_umount(struct vfsmount *mnt, int flags)
 {
 	struct path path;
-	char *buffer, *target;
+	char *buffer, *target = NULL;
 	int ret;
 
 	if (!t1os_runtime_root_active())
@@ -2016,6 +1887,8 @@ static int t1os_sb_umount(struct vfsmount *mnt, int flags)
 	else
 		ret = -EACCES;
 out:
+	if (ret)
+		t1os_log_denial("unmount", target ?: "<unresolved>");
 	free_page((unsigned long)buffer);
 	return ret;
 }
@@ -2281,7 +2154,7 @@ static int t1os_inode_removexattr(struct mnt_idmap *idmap,
 static int t1os_file_ioctl(struct file *file, unsigned int command,
 			   unsigned long argument)
 {
-	char *buffer, *path;
+	char *buffer, *path = NULL;
 	int ret = 0;
 
 	(void)argument;
@@ -2319,6 +2192,8 @@ static int t1os_file_ioctl(struct file *file, unsigned int command,
 			ret = 0;
 	}
 out:
+	if (ret)
+		t1os_log_denial("ioctl", path ?: "<unresolved>");
 	free_page((unsigned long)buffer);
 	return ret;
 }
@@ -2361,6 +2236,39 @@ static int t1os_file_mprotect(struct vm_area_struct *vma,
 	return mask ? t1os_file_perm(vma->vm_file, mask) : 0;
 }
 
+static bool t1os_unprivileged_domain(enum t1os_domain domain)
+{
+	return domain == T1OS_DOMAIN_EXPANSE ||
+	       domain == T1OS_DOMAIN_DESKTOP ||
+	       domain == T1OS_DOMAIN_BRICK ||
+	       domain == T1OS_DOMAIN_VIDEO ||
+	       domain == T1OS_DOMAIN_SETTINGS ||
+	       domain == T1OS_DOMAIN_SNAP ||
+	       domain == T1OS_DOMAIN_CHROMIUM ||
+	       domain == T1OS_DOMAIN_PICKER ||
+	       domain == T1OS_DOMAIN_LOCKSCREEN;
+}
+
+static bool t1os_packaged_application_path(const char *path)
+{
+	static const char *roots[] = {
+		"/the one/build",
+		"/the one/software",
+	};
+	int i;
+
+	if (!path)
+		return false;
+	for (i = 0; i < ARRAY_SIZE(roots); ++i) {
+		size_t length = strlen(roots[i]);
+
+		if (!strcmp(path, roots[i]) ||
+		    (!strncmp(path, roots[i], length) && path[length] == '/'))
+			return true;
+	}
+	return false;
+}
+
 static bool t1os_service_launch(enum t1os_domain target, const char *path)
 {
 	switch (target) {
@@ -2399,42 +2307,6 @@ static bool t1os_service_launch(enum t1os_domain target, const char *path)
 	}
 }
 
-static bool t1os_catalogue_launch(enum t1os_domain target, const char *path)
-{
-	switch (target) {
-	case T1OS_DOMAIN_DESKTOP:
-		return !strcmp(path, T1OS_ARRAY_SCRIPT) ||
-		       !strcmp(path, T1OS_CALCULATOR_SCRIPT) ||
-		       !strcmp(path, T1OS_OPERATIONSCENTRE_SCRIPT) ||
-		       !strcmp(path, T1OS_VIEWER_SCRIPT) ||
-		       !strcmp(path, T1OS_WRITE_SCRIPT);
-	case T1OS_DOMAIN_BRICK:
-		return !strcmp(path, T1OS_BRICK_SCRIPT);
-	case T1OS_DOMAIN_VIDEO:
-		return !strcmp(path, T1OS_PLAYER_SCRIPT);
-	case T1OS_DOMAIN_SETTINGS:
-		return !strcmp(path, T1OS_SETTINGS_SCRIPT);
-	case T1OS_DOMAIN_SNAP:
-		return !strcmp(path, T1OS_SNAP_SCRIPT);
-	case T1OS_DOMAIN_CHROMIUM:
-		return !strcmp(path, T1OS_CHROMIUM_SCRIPT);
-	default:
-		return false;
-	}
-}
-
-static bool t1os_window_launch(enum t1os_domain target, const char *path)
-{
-	if (target == T1OS_DOMAIN_DESKTOP)
-		return !strcmp(path, T1OS_ARRAY_SCRIPT) ||
-		       !strcmp(path, T1OS_OPERATIONSCENTRE_SCRIPT);
-	if (target == T1OS_DOMAIN_BRICK)
-		return !strcmp(path, T1OS_BRICK_SCRIPT);
-	if (target == T1OS_DOMAIN_PICKER)
-		return !strcmp(path, T1OS_PICKER_SCRIPT);
-	return false;
-}
-
 static bool t1os_transition_allowed(enum t1os_domain launcher,
 				    enum t1os_domain target,
 				    const char *path)
@@ -2445,13 +2317,15 @@ static bool t1os_transition_allowed(enum t1os_domain launcher,
 	if (launcher == T1OS_DOMAIN_GODDESS)
 		return t1os_service_launch(target, path);
 	if (launcher == T1OS_DOMAIN_OPERATIONS)
-		return t1os_catalogue_launch(target, path) ||
+		return (t1os_unprivileged_domain(target) &&
+			t1os_packaged_application_path(path)) ||
 		       (target == T1OS_DOMAIN_STARTUP &&
 			!strcmp(path, T1OS_STARTUP_SCRIPT)) ||
 		       (target == T1OS_DOMAIN_LOCKSCREEN &&
 			!strcmp(path, T1OS_STARTUP_SCRIPT));
 	if (launcher == T1OS_DOMAIN_WINDOW)
-		return t1os_window_launch(target, path);
+		return t1os_unprivileged_domain(target) &&
+		       t1os_packaged_application_path(path);
 	if (launcher == T1OS_DOMAIN_STARTUP) {
 		if (target == T1OS_DOMAIN_LOCKSCREEN)
 			return !strcmp(path, T1OS_LOCKSCREEN_SCRIPT);
@@ -2467,26 +2341,8 @@ static bool t1os_transition_allowed(enum t1os_domain launcher,
 static bool t1os_unprivileged_launch(enum t1os_domain target,
 				     const char *path)
 {
-	if (target == T1OS_DOMAIN_LOCKSCREEN)
-		return true;
-	if (target == T1OS_DOMAIN_PICKER)
-		return !strcmp(path, T1OS_PICKER_SCRIPT);
-	if (target == T1OS_DOMAIN_EXPANSE)
-		return !strcmp(path, T1OS_EXPANSE_SCRIPT);
-	return t1os_catalogue_launch(target, path);
-}
-
-static bool t1os_unprivileged_domain(enum t1os_domain domain)
-{
-	return domain == T1OS_DOMAIN_EXPANSE ||
-	       domain == T1OS_DOMAIN_DESKTOP ||
-	       domain == T1OS_DOMAIN_BRICK ||
-	       domain == T1OS_DOMAIN_VIDEO ||
-	       domain == T1OS_DOMAIN_SETTINGS ||
-	       domain == T1OS_DOMAIN_SNAP ||
-	       domain == T1OS_DOMAIN_CHROMIUM ||
-	       domain == T1OS_DOMAIN_PICKER ||
-	       domain == T1OS_DOMAIN_LOCKSCREEN;
+	return t1os_unprivileged_domain(target) &&
+	       t1os_packaged_application_path(path);
 }
 
 static bool t1os_unprivileged_creds(const struct cred *cred,
@@ -2533,6 +2389,30 @@ static bool t1os_root_service_creds(const struct cred *cred)
 	       gid_eq(cred->fsgid, GLOBAL_ROOT_GID);
 }
 
+static bool t1os_video_worker_creds(const struct cred *cred)
+{
+	kuid_t uid = make_kuid(&init_user_ns, 65534);
+	kgid_t gid = make_kgid(&init_user_ns, 1000);
+
+	/* t1-media-decoderd enters this exact identity immediately before it
+	 * executes the measured t1-video-decode worker.  The worker keeps the
+	 * video domain but gains no uid, group, capability, or future privilege:
+	 * NNP is mandatory and the exact worker credential class remains in force. */
+	if (!cred || !uid_valid(uid) || !gid_valid(gid) ||
+	    cred->user_ns != &init_user_ns)
+		return false;
+	return uid_eq(cred->uid, uid) && uid_eq(cred->euid, uid) &&
+	       uid_eq(cred->suid, uid) && uid_eq(cred->fsuid, uid) &&
+	       gid_eq(cred->gid, gid) && gid_eq(cred->egid, gid) &&
+	       gid_eq(cred->sgid, gid) && gid_eq(cred->fsgid, gid) &&
+	       cred->group_info && cred->group_info->ngroups == 0 &&
+	       cap_isclear(cred->cap_inheritable) &&
+	       cap_isclear(cred->cap_permitted) &&
+	       cap_isclear(cred->cap_effective) &&
+	       cap_isclear(cred->cap_ambient) &&
+	       task_no_new_privs(current);
+}
+
 static bool t1os_chromium_sandbox_creds(const struct cred *cred)
 {
 	kuid_t user = make_kuid(&init_user_ns, 1000);
@@ -2565,6 +2445,8 @@ static bool t1os_exec_cred_class_allowed(const struct linux_binprm *bprm,
 	switch (class) {
 	case T1OS_CRED_UNPRIVILEGED:
 		return t1os_unprivileged_creds(bprm->cred, false);
+	case T1OS_CRED_VIDEO_WORKER:
+		return t1os_video_worker_creds(bprm->cred);
 	case T1OS_CRED_CHROMIUM:
 		return t1os_unprivileged_creds(bprm->cred, true);
 	case T1OS_CRED_CHROMIUM_SANDBOX:
@@ -2688,6 +2570,8 @@ static int t1os_task_prctl(int option, unsigned long arg2,
 	security->domain = T1OS_DOMAIN_UNTRUSTED;
 	ret = 0;
 out:
+	if (ret)
+		t1os_log_denial("domain transition", path ?: "<unresolved>");
 	if (buffer)
 		free_page((unsigned long)buffer);
 	if (!fd_empty(interpreter))
@@ -2696,40 +2580,49 @@ out:
 	return ret;
 }
 
-static bool t1os_native_exec_allowed(enum t1os_domain domain, const char *path)
+static bool t1os_immutable_exec_path(const char *path)
 {
-	/* Brick's terminal deliberately runs user-selected Python source, while
-	 * the package service runs its hash-verified private resolver and isolated
-	 * import checks.  Permit only the immutable system interpreter and retain
-	 * the caller's existing domain; no new authority is granted by this exec. */
-	if (domain == T1OS_DOMAIN_BRICK ||
-	    domain == T1OS_DOMAIN_PYTHON_SERVICE)
-		return !strcmp(path, T1OS_PYTHON_BINARY);
-	if (domain == T1OS_DOMAIN_CHROMIUM)
-		return !strcmp(path, T1OS_CHROMIUM_BINARY) ||
-		       !strcmp(path, T1OS_CHROMIUM_SANDBOX) ||
-		       !strcmp(path, T1OS_CHROMIUM_XSERVER) ||
-		       !strcmp(path, T1OS_CHROMIUM_WINDOWMANAGER) ||
-		       !strcmp(path, T1OS_CHROMIUM_T1_WINDOWMANAGER) ||
-		       !strcmp(path, T1OS_CHROMIUM_INPUT_BRIDGE) ||
-		       !strcmp(path, T1OS_CHROMIUM_SUBPROCESS) ||
-		       !strcmp(path, T1OS_CHROMIUM_DASH) ||
-		       !strcmp(path, T1OS_CHROMIUM_XCLIP) ||
-		       !strcmp(path, T1OS_CHROMIUM_XDOTOOL) ||
-		       !strcmp(path, T1OS_CHROMIUM_XKBCOMP) ||
-		       !strcmp(path, T1OS_CHROMIUM_XRANDR);
-	if (domain == T1OS_DOMAIN_VIDEO)
-		return !strcmp(path, T1OS_FFMPEG_BINARY) ||
-		       !strcmp(path, T1OS_FFPROBE_BINARY) ||
-		       !strcmp(path, T1OS_MEDIA_DECODER_DAEMON) ||
-		       !strcmp(path, T1OS_VIDEO_DECODER_BINARY);
-	if (domain == T1OS_DOMAIN_NETWORK)
-		return !strcmp(path, T1OS_WIRELESS_ENGINE);
-	if (domain == T1OS_DOMAIN_VIRTUALBOX)
-		return !strcmp(path, T1OS_VIRTUALBOX_CLIENT) ||
-		       !strcmp(path, T1OS_VIRTUALBOX_CLIPBOARD) ||
-		       !strcmp(path, T1OS_VIRTUALBOX_SERVICE);
+	static const char *roots[] = {
+		"/boot",
+		"/the one/build",
+		"/the one/software",
+		"/the one/catalogue",
+		"/the one/drivers/tools",
+	};
+	int i;
+
+	if (!path)
+		return false;
+	for (i = 0; i < ARRAY_SIZE(roots); ++i) {
+		size_t length = strlen(roots[i]);
+
+		if (!strcmp(path, roots[i]) ||
+		    (!strncmp(path, roots[i], length) && path[length] == '/'))
+			return true;
+	}
 	return false;
+}
+
+/* Execution is an operating-system facility, not a privilege transition.
+ * Ordinary exec preserves the task's existing domain and application
+ * authority.  A privileged root service may still execute only from the
+ * immutable system image; uid-1000 applications may execute user-selected
+ * code because that code cannot acquire a stronger domain through exec. */
+static bool t1os_general_exec_allowed(enum t1os_domain domain,
+				      const struct linux_binprm *bprm,
+				      const char *path)
+{
+	if (!bprm || !bprm->cred || domain == T1OS_DOMAIN_MODULE_LOADER)
+		return false;
+	if (t1os_root_service_creds(bprm->cred))
+		return t1os_immutable_exec_path(path);
+	if (domain == T1OS_DOMAIN_CHROMIUM)
+		return t1os_unprivileged_creds(bprm->cred, true) ||
+		       t1os_chromium_sandbox_creds(bprm->cred);
+	if (domain == T1OS_DOMAIN_VIDEO &&
+	    t1os_video_worker_creds(bprm->cred))
+		return true;
+	return t1os_unprivileged_creds(bprm->cred, false);
 }
 
 static bool t1os_profiled_python_script(const struct linux_binprm *bprm)
@@ -2742,6 +2635,11 @@ static bool t1os_profiled_python_script(const struct linux_binprm *bprm)
 		return false;
 	return bprm->buf[length] == '\n' ||
 	       (bprm->buf[length] == '\r' && bprm->buf[length + 1] == '\n');
+}
+
+static bool t1os_interpreted_script(const struct linux_binprm *bprm)
+{
+	return bprm && bprm->buf[0] == '#' && bprm->buf[1] == '!';
 }
 
 static void t1os_clear_pending(struct t1os_task_security *security)
@@ -2768,7 +2666,7 @@ static int t1os_bprm_check(struct linux_binprm *bprm)
 	dev_t pending_interpreter_device = 0;
 	unsigned long pending_interpreter_inode = 0;
 	bool pending = false;
-	char *buffer, *path;
+	char *buffer, *path = NULL;
 	int ret;
 
 	if (!bprm || !bprm->file || !bprm->cred)
@@ -2781,21 +2679,33 @@ static int t1os_bprm_check(struct linux_binprm *bprm)
 	 * interpreter.  State lives in the transient exec cred, so a failed exec
 	 * cannot leave a reusable authorization in the task. */
 	if (execsecurity->state == T1OS_EXEC_SCRIPT) {
+		bool descriptor_bound = execsecurity->interpreter_device != 0;
+
 		buffer = (char *)__get_free_page(GFP_KERNEL);
 		if (!buffer)
 			return -ENOMEM;
 		inode = file_inode(bprm->file);
 		ret = t1os_file_path(bprm->file, buffer, &path);
-		if (!ret && !strcmp(path, T1OS_PYTHON_BINARY) &&
+		if (!ret && descriptor_bound &&
+		    !strcmp(path, T1OS_PYTHON_BINARY) &&
 		    inode->i_sb->s_dev == execsecurity->interpreter_device &&
 		    inode->i_ino == execsecurity->interpreter_inode &&
 		    S_ISREG(inode->i_mode) &&
 		    uid_eq(inode->i_uid, GLOBAL_ROOT_UID) &&
 		    inode->i_nlink == 1 &&
-		    !(inode->i_mode & (S_IWGRP | S_IWOTH)))
+		    !(inode->i_mode & (S_IWGRP | S_IWOTH))) {
 			execsecurity->state = T1OS_EXEC_READY;
-		else
+		} else if (!ret && !descriptor_bound &&
+			   t1os_general_exec_allowed(execsecurity->domain,
+						     bprm, path)) {
+			/* Ordinary scripts may select any interpreter that the caller
+			 * could execute directly.  The existing domain and credential
+			 * class survive; the interpreter cannot create new authority. */
+			execsecurity->state = T1OS_EXEC_READY;
+		} else {
 			ret = ret ?: -EACCES;
+			t1os_log_denial("interpreter execution", path);
+		}
 		free_page((unsigned long)buffer);
 		return ret;
 	}
@@ -2884,47 +2794,47 @@ static int t1os_bprm_check(struct linux_binprm *bprm)
 				pending_interpreter_device;
 			execsecurity->interpreter_inode = pending_interpreter_inode;
 			execsecurity->state = T1OS_EXEC_SCRIPT;
-		} else if (t1os_native_exec_allowed(pending_domain, path))
-			execsecurity->state = T1OS_EXEC_READY;
-		else {
+		} else if (t1os_python_script_path(path)) {
 			ret = -ENOEXEC;
 			goto out;
-		}
+		} else
+			execsecurity->state = T1OS_EXEC_READY;
 		ret = 0;
 		goto out;
 	}
 
-	/* Fixed native children may retain a service domain.  All other execs
-	 * are an irreversible demotion, even when exec later fails. */
-	if (domain != T1OS_DOMAIN_UNTRUSTED &&
-	    t1os_native_exec_allowed(domain, path)) {
+	/* Ordinary execution preserves the existing authority.  Python and native
+	 * helpers are not named here: adding software to T1OS must not require a
+	 * kernel-policy edit.  Only the exact setuid Chromium sandbox has a special
+	 * credential class; it still gains no new T1OS domain. */
+	if (t1os_general_exec_allowed(domain, bprm, path)) {
 		execsecurity->domain = domain;
 		if (domain == T1OS_DOMAIN_CHROMIUM &&
 		    !strcmp(path, T1OS_CHROMIUM_SANDBOX))
 			execsecurity->cred_class = T1OS_CRED_CHROMIUM_SANDBOX;
 		else if (domain == T1OS_DOMAIN_CHROMIUM)
 			execsecurity->cred_class = T1OS_CRED_CHROMIUM;
+		else if (domain == T1OS_DOMAIN_VIDEO &&
+			 !strcmp(path, T1OS_VIDEO_DECODER_BINARY) &&
+			 t1os_video_worker_creds(bprm->cred))
+			execsecurity->cred_class = T1OS_CRED_VIDEO_WORKER;
 		else if (t1os_unprivileged_creds(bprm->cred, false))
 			execsecurity->cred_class = T1OS_CRED_UNPRIVILEGED;
 		else
 			execsecurity->cred_class = T1OS_CRED_ROOT;
-		execsecurity->state = T1OS_EXEC_READY;
+		if (t1os_interpreted_script(bprm)) {
+			execsecurity->interpreter_device = 0;
+			execsecurity->interpreter_inode = 0;
+			execsecurity->state = T1OS_EXEC_SCRIPT;
+		} else
+			execsecurity->state = T1OS_EXEC_READY;
 		ret = 0;
 		goto out;
 	}
-	/* Domain demotion alone is not a sandbox: retaining uid 0/capabilities in
-	 * an untrusted domain would leave many kernel attack surfaces available.
-	 * Only an already capless, NNP uid1000 process may make an unprofiled exec. */
-	if (domain == T1OS_DOMAIN_UNTRUSTED &&
-	    t1os_unprivileged_creds(bprm->cred, false)) {
-		execsecurity->domain = T1OS_DOMAIN_UNTRUSTED;
-		execsecurity->cred_class = T1OS_CRED_UNPRIVILEGED;
-		execsecurity->state = T1OS_EXEC_READY;
-		ret = 0;
-	} else {
-		ret = -EACCES;
-	}
+	ret = -EACCES;
 out:
+	if (ret)
+		t1os_log_denial("execution", path ?: "<unresolved>");
 	free_page((unsigned long)buffer);
 	return ret;
 }

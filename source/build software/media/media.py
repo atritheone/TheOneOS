@@ -152,9 +152,10 @@ def medialog(message):
 
             return
 
-        with open(MEDIALOGPATH, 'a', encoding='utf-8') as stream:
-
-            stream.write(f'{time.time():.6f} media {text}\n')
+        # Player runs in the confined video domain and must not append to the
+        # persistent log tree.  Operations captures this inherited stream in
+        # the owning application's log.
+        print(f'{time.time():.6f} media {text}', file=sys.stderr, flush=True)
 
     except Exception:
 

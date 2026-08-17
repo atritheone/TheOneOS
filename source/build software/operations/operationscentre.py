@@ -2373,13 +2373,13 @@ def graphicsdiagnostic():
 
         if grouping != [
             'front',
-            'zulu front operation',
-            'diagnostic operation',
             'alpha front operation',
+            'diagnostic operation',
+            'zulu front operation',
             'gap',
             'behind',
-            'zulu behind operation',
             'bravo behind operation',
+            'zulu behind operation',
         ]:
             raise RuntimeError(f'operations were not grouped by mode within operation sort: {grouping}')
 

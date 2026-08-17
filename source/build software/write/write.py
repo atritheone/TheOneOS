@@ -288,8 +288,13 @@ PERF_SAMPLE_LIMIT = 512
 # misc functions
 def logmsg(text):
 
-    # Persistent write logging is intentionally disabled.
-    return
+    try:
+
+        print(f'{time.time():.6f} write {text}', file=sys.stderr, flush=True)
+
+    except Exception:
+
+        pass
 
 
 def perfstart():
@@ -8537,10 +8542,7 @@ def filelineending(value):
 
 def readfilepayload(path):
 
-    # Write is an ordinary editor, not a system-file inspection tool.  File
-    # opens are confined to the active account tree just like saves; removable
-    # media will require a future descriptor grant from the picker broker.
-    path = usersavepath(path)
+    path = userreadpath(path)
     descriptor = os.open(
         path,
         os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
@@ -8708,6 +8710,47 @@ def usersavepath(raw):
     return path, root, parts
 
 
+def userreadpath(raw):
+
+    """Return a bounded document path from a user-visible file namespace."""
+
+    try:
+        value = os.fspath(raw)
+    except TypeError as error:
+        raise PermissionError('invalid document path') from error
+
+    if not isinstance(value, str) or not value or '\x00' in value:
+        raise PermissionError('invalid document path')
+
+    if not os.path.isabs(value):
+        raise PermissionError('document path must be absolute')
+
+    path = os.path.normpath(value)
+    roots = (
+        os.path.normpath(f'/master/{getusername()}'),
+        '/.ephemeral/volumes',
+        '/software',
+    )
+    contained = False
+
+    for root in roots:
+
+        try:
+
+            if path != root and os.path.commonpath((root, path)) == root:
+                contained = True
+                break
+
+        except ValueError:
+
+            continue
+
+    if not contained:
+        raise PermissionError('document path is outside user-visible storage')
+
+    return path
+
+
 def validateduserdirectory(fd):
 
     metadata = os.fstat(fd)
@@ -8830,10 +8873,13 @@ def fileloadworker(path):
         fileiocomplete(readfilepayload(path))
 
     except FileNotFoundError:
+        logmsg(f'file load failed path={path!r} error=file not found')
         fileiocomplete({'kind': 'load', 'ok': False, 'path': path, 'message': 'file not found'})
-    except PermissionError:
+    except PermissionError as error:
+        logmsg(f'file load failed path={path!r} error={error}')
         fileiocomplete({'kind': 'load', 'ok': False, 'path': path, 'message': 'permission denied'})
     except Exception as e:
+        logmsg(f'file load failed path={path!r} error={type(e).__name__}: {e}')
         fileiocomplete({'kind': 'load', 'ok': False, 'path': path, 'message': f'load error {e}'})
 
 

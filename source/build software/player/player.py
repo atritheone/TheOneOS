@@ -164,8 +164,16 @@ ARTWORKFALLBACK = 3.0
 # general functions
 def log(message):
 
-    # Persistent player logging is intentionally disabled.
-    return
+    # Operations owns the persistent log descriptor.  Writing the log path
+    # directly from the confined video domain is denied by design, so emit to
+    # the inherited stream and let the trusted launcher persist it.
+    try:
+
+        print(f'{time.time():.6f} player {message}', file=sys.stderr, flush=True)
+
+    except Exception:
+
+        pass
 
 
 def writevmteststatus():
@@ -960,7 +968,17 @@ def infoworker(generation, path, knowninfo=None):
         if mediaapi.extractart(path, artpath):
 
             maximum = max(64, scalesize(BASEARTSIZE))
-            artwork = viewerapi.request(artpath, surfacepath, maximum, maximum, 1, timeout=20)
+            # Player already imported the measured Viewer renderer.  Spawning
+            # viewer.py here would ask the video domain to execute the Python
+            # interpreter, which the LSM correctly reserves for Brick. Render
+            # the extracted cover in-process instead.
+            artwork = viewerapi.render(
+                artpath,
+                surfacepath,
+                maximum,
+                maximum,
+                1,
+            )
             info['artwork'] = True
 
         else:

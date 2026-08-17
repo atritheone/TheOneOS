@@ -2632,13 +2632,10 @@ foreach ($requiredText in @(
     'static bool t1os_is_drm_render_node_path(const struct path *p)',
     'static bool t1os_is_chromium_device_node_path(const struct path *p)',
     'static bool t1os_is_nvidia_device_node_name(const char *path)',
-    'static bool t1os_is_nvidia_decode_device_node_name(const char *path)',
-    'static bool t1os_is_nvidia_uvm_device_node_name(const char *path)',
     'static bool t1os_is_console_device_node_name(const char *path)',
     'static bool t1os_is_console_multiplexer_name(const char *path)',
     'static bool t1os_is_brick_process(void)',
     'static bool t1os_is_nvidia_device_node_path(const struct path *p)',
-    'static bool t1os_is_chromium_uvm_process(void)',
     'static bool t1os_kernel_devtmpfs_worker(void)',
     'static bool t1os_kernel_devtmpfs_dentry(const struct dentry *dentry)',
     'static bool t1os_kernel_devtmpfs_parent(const struct path *dir)',
@@ -2647,8 +2644,8 @@ foreach ($requiredText in @(
     'if ((S_ISCHR(mode) || S_ISBLK(mode)) &&',
     '!strcmp(relative, "modules")',
     '!strcmp(relative, "devices")',
-    '!strcmp(relative, "driver/nvidia/gpus")',
-    '!strncmp(relative, "driver/nvidia/gpus/", 19)',
+    '!strcmp(path, "/the one/drivers/processes/driver/nvidia")',
+    '!strncmp(path, "/the one/drivers/processes/driver/nvidia/",',
     'static bool t1os_process_component_is_current(const char *value, size_t length)',
     'pid_t current_pid = task_pid_nr(current);',
     'return parsed == (unsigned long)current_pid;',
@@ -2657,7 +2654,6 @@ foreach ($requiredText in @(
     '!strcmp(name, "nvidiactl")',
     '!strcmp(name, "nvidia-modeset")',
     '!strcmp(name, "nvidia-uvm")',
-    '"/the one/drivers/nodes/nvidia-uvm"',
     'if (strncmp(name, "nvidia", 6))',
     "return *digit == '\0';",
     'if (t1os_is_nvidia_device_node_name(path))',
@@ -2666,7 +2662,7 @@ foreach ($requiredText in @(
     'S_ISCHR(mode) &&',
     't1os_is_nvidia_device_node_path(&p)',
     'static void t1os_log_denial(const char *operation, const char *path)',
-    '"T1OS LSM: denied %s path=%s pid=%d comm=%s\n"',
+    '"T1OS LSM: denied %s path=%s domain=%s pid=%d comm=%s uid=%u euid=%u gid=%u\n"',
     't1os_is_driverserver_process() &&',
     't1os_is_drm_render_node_path(path)',
     't1os_is_chromium_device_node_path(path)',
@@ -2709,10 +2705,19 @@ foreach ($requiredText in @(
     '#define T1OS_CHROMIUM_BINARY         "/the one/software/chromium/program/chrome"',
     '#define T1OS_CHROMIUM_SANDBOX        "/the one/software/chromium/program/chrome-sandbox"',
     '#define T1OS_MEDIA_DECODER_DAEMON    "/the one/software/audio/t1-media-decoderd"',
-    '#define T1OS_FFMPEG_BINARY           "/the one/software/audio/ffmpeg"',
-    '#define T1OS_FFPROBE_BINARY          "/the one/software/audio/ffprobe"',
-    '!strcmp(path, T1OS_FFMPEG_BINARY)',
-    '!strcmp(path, T1OS_FFPROBE_BINARY)',
+    'T1OS_CRED_VIDEO_WORKER',
+    'static bool t1os_video_worker_creds(const struct cred *cred)',
+    'kuid_t uid = make_kuid(&init_user_ns, 65534);',
+    'kgid_t gid = make_kgid(&init_user_ns, 1000);',
+    '!strcmp(path, T1OS_VIDEO_DECODER_BINARY) &&',
+    'execsecurity->cred_class = T1OS_CRED_VIDEO_WORKER;',
+    'static bool t1os_immutable_exec_path(const char *path)',
+    'static bool t1os_general_exec_allowed(enum t1os_domain domain,',
+    'static bool t1os_interpreted_script(const struct linux_binprm *bprm)',
+    't1os_general_exec_allowed(execsecurity->domain,',
+    'static bool t1os_packaged_application_path(const char *path)',
+    't1os_unprivileged_domain(target) &&',
+    't1os_packaged_application_path(path)',
     '"/the one/software",',
     '"/the one/catalogue",',
     'Script and interpreter exceptions apply only to execution.',
@@ -2728,7 +2733,6 @@ foreach ($requiredText in @(
     'static bool t1os_executable_path_matches(const char *path, const char *target)',
     'static const char unreachable[] = "(unreachable)"',
     'matched = t1os_executable_path_matches(name, target)',
-    't1os_is_executable_process(T1OS_CHROMIUM_BINARY)',
     't1os_is_executable_process(T1OS_CHROMIUM_SANDBOX)',
     'return t1os_is_executable_process(T1OS_MEDIA_DECODER_DAEMON);'
 )) {
@@ -2933,10 +2937,13 @@ if (
     ) -or
     -not [regex]::IsMatch(
         $processReadBody,
-        '(?ms)!strcmp\(relative, "driver/nvidia/gpus"\) \|\|\s*!strncmp\(relative, "driver/nvidia/gpus/", 19\)\)\s*return t1os_is_driverserver_process\(\);'
-    )
-) {
-    throw 'The NVIDIA reconciliation procfs ACL is not limited to DriverServer and bounded graphics diagnostics.'
+        '(?ms)!strcmp\(path, "/the one/drivers/processes/driver/nvidia"\) \|\|\s*!strncmp\(path, "/the one/drivers/processes/driver/nvidia/".*?\)\s*return true;'
+    ) -or
+    -not $processReadBody.Contains('own_process &&') -or
+    -not $processReadBody.Contains('!strcmp(leaf, "/maps")') -or
+    -not $processReadBody.Contains('if (!t1os_process_reader_domain())')
+    ) {
+    throw 'The process discovery ACL does not expose public GPU/system data and self inspection while retaining cross-process isolation.'
 }
 
 foreach ($forbiddenText in @(
@@ -2961,7 +2968,7 @@ $nvidiaAclStart = $kernelPolicyText.IndexOf(
 )
 $nvidiaAclEnd = if ($nvidiaAclStart -ge 0) {
     $kernelPolicyText.IndexOf(
-        '/* Render nodes expose command submission and decode',
+        '/* Render nodes expose command submission',
         $nvidiaAclStart,
         [System.StringComparison]::Ordinal
     )
@@ -2980,27 +2987,20 @@ else {
 }
 if (
     -not $nvidiaAclBody.Contains('t1os_is_windowserver_process()') -or
-    -not $nvidiaAclBody.Contains(
-        't1os_is_nvidia_decode_device_node_name(path)'
-    ) -or
-    -not $nvidiaAclBody.Contains('t1os_is_video_client_process()') -or
-    -not $nvidiaAclBody.Contains(
-        't1os_is_executable_process(T1OS_CHROMIUM_BINARY)'
-    ) -or
-    -not $nvidiaAclBody.Contains(
-        't1os_is_nvidia_uvm_device_node_name(path)'
-    ) -or
-    -not $nvidiaAclBody.Contains('t1os_is_chromium_uvm_process()') -or
+    -not $nvidiaAclBody.Contains('/the one/drivers/nodes/nvidia-modeset') -or
+    -not $nvidiaAclBody.Contains('return true;') -or
+    $nvidiaAclBody.Contains('t1os_is_video_client_process()') -or
+    $nvidiaAclBody.Contains('T1OS_CHROMIUM_BINARY') -or
     $nvidiaAclBody.Contains('t1os_is_driverserver_process()') -or
     $nvidiaAclBody.Contains('T1OS_CHROMIUM_SANDBOX')
 ) {
-    throw 'The NVIDIA decode-node ACL is not narrowly scoped to measured video clients.'
+    throw 'The NVIDIA application-node ACL is not general by device class with modeset reserved for WindowServer.'
 }
 if (-not [regex]::IsMatch(
-    $nvidiaAclBody,
-    '(?ms)t1os_is_nvidia_uvm_device_node_name\(path\)\s*&&\s*\(t1os_is_video_client_process\(\)\s*\|\|\s*t1os_is_chromium_uvm_process\(\)\)'
+    $kernelPolicyText,
+    '(?ms)if \(!strncmp\(path, "/the one/drivers/nodes/dri/renderD", 34\)\)\s*return true;'
 )) {
-    throw 'The NVIDIA UVM node ACL is not limited to native video and measured Chromium GPU/zygote processes.'
+    throw 'DRM render nodes are not exposed as a general DAC-controlled application facility.'
 }
 if (-not [regex]::IsMatch(
     $kernelPolicyText,
@@ -3022,21 +3022,15 @@ if (-not [regex]::IsMatch(
 }
 if (-not [regex]::IsMatch(
     $kernelPolicyText,
-    '(?ms)if \(!strcmp\(path, "/the one/drivers/nodes/null"\).*?if \(t1os_is_chromium_engine_process\(\) \|\|\s*t1os_is_media_decoder_daemon_process\(\)\)\s*return true;\s*return false;\s*\}'
+    '(?ms)if \(!strcmp\(path, "/the one/drivers/nodes/null"\)\)\s*return true;'
 )) {
-    throw 'The harmless standard-device ACL does not include the measured native video service.'
+    throw 'The null device is not a general DAC-controlled operating-system facility.'
 }
-if (
-    -not [regex]::IsMatch(
-        $kernelPolicyText,
-        '(?ms)if \(!strcmp\(path, "/the one/drivers/nodes/zero"\).*?if \(t1os_is_chromium_engine_process\(\)\)\s*return true;\s*return false;\s*\}'
-    ) -or
-    [regex]::IsMatch(
-        $kernelPolicyText,
-        '(?ms)if \(!strcmp\(path, "/the one/drivers/nodes/zero"\).*?t1os_is_media_decoder_daemon_process\(\).*?return false;\s*\}'
-    )
-) {
-    throw 'The native video service standard-device ACL is broader than the null node.'
+if (-not [regex]::IsMatch(
+    $kernelPolicyText,
+    '(?ms)if \(!strcmp\(path, "/the one/drivers/nodes/zero"\) \|\|.*?!strcmp\(path, "/the one/drivers/nodes/tty"\)\)\s*return true;'
+)) {
+    throw 'Standard character devices are not exposed through one general DAC-controlled rule.'
 }
 foreach ($forbiddenText in @(
     '!strncmp(path, "/the one/drivers/nodes/nvidia"',
@@ -3076,6 +3070,38 @@ if (
 ) {
     throw 'T1OS LSM still lets protected scripts bypass its write policy.'
 }
+$specialPathStart = $kernelPolicyText.IndexOf(
+    'static bool t1os_is_special_path(const char *path)',
+    [System.StringComparison]::Ordinal
+)
+$specialPathEnd = $kernelPolicyText.IndexOf(
+    'static bool t1os_is_nvidia_device_node_name(const char *path)',
+    [Math]::Max(0, $specialPathStart),
+    [System.StringComparison]::Ordinal
+)
+$specialPathBody = if (
+    $specialPathStart -ge 0 -and $specialPathEnd -gt $specialPathStart
+) {
+    $kernelPolicyText.Substring(
+        $specialPathStart,
+        $specialPathEnd - $specialPathStart
+    )
+}
+else {
+    ''
+}
+if (
+    -not [regex]::IsMatch(
+        $specialPathBody,
+        '(?ms)!strcmp\(path, "/the one/settings"\).*?return true;.*?!strcmp\(path, "/the one/settings/session/identity.json"\).*?return true;.*?!strncmp\(path, "/the one/settings/".*?\)\s*return false;'
+    ) -or
+    $specialPathBody.Contains('/the one/settings/operations') -or
+    $specialPathBody.Contains('/the one/settings/windowserver') -or
+    $specialPathBody.Contains('/the one/settings/audio') -or
+    $specialPathBody.Contains('/the one/settings/display')
+) {
+    throw 'The settings policy must protect the namespace root and authoritative leaves while leaving every application subtree to DAC.'
+}
 $execHookStart = $kernelPolicyText.IndexOf(
     'static int t1os_bprm_check(struct linux_binprm *bprm)',
     [System.StringComparison]::Ordinal
@@ -3098,9 +3124,17 @@ if (
     $execHookBody.Contains('t1os_check_path(') -or
     $execHookBody.Contains('denied protected executable') -or
     -not $execHookBody.Contains('t1os_is_forbidden_runtime_path(path)') -or
-    -not $execHookBody.Contains('T1OS_MODPROBE_BINARY')
+    -not $execHookBody.Contains('T1OS_MODPROBE_BINARY') -or
+    -not $execHookBody.Contains('t1os_general_exec_allowed(domain, bprm, path)') -or
+    -not $execHookBody.Contains('t1os_interpreted_script(bprm)') -or
+    -not $execHookBody.Contains('t1os_general_exec_allowed(execsecurity->domain,') -or
+    $kernelPolicyText.Contains('t1os_native_exec_allowed') -or
+    $kernelPolicyText.Contains('t1os_catalogue_launch') -or
+    $kernelPolicyText.Contains('t1os_window_launch') -or
+    $kernelPolicyText.Contains('T1OS_CALCULATOR_SCRIPT') -or
+    $kernelPolicyText.Contains('T1OS_WRITE_SCRIPT')
 ) {
-    throw 'T1OS LSM conflates protected-tree immutability with execution policy.'
+    throw 'T1OS LSM does not cleanly separate general same-domain execution from protected-tree integrity and privileged transitions.'
 }
 if (-not $kernelPolicyText.Contains(
     'id == READING_MODULE || id == READING_MODULE_COMPRESSED'

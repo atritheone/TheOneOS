@@ -33,7 +33,7 @@ from graphics.graphics import managedcamera3d, managedmaterial3d, managedmesh3d,
 
 # paths
 WINDOWSOCK = "/.ephemeral/windowserver/accept.sock"
-WINDOWPATH = "/software/opengl 3d test.py"
+WINDOWPATH = os.path.abspath(__file__)
 IMAGEBASE = "/.ephemeral/opengl-3d-test"
 IMAGEPATH = os.path.join(IMAGEBASE, "checker.raw")
 FONTFILE = "/the one/resources/fonts/atkinsonhyperlegiblenext.ttf"
@@ -619,6 +619,26 @@ def submitscene():
 
 
 ## fallback functions
+def renderpreparing():
+
+    if not WINBUFFER:
+        return
+
+    try:
+
+        clear(BACKGROUND)
+        fillrectfast(20, 20, max(1, int(WINW) - 40), 54, PANEL)
+        drawtextttf(34, 31, WINDOWTITLE, TEXT, 24, fontpath=FONTFILE)
+        drawtextttf(34, 105, "Preparing the controlled hardware 3D scene...", TEXT, 18, fontpath=FONTFILE)
+        drawtextttf(34, 140, "Waiting for a physical accelerated presentation receipt.", MUTED, 15, fontpath=FONTFILE)
+        present()
+        sendmessage({"op": "DAMAGE", "winid": int(WINID), "rect": [0, 0, int(WINW), int(WINH)]})
+
+    except Exception:
+
+        pass
+
+
 def renderfallback(reason="controlled OpenGL 3D is unavailable"):
 
     global FALLBACKRENDERS
@@ -779,7 +799,7 @@ def resized(message):
 
         manageddisable(GRAPHICSSTATE, str(error))
 
-    renderfallback("preparing resized controlled 3D scene")
+    renderpreparing()
     invalidatescene()
     submitscene()
 
@@ -852,7 +872,7 @@ def handlemessage(message):
         try:
 
             initbuffer(WINBUFFER, WINW, WINH)
-            renderfallback("preparing the controlled 3D scene")
+            renderpreparing()
 
         except Exception as error:
 
@@ -861,6 +881,10 @@ def handlemessage(message):
 
         if GRAPHICSSTATE.get("available"):
 
+            # Mapping first makes the server's commit response a receipt for
+            # a physically displayed GPU frame, not merely an off-screen
+            # accelerated render into an unmapped window.
+            mapwindow()
             invalidatescene()
             submitscene()
 
@@ -876,7 +900,12 @@ def handlemessage(message):
         managedresponse(GRAPHICSSTATE, message)
 
         if operation == "GRAPHICS_COMMITTED":
-            mapwindow()
+
+            if not bool(message.get("presented", False)):
+                GRAPHICSERROR = str(message.get("presentation_reason", "the accelerated frame was not physically presented"))
+                manageddisable(GRAPHICSSTATE, GRAPHICSERROR)
+                renderfallback(GRAPHICSERROR)
+                mapwindow()
 
         elif operation == "GRAPHICS_CLEARED":
             GRAPHICSCLEARACK = True

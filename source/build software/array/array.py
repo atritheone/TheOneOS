@@ -9914,17 +9914,21 @@ def opsrun(path, args, name, _log, user, mode, await_window=False):
     resp = opsrequest(payload)
 
     if not resp:
+        setstatus('Operations Server is unavailable', error=True)
         return None
 
     try:
 
         if resp.get("status") != "ok":
+            message = str(resp.get('message') or 'application launch was denied')
+            setstatus(message, error=True)
             return None
 
         return int(resp.get("pid"))
 
     except Exception:
 
+        setstatus('Operations Server returned an invalid launch response', error=True)
         return None
 
 

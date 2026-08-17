@@ -85,6 +85,9 @@ MAXIMUMSERVICESECRET = 4096
 STARTUPSCRIPT = '/the one/build/startup/startup.py'
 STARTUPLOG = '/the one/logs/startup.py.log'
 MASTERFILE = '/the one/master/master.txt'
+MASTERSETTINGSFILE = '/the one/settings/master/settings.json'
+MASTERSETTINGSDIRECTORYMODE = 0o711
+MASTERSETTINGSFILEMODE = 0o644
 RTCSETTIME = 0x4024700A
 RTCREADTIME = 0x80247009
 TIMEZONEFILE = '/the one/settings/time/timezone.txt'
@@ -983,7 +986,8 @@ def cataloguearguments(kind, arguments):
         if not target.lower().endswith('.py') or not (
             target == '/master' or target.startswith('/master/') or
             target == '/.ephemeral/volumes' or
-            target.startswith('/.ephemeral/volumes/')
+            target.startswith('/.ephemeral/volumes/') or
+            target == '/software' or target.startswith('/software/')
         ):
             raise ValueError('Python file denied')
         return ['--run-file', target]
@@ -1825,10 +1829,11 @@ def settingsimagepath(value, oldhome, newhome):
     return absolute
 
 
-def atomicjsonfile(path, value, mode=0o600):
+def atomicjsonfile(path, value, mode=0o600, directorymode=0o700):
 
     directory = os.path.dirname(path)
-    os.makedirs(directory, mode=0o700, exist_ok=True)
+    os.makedirs(directory, mode=directorymode, exist_ok=True)
+    os.chmod(directory, directorymode)
     temporary = f'{path}.new.{os.getpid()}.{threading.get_ident()}'
     descriptor = os.open(
         temporary,
@@ -1842,10 +1847,54 @@ def atomicjsonfile(path, value, mode=0o600):
             if written <= 0:
                 raise OSError('short settings write')
             offset += written
+        os.fchmod(descriptor, mode)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
     os.replace(temporary, path)
+
+
+def writemastersettings(value, path=MASTERSETTINGSFILE):
+
+    # This file contains only the enabled flag and the selected profile-image
+    # path. Expanse and Settings run as uid 1000 and must be able to traverse
+    # the broker-owned directory and read the broker-published snapshot.
+    atomicjsonfile(
+        path,
+        value,
+        mode=MASTERSETTINGSFILEMODE,
+        directorymode=MASTERSETTINGSDIRECTORYMODE,
+    )
+
+
+def repairmastersettingspermissions(path=MASTERSETTINGSFILE):
+
+    directory = os.path.dirname(path)
+
+    if not os.path.lexists(path):
+        return False
+
+    directorystate = os.stat(directory, follow_symlinks=False)
+    filestate = os.stat(path, follow_symlinks=False)
+
+    if (
+        not statmodule.S_ISDIR(directorystate.st_mode) or
+        statmodule.S_ISLNK(directorystate.st_mode) or
+        directorystate.st_uid != 0
+    ):
+        raise PermissionError('master settings directory is unsafe')
+
+    if (
+        not statmodule.S_ISREG(filestate.st_mode) or
+        statmodule.S_ISLNK(filestate.st_mode) or
+        filestate.st_uid != 0 or
+        filestate.st_nlink != 1
+    ):
+        raise PermissionError('master settings file is unsafe')
+
+    os.chmod(directory, MASTERSETTINGSDIRECTORYMODE)
+    os.chmod(path, MASTERSETTINGSFILEMODE)
+    return True
 
 
 def handlesettingsaccountget(request):
@@ -1893,7 +1942,7 @@ def handlesettingsmasterupdate(request):
             moved = True
         try:
             authbroker.atomic_write_credentials(MASTERFILE, requested, replacement)
-            atomicjsonfile('/the one/settings/master/settings.json', {
+            writemastersettings({
                 'use_master_image': useimage,
                 'image_path': imagepath,
             })
@@ -4376,6 +4425,39 @@ def diagnostic():
         OPERATIONSSTATE = os.path.join(root, 'state.json')
         GRAPHICSSTATEPATH = os.path.join(root, 'graphics.json')
 
+        diagnosticsettings = os.path.join(root, 'master-settings', 'settings.json')
+        writemastersettings({
+            'use_master_image': True,
+            'image_path': '/master/diagnostic/profile.png',
+        }, path=diagnosticsettings)
+        diagnosticdirectorystate = os.stat(
+            os.path.dirname(diagnosticsettings), follow_symlinks=False)
+        diagnosticfilestate = os.stat(
+            diagnosticsettings, follow_symlinks=False)
+        if (
+            statmodule.S_IMODE(diagnosticdirectorystate.st_mode) !=
+            MASTERSETTINGSDIRECTORYMODE or
+            statmodule.S_IMODE(diagnosticfilestate.st_mode) !=
+            MASTERSETTINGSFILEMODE
+        ):
+            raise RuntimeError('master settings snapshot is not session-readable')
+        result['checks']['master_settings_permissions'] = True
+
+        softwarepython = '/software/opengltest2.py'
+        if cataloguearguments(
+            'brick', ['--run-file', softwarepython]
+        ) != ['--run-file', softwarepython]:
+            raise RuntimeError('/software Python launch was not preserved')
+        try:
+            cataloguearguments(
+                'brick', ['--run-file', '/software/not-python.txt']
+            )
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError('non-Python /software launch was accepted')
+        result['checks']['software_python_through_brick'] = True
+
         with GRAPHICSLOCK:
             GRAPHICSPREVIOUS = {'sampled': 0.0, 'render_total_ms': 0.0, 'frames': 0, 'windows': {}}
             GRAPHICSCURRENT = {'system': {}, 'processes': {}}
@@ -4689,6 +4771,15 @@ def main():
     global SERVERSTOP
 
     initialiseclockfrommotherboard()
+
+    try:
+        repairmastersettingspermissions()
+    except Exception as error:
+        print(
+            f'> operations server master settings permission repair error {error}',
+            file=sys.stderr,
+        )
+
     loadstate()
 
     try:
