@@ -14,6 +14,8 @@ if __name__ == "__main__":
             raise SystemExit(0)
 
 import ast
+import builtins
+import contextlib
 import ctypes
 import datetime
 import errno
@@ -157,6 +159,117 @@ def validatenvidialockscreenreceipt(source, description):
         raise SystemExit(
             f"{description} allowed another driver into the NVIDIA fallback"
         )
+
+
+def validateacceleratedlockscreenreceipt(source, description):
+
+    namespace = loadsourcefunctions(
+        source,
+        ("lockscreenreceiptphysicallyverified",),
+        {},
+    )
+    verify = namespace["lockscreenreceiptphysicallyverified"]
+    state = {
+        "backend": "opengl",
+        "hardware_accelerated": True,
+        "full_coverage": True,
+        "renderer": "SVGA3D",
+        "frame_sequence": 4,
+        "presentation_proof": {
+            "verified": True,
+            "scanout": True,
+            "nonblack": True,
+            "contrast": True,
+        },
+    }
+
+    if not verify(state):
+        raise SystemExit(f"{description} rejected a content-verified SVGA3D receipt")
+
+    for field in ("verified", "scanout", "nonblack", "contrast"):
+        invalid = json.loads(json.dumps(state))
+        invalid["presentation_proof"][field] = False
+
+        if verify(invalid):
+            raise SystemExit(
+                f"{description} accepted an SVGA3D receipt without {field} proof"
+            )
+
+
+def validateacceleratedcontentproof(source):
+
+    namespace = {
+        "os": os,
+        "stat": __import__("stat"),
+    }
+    loadsourcefunctions(
+        source,
+        (
+            "windowbufferdimensions",
+            "windowbuffercontentproof",
+            "managedcontentproof",
+            "acceleratedcontentproof",
+        ),
+        namespace,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="t1os-content-proof-") as directory:
+        path = os.path.join(directory, "lockscreen.raw")
+        width = 32
+        height = 24
+        size = width * height * 4
+
+        with open(path, "wb") as stream:
+            stream.write(bytes((0, 0, 0, 255)) * (width * height))
+
+        os.chmod(path, 0o660)
+        status = os.stat(path)
+        window = {
+            "w": width,
+            "h": height,
+            "buffer": path,
+            "_owned_buffer": path,
+            "buffer_offset": 0,
+            "buffer_stride": width * 4,
+            "_buffer_peer_uid": status.st_uid,
+            "_buffer_server_gid": status.st_gid,
+            "_telemetry_gpu_upload_bytes": size,
+            "_telemetry_gpu_draw_calls": 1,
+            "_managed_only": False,
+        }
+        proof = namespace["acceleratedcontentproof"](window)
+
+        if proof.get("verified") or proof.get("nonblack") or proof.get("contrast"):
+            raise SystemExit("a uniform black lock-screen buffer passed content proof")
+
+        with open(path, "r+b") as stream:
+            stream.seek((width + 1) * 4)
+            stream.write(bytes((239, 239, 239, 255)))
+
+        proof = namespace["acceleratedcontentproof"](window)
+
+        if not (
+            proof.get("verified")
+            and proof.get("nonblack")
+            and proof.get("contrast")
+        ):
+            raise SystemExit("a visible CPU-authored lock-screen buffer failed proof")
+
+    managed = {
+        "_managed_only": True,
+        "_gpu_command_generation": 2,
+        "_gpu_presented_generation": 0,
+        "_telemetry_scene_commands_drawn": 3,
+        "gpu_commands": [{"kind": "text", "color": [239, 239, 239, 255]}],
+    }
+
+    if namespace["acceleratedcontentproof"](managed).get("verified"):
+        raise SystemExit("an unpresented managed lock screen passed content proof")
+
+    managed["_gpu_presented_generation"] = 2
+
+    if not namespace["acceleratedcontentproof"](managed).get("verified"):
+        raise SystemExit("a physically presented managed lock screen failed proof")
 
 
 def validatedriverserverzombiedetection(source):
@@ -367,10 +480,95 @@ def validatevideoauthorizationlogging(source):
         )
 
 
+def validatewindowbufferpermissions(graphics):
+
+    # The shared graphics module is imported by uid-1000 clients.  A protected
+    # central log must therefore fall back to supervised stderr without ever
+    # replacing the operational exception being diagnosed.
+    originalopen = builtins.open
+    originallogfile = graphics.LOGFILE
+    originalgeteuid = getattr(graphics.os, "geteuid", None)
+    diagnostics = io.StringIO()
+
+    def denycentrallog(path, *args, **kwargs):
+
+        if os.fspath(path) == graphics.LOGFILE:
+            raise PermissionError(errno.EACCES, "test central log denial", path)
+        return originalopen(path, *args, **kwargs)
+
+    try:
+        graphics.LOGFILE = "/tmp/t1os-test-protected-graphics.log"
+        graphics.os.geteuid = lambda: 0
+        builtins.open = denycentrallog
+
+        with contextlib.redirect_stderr(diagnostics):
+            result = graphics.log("test non-fatal graphics failure", flush=True)
+
+        if result is not False or "test central log denial" not in diagnostics.getvalue():
+            raise SystemExit(
+                "an unavailable central graphics log can still escape or hide diagnostics"
+            )
+    finally:
+        builtins.open = originalopen
+        graphics.LOGFILE = originallogfile
+
+        if originalgeteuid is None:
+            delattr(graphics.os, "geteuid")
+        else:
+            graphics.os.geteuid = originalgeteuid
+
+    originalosopen = graphics.os.open
+
+    def denybuffer(path, flags, mode=0o777):
+        raise PermissionError(errno.EACCES, "test window buffer denial", path)
+
+    try:
+        graphics.os.open = denybuffer
+
+        try:
+            graphics.initbuffer("/.ephemeral/windowserver/buffers/test.raw", 4, 3)
+        except graphics.WindowBufferAccessError as error:
+            if (
+                error.stage != "open"
+                or error.errno != errno.EACCES
+                or "test window buffer denial" not in str(error)
+                or "graphics.py.log" in str(error)
+            ):
+                raise SystemExit(
+                    "window-buffer denial did not preserve its original open error"
+                )
+        else:
+            raise SystemExit("window-buffer open denial was swallowed")
+    finally:
+        graphics.os.open = originalosopen
+
+    with tempfile.TemporaryDirectory(prefix="t1os-window-buffer-") as directory:
+        path = os.path.join(directory, "surface.raw")
+        expected = 7 * 5 * 4
+
+        with open(path, "wb") as stream:
+            stream.truncate(expected)
+
+        if graphics.initbuffer(path, 7, 5) is not True:
+            raise SystemExit("a valid peer-owned window buffer did not initialize")
+
+        try:
+            if (
+                graphics._backend != "filebuffer"
+                or graphics._FILE_MAP is None
+                or graphics._FILE_FD is None
+                or len(graphics._buffer) != expected
+            ):
+                raise SystemExit("valid window-buffer state was not committed atomically")
+        finally:
+            graphics.baselineclose()
+
+
 def main():
 
     projectroot = Path(sys.argv[1]).resolve()
     graphics = loadgraphics(projectroot)
+    validatewindowbufferpermissions(graphics)
     removed = []
     released = []
 
@@ -2100,6 +2298,32 @@ def main():
         projectroot / "source/build software/windows/windowserver.py"
     ).read_text(encoding="utf-8")
     validatevideoauthorizationlogging(windowserver)
+
+    for required in (
+        'peeruid = int(identity.get("uid", -1))',
+        'peergid = int(identity.get("gid", -1))',
+        'servergid = int(os.getegid())',
+        'os.fchown(descriptor, peeruid, servergid)',
+        'os.fchmod(descriptor, 0o660)',
+        'def windowbuffercontentproof(',
+        'def acceleratedcontentproof(',
+        'raise PermissionError("unsafe window-buffer ownership or mode")',
+        'graphics CREATE_WINDOW denied',
+        'graphics CREATE_WINDOW failed',
+    ):
+
+        if required not in windowserver:
+            raise SystemExit(
+                f"WindowServer peer-owned buffer contract is missing {required!r}"
+            )
+
+    chmodposition = windowserver.index('os.fchmod(descriptor, 0o660)')
+    chownposition = windowserver.index('os.fchown(descriptor, peeruid, servergid)')
+
+    if chmodposition >= chownposition:
+        raise SystemExit(
+            "WindowServer transfers window-buffer ownership before applying its mode"
+        )
     graphicssource = (
         projectroot / "source/build software/graphics/graphics.py"
     ).read_text(encoding="utf-8")
@@ -2112,9 +2336,34 @@ def main():
     lockscreen = (
         projectroot / "source/build software/lock screen/lock screen.py"
     ).read_text(encoding="utf-8")
+
+    if "T1OS_LOCKSCREEN_GRAPHICS', 'cpu'" not in lockscreen:
+        raise SystemExit("lock screen does not default to the CPU-authored buffer path")
+
+    for required in (
+        "if op == 'ERROR':",
+        "f'wscreate server error code={code} detail={detail}'",
+    ):
+
+        if required not in lockscreen:
+            raise SystemExit(
+                f"lock-screen CREATE_WINDOW diagnostic is missing {required!r}"
+            )
     goddess = (
         projectroot / "source/build software/GODDESS/GODDESS.py"
     ).read_text(encoding="utf-8")
+
+    for required in (
+        "class LoginClientBufferFailure(RuntimeError):",
+        "if 'WindowBufferAccessError:' in detail:",
+        "except LoginClientBufferFailure as error:",
+        "'lockscreen-userspace-buffer-failure'",
+    ):
+
+        if required not in goddess:
+            raise SystemExit(
+                f"PID 1 window-buffer failure classification is missing {required!r}"
+            )
     driverserver = (
         projectroot / "source/build software/drivers/driverserver.py"
     ).read_text(encoding="utf-8")
@@ -2122,6 +2371,9 @@ def main():
     startup = (
         projectroot / "source/build software/startup/startup.py"
     ).read_text(encoding="utf-8")
+    validateacceleratedcontentproof(windowserver)
+    validateacceleratedlockscreenreceipt(lockscreen, "lock screen")
+    validateacceleratedlockscreenreceipt(startup, "startup")
     validatenvidialockscreenreceipt(lockscreen, "lock screen")
     validatenvidialockscreenreceipt(startup, "startup")
     graphicsbuild = (
@@ -4531,6 +4783,10 @@ def main():
         'selected = str(device or DRMDEVICE or "").strip()',
         "candidates = [selected] if selected else drmcandidates()",
         "def kmsframebufferinit(",
+        "def _kmsframebufferinitdevice(device, resize=False):",
+        "resize=resize,",
+        "kmsfindmode(\n        resize=True,\n        preserve_current=True,\n    )",
+        "_kmsframebufferinitdevice(device, resize=True)",
         "def framebufferpresentationproof(",
         "def _legacyframebufferowners():",
         '"legacy_owner_connected"',

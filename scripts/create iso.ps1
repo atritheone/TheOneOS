@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
-    [string]$OutputPath
+    [string]$OutputPath,
+
+    [string]$GrubConfigSource
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,17 +33,37 @@ $initTarget = Join-Path $environmentRoot 'initramfs\init'
 $busyBoxPath = Join-Path $environmentRoot 'initramfs\bin\busybox'
 $kernelPath = Join-Path $environmentRoot 'iso\boot\vmlinuz'
 $grubConfigPath = Join-Path $environmentRoot 'iso\boot\grub\grub.cfg'
+$canonicalGrubConfigPath = Join-Path $projectRoot 'source\entry\grub\grub 0.1.cfg'
+
+if ([string]::IsNullOrWhiteSpace($GrubConfigSource)) {
+    $GrubConfigSource = $canonicalGrubConfigPath
+}
+elseif (-not [System.IO.Path]::IsPathRooted($GrubConfigSource)) {
+    $GrubConfigSource = Join-Path $projectRoot $GrubConfigSource
+}
+$GrubConfigSource = [System.IO.Path]::GetFullPath($GrubConfigSource)
 
 Write-Host 'building t1os-boot.iso...'
 Write-Host "logging to $logFile"
 
-foreach ($requiredFile in @($rawImagePath, $initSource, $busyBoxPath, $kernelPath, $grubConfigPath)) {
+foreach ($requiredFile in @($rawImagePath, $initSource, $busyBoxPath, $kernelPath, $GrubConfigSource)) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "boot ISO input not found: $requiredFile"
     }
     if ((Get-Item -LiteralPath $requiredFile).Length -eq 0) {
         throw "boot ISO input is empty: $requiredFile"
     }
+}
+
+# The staged GRUB file is a generated ISO input and may have been changed by a
+# previous graphics test. Production builds always refresh it from the tracked
+# software-VM template. Tests that intentionally stage a temporary boot mode
+# pass that staged file explicitly through -GrubConfigSource.
+if (-not [System.IO.Path]::GetFullPath($grubConfigPath).Equals(
+    $GrubConfigSource,
+    [System.StringComparison]::OrdinalIgnoreCase
+)) {
+    Copy-Item -LiteralPath $GrubConfigSource -Destination $grubConfigPath -Force
 }
 
 $wslEnvOutput = & wsl.exe --exec wslpath -a $environmentRoot

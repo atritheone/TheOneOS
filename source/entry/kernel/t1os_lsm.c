@@ -2098,6 +2098,17 @@ static int t1os_check_dentry_metadata(struct dentry *dentry)
 		return 0;
 	if (!dentry)
 		return -EACCES;
+	/* inode_setattr receives only a dentry, not the mount which gives that
+	 * inode its global pathname.  dentry_path_raw() therefore reports paths
+	 * inside the /.ephemeral tmpfs as /windowserver/..., causing the pathname
+	 * test below to reject otherwise-authorized chmod/chown operations.  The
+	 * runtime mount topology is immutable and init creates exactly one ordinary
+	 * tmpfs: /.ephemeral.  Recognize that filesystem instance by its exact type
+	 * name.  Do not use TMPFS_MAGIC because devtmpfs is shmem-backed too and its
+	 * device metadata must remain protected. */
+	if (dentry->d_sb && dentry->d_sb->s_type &&
+	    !strcmp(dentry->d_sb->s_type->name, "tmpfs"))
+		return 0;
 	buffer = (char *)__get_free_page(GFP_KERNEL);
 	if (!buffer)
 		return -ENOMEM;

@@ -227,6 +227,8 @@ foreach ($requiredText in @(
     'static int t1os_check_dentry_metadata(struct dentry *dentry)',
     'The verified initramfs establishes NTFS3''s persistent $LX ownership and',
     'if (!t1os_runtime_root_active())',
+    '!strcmp(dentry->d_sb->s_type->name, "tmpfs")',
+    'Do not use TMPFS_MAGIC because devtmpfs is shmem-backed too',
     'return -EACCES;',
     '#define T1OS_CHROMIUM_BINARY         "/the one/software/chromium/program/chrome"',
     '#define T1OS_CHROMIUM_SANDBOX        "/the one/software/chromium/program/chrome-sandbox"',

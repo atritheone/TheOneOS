@@ -79,6 +79,7 @@
     {"id":"network.firewall-linux","script":"scripts/test network firewall linux.py","profile":"pure"},
     {"id":"network.security","script":"scripts/test network security.py","profile":"pure"},
     {"id":"power.lifecycle","script":"scripts/test power lifecycle.py","profile":"pure"},
+    {"id":"deployment.state","script":"scripts/test deployment state.ps1","profile":"pure","inputs":["scripts/deployment state.ps1","scripts/push to disk.ps1","scripts/update t1os usb.ps1","scripts/common.ps1"]},
     {"id":"python.runtime","script":"scripts/test python runtime.ps1","profile":"wsl","inputs":["source/software/python/**","source/python/**"]},
     {"id":"release.virtualbox","script":"scripts/test release vbox.ps1","profile":"vm","inputs":["environment/t1os-root.vdi","environment/t1os-boot.iso"]},
     {"id":"release.vmware","script":"scripts/test release vmware.ps1","profile":"vm","inputs":["environment/t1os-root.vmdk"]},

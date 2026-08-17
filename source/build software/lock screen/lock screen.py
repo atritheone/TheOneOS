@@ -88,7 +88,8 @@ _graphicslastcommands = 0
 _graphicsbuildtotalms = 0.0
 _graphicsbuildmaximumms = 0.0
 _graphicsbuildcount = 0
-_graphicscpuoverride = str(os.environ.get('T1OS_LOCKSCREEN_GRAPHICS', '')).strip().lower() in ('cpu', 'off', '0', 'false')
+_graphicsmode = str(os.environ.get('T1OS_LOCKSCREEN_GRAPHICS', 'cpu')).strip().lower()
+_graphicscpuoverride = _graphicsmode not in ('managed', 'gpu', 'on', '1', 'true')
 _graphicsstate = managedstate(cpu=_graphicscpuoverride)
 
 # font state
@@ -879,10 +880,14 @@ def wscreate(w, h):
 
             if op == 'ERROR':
 
+                code = str(reply.get('code', 'unknown'))[:64]
+
+                detail = str(reply.get('detail', ''))[:512]
+
                 logline(
-                    'wscreate server error '
-                    f"code={reply.get('code', '')} detail={reply.get('detail', '')}"
+                    f'wscreate server error code={code} detail={detail}'
                 )
+
                 return False
 
             continue
@@ -1633,11 +1638,17 @@ def lockscreenreceiptphysicallyverified(state):
     backend = str(state.get('backend', '')).strip().lower()
 
     if backend == 'opengl':
+        proof = state.get('presentation_proof')
         return (
             state.get('hardware_accelerated') is True
             and state.get('full_coverage') is True
             and str(state.get('renderer', '')).strip()
             and int(state.get('frame_sequence', 0)) > 0
+            and isinstance(proof, dict)
+            and proof.get('verified') is True
+            and proof.get('scanout') is True
+            and proof.get('nonblack') is True
+            and proof.get('contrast') is True
         )
 
     if backend not in ('framebuffer', 'kms-framebuffer'):
@@ -2339,6 +2350,12 @@ def unlockrequest(msg, winid=None):
         key = str(msg.get('key', '')).strip().upper()
         return state == 'down' and key in ('SPACE', 'ENTER')
 
+    if op == 'POINTER_BUTTON':
+        try:
+            return state == 'down' and int(msg.get('button', 0)) == 1
+        except (TypeError, ValueError):
+            return False
+
     return False
 
 
@@ -3038,15 +3055,17 @@ def graphicsdiagnostic():
                     'op': 'POINTER_BUTTON',
                     'winid': 81,
                     'button': 1,
-                    'state': 'down',
-                }, winid=81)
-                or unlockrequest({
-                    'op': 'POINTER_BUTTON',
-                    'winid': 81,
-                    'button': 1,
                     'state': 'up',
                 }, winid=81)):
             raise RuntimeError('lock screen advanced for a non-activation event')
+
+        if not unlockrequest({
+                'op': 'POINTER_BUTTON',
+                'winid': 81,
+                'button': 1,
+                'state': 'down',
+        }, winid=81):
+            raise RuntimeError('primary click did not advance the lock screen')
 
         result['checks']['session_activation_input'] = True
 

@@ -10,12 +10,16 @@ param(
 
     [switch]$SyncManagedReleaseOnly,
 
-    [switch]$Fast
+    [switch]$Fast,
+
+    [switch]$Full
 )
 
 $ErrorActionPreference = 'Stop'
+$deploymentStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $projectRoot = Split-Path -Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'deployment state.ps1')
 $buildSource = Join-Path $projectRoot 'source\build software'
 $bootSource = Join-Path $projectRoot 'source\boot'
 $driversSource = Join-Path $projectRoot 'source\drivers'
@@ -130,6 +134,7 @@ function Get-T1OSUsbDriveTarget {
                     DriveSource = "$driveLetter`:"
                     Label = ([string]$volume.FileSystemLabel).Trim()
                     DiskNumber = [int]$disk.Number
+                    SerialNumber = ([string]$disk.SerialNumber).Trim()
                     Model = ([string]$disk.FriendlyName).Trim()
                 }
             }
@@ -222,7 +227,9 @@ if (-not $UsbDrive -and -not (Test-Path -LiteralPath $imagePath -PathType Leaf))
     throw "Disk image not found: $imagePath"
 }
 
+$targetDiscoveryStopwatch = [Diagnostics.Stopwatch]::StartNew()
 $usbTarget = if ($UsbDrive) { Get-T1OSUsbDriveTarget } else { $null }
+$targetDiscoveryStopwatch.Stop()
 if ($usbTarget) {
     Write-Host "T1OS USB drive: $($usbTarget.DriveLetter): '$($usbTarget.Label)'"
     Write-Host "USB disk: $($usbTarget.DiskNumber) $($usbTarget.Model)"
@@ -249,15 +256,84 @@ if ($VerifyManagedReleaseOnly -and -not $UsbDrive) {
     throw '-VerifyManagedReleaseOnly is available only with -UsbDrive.'
 }
 
+if ($Fast -and $Full) {
+    throw 'Choose either -Fast or -Full, not both.'
+}
+
+$deploymentStatePath = if ($UsbDrive) {
+    Join-Path $usbTarget.Root 'the one\settings\usb update state.json'
+}
+else {
+    Join-Path $projectRoot 'environment\storage.img update state.json'
+}
+$targetIdentity = if ($UsbDrive) {
+    'usb|{0}|{1}|{2}|{3}' -f @(
+        $usbTarget.DriveLetter,
+        $usbTarget.DiskNumber,
+        $usbTarget.SerialNumber,
+        $usbTarget.Label
+    )
+}
+else {
+    $imageItem = Get-Item -LiteralPath $imagePath -Force
+    'image|{0}|{1}|{2}' -f @(
+        $imageItem.FullName,
+        $imageItem.Length,
+        $imageItem.LastWriteTimeUtc.Ticks
+    )
+}
+
+$sourceStateStopwatch = [Diagnostics.Stopwatch]::StartNew()
+$deploymentSourceState = Get-T1OSDeploymentSourceState `
+    -ProjectRoot $projectRoot -ScriptRoot $PSScriptRoot
+$sourceStateStopwatch.Stop()
+$allManagedRoots = @($deploymentSourceState.roots.psobject.Properties.Name)
+
+if (-not $Full) {
+    $previousDeploymentState = Read-T1OSDeploymentState `
+        -Path $deploymentStatePath
+    $deploymentPlan = Get-T1OSDeploymentPlan `
+        -SourceState $deploymentSourceState `
+        -PreviousState $previousDeploymentState `
+        -TargetIdentity $targetIdentity
+    $selectedManagedRoots = @($deploymentPlan.roots)
+    $fullTargetVerification = [bool]$deploymentPlan.full_verification
+    $unchangedLargeFiles = @($deploymentPlan.unchanged_large_files)
+}
+else {
+    $selectedManagedRoots = $allManagedRoots
+    $fullTargetVerification = $true
+    $unchangedLargeFiles = @()
+}
+
+if ($SyncManagedReleaseOnly) {
+    $selectedManagedRoots = @(
+        'build', 'boot', 'virtualbox_software',
+        'image_catalogue', 'python'
+    )
+}
+
+Write-Host "Selected managed root(s): $($selectedManagedRoots -join ', ')"
+
+if (
+    $selectedManagedRoots.Count -eq 0 -and
+    -not ($ValidateManagedTreeOnly -or $VerifyManagedReleaseOnly -or $SyncManagedReleaseOnly)
+) {
+    Write-Host 'The deployment target already contains the current managed source state.'
+    Write-Host ("Target validation {0:N2}s; source inventory {1:N2}s; no content scan was needed." -f `
+        $targetDiscoveryStopwatch.Elapsed.TotalSeconds,
+        $sourceStateStopwatch.Elapsed.TotalSeconds)
+    exit 0
+}
+
+$preparationStopwatch = [Diagnostics.Stopwatch]::StartNew()
+
 if (-not $Fast -and -not ($ValidateManagedTreeOnly -or $VerifyManagedReleaseOnly)) {
-    Write-Host 'Running the full canonical Python verifier before opening the deployment target...'
-    & $pythonRuntimeVerifier
+    Write-Host 'Verifying the canonical Python deployment payload before opening the deployment target...'
+    & $pythonRuntimeVerifier -DeploymentPayloadOnly
 }
 elseif ($Fast) {
-    if (-not $UsbDrive) {
-        throw '-Fast is available only for an already-frozen physical USB release.'
-    }
-    Write-Host 'Fast USB mode: immutable manifest/lock identity passed; skipping the redundant canonical source rebuild audit.'
+    Write-Host 'Fast deployment mode: immutable manifest/lock identity passed; skipping the redundant canonical source rebuild audit.'
 }
 else {
     Write-Host 'Managed-Python mode: unrelated T1OS source roots are outside this verification scope.'
@@ -283,53 +359,64 @@ function ConvertTo-WslPath {
     return $translatedPath
 }
 
+$bootPolicyDirectory = Split-Path -Path $bootPolicyManifest -Parent
 New-Item -ItemType Directory -Path $bootPolicyDirectory -Force | Out-Null
-$wslBootPolicyBuilder = ConvertTo-WslPath -WindowsPath $bootPolicyBuilder
 $wslProjectRoot = ConvertTo-WslPath -WindowsPath $projectRoot
-$wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
-& wsl.exe --exec python3 -B $wslBootPolicyBuilder `
-    --repo $wslProjectRoot --output $wslBootPolicyManifest
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $bootPolicyManifest -PathType Leaf)) {
-    throw 'The independent boot protected-root policy build failed.'
+$wslBootPolicyBuilder = "$wslProjectRoot/scripts/build boot protected roots.py"
+$wslBootPolicyManifest = "$wslProjectRoot/development/hardware boot policy/protected-roots.json"
+$bootPolicyStampPath = "$bootPolicyManifest.inputs.sha256"
+$bootPolicyInput = @(
+    $deploymentSourceState.contract_stamp,
+    $deploymentSourceState.roots.build.source_stamp,
+    $deploymentSourceState.roots.boot.source_stamp,
+    $deploymentSourceState.roots.virtualbox_software.source_stamp,
+    $deploymentSourceState.roots.image_catalogue.source_stamp,
+    $deploymentSourceState.roots.python.source_stamp
+) -join "`n"
+$bootPolicyInputStamp = [Convert]::ToHexString(
+    [Security.Cryptography.SHA256]::HashData(
+        [Text.Encoding]::UTF8.GetBytes($bootPolicyInput)
+    )
+).ToLowerInvariant()
+$cachedBootPolicyStamp = if (Test-Path -LiteralPath $bootPolicyStampPath -PathType Leaf) {
+    (Get-Content -Raw -LiteralPath $bootPolicyStampPath).Trim()
+}
+else {
+    ''
+}
+if (
+    $cachedBootPolicyStamp -cne $bootPolicyInputStamp -or
+    -not (Test-Path -LiteralPath $bootPolicyManifest -PathType Leaf)
+) {
+    & wsl.exe --exec python3 -B $wslBootPolicyBuilder `
+        --repo $wslProjectRoot --output $wslBootPolicyManifest
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $bootPolicyManifest -PathType Leaf)) {
+        throw 'The independent boot protected-root policy build failed.'
+    }
+    [IO.File]::WriteAllText(
+        $bootPolicyStampPath,
+        "$bootPolicyInputStamp`n",
+        [Text.UTF8Encoding]::new($false)
+    )
+}
+else {
+    Write-Host 'Boot protected-root policy inputs are unchanged; reusing the verified manifest.'
 }
 
-$buildFileCount = @(
-    Get-ChildItem -LiteralPath $buildSource -File -Recurse |
-        Where-Object {
-            $_.Extension -notin @('.pyc', '.pyo') -and
-            $_.DirectoryName -notmatch '(^|[\\/])__pycache__($|[\\/])'
-        }
-).Count
-$bootFileCount = @(
-    Get-ChildItem -LiteralPath $bootSource -File -Recurse |
-        Where-Object {
-            $_.Extension -notin @('.pyc', '.pyo') -and
-            $_.DirectoryName -notmatch '(^|[\\/])__pycache__($|[\\/])'
-        }
-).Count
-$driversFileCount = @(Get-ChildItem -LiteralPath $driversSource -File -Recurse).Count
-$graphicsCatalogueFileCount = @(Get-ChildItem -LiteralPath $graphicsCatalogueSource -File -Recurse).Count
-$virtualBoxCatalogueFileCount = @(
-    Get-ChildItem -LiteralPath $virtualBoxCatalogueSource -File -Recurse |
-        Where-Object { $_.Name -ne 'catalogue.json' -and $_.Name -notlike '*licence*' -and $_.Name -notlike '*license*' }
-).Count
-$virtualBoxSoftwareFileCount = @(
-    Get-ChildItem -LiteralPath $virtualBoxSoftwareSource -File -Recurse |
-        Where-Object {
-            $_.Extension -notin @('.pyc', '.pyo') -and
-            $_.DirectoryName -notmatch '(^|[\\/])__pycache__($|[\\/])'
-        }
-).Count
-$virtualBoxSettingsFileCount = @(Get-ChildItem -LiteralPath $virtualBoxSettingsSource -File -Recurse).Count
-$audioCatalogueFileCount = @(Get-ChildItem -LiteralPath $audioCatalogueSource -File -Recurse).Count
-$audioSoftwareFileCount = @(Get-ChildItem -LiteralPath $audioSoftwareSource -File -Recurse).Count
-$networkCatalogueFileCount = @(Get-ChildItem -LiteralPath $networkCatalogueSource -File -Recurse).Count
-$networkSoftwareFileCount = @(Get-ChildItem -LiteralPath $networkSoftwareSource -File -Recurse).Count
-$networkSettingsFileCount = @(Get-ChildItem -LiteralPath $networkSettingsSource -File -Recurse).Count
-$chromiumSoftwareFileCount = @(Get-ChildItem -LiteralPath $chromiumSoftwareSource -File -Recurse).Count
-$imageCatalogueFileCount = @(
-    Get-ChildItem -LiteralPath $imageCatalogueSource -File -Recurse
-).Count
+$buildFileCount = [int]$deploymentSourceState.roots.build.files
+$bootFileCount = [int]$deploymentSourceState.roots.boot.files
+$driversFileCount = [int]$deploymentSourceState.roots.drivers.files
+$graphicsCatalogueFileCount = [int]$deploymentSourceState.roots.graphics.files
+$virtualBoxCatalogueFileCount = [int]$deploymentSourceState.roots.virtualbox_catalogue.files
+$virtualBoxSoftwareFileCount = [int]$deploymentSourceState.roots.virtualbox_software.files
+$virtualBoxSettingsFileCount = [int]$deploymentSourceState.roots.virtualbox_settings.files
+$audioCatalogueFileCount = [int]$deploymentSourceState.roots.audio_catalogue.files
+$audioSoftwareFileCount = [int]$deploymentSourceState.roots.audio_software.files
+$networkCatalogueFileCount = [int]$deploymentSourceState.roots.network_catalogue.files
+$networkSoftwareFileCount = [int]$deploymentSourceState.roots.network_software.files
+$networkSettingsFileCount = [int]$deploymentSourceState.roots.network_settings.files
+$chromiumSoftwareFileCount = [int]$deploymentSourceState.roots.chromium.files
+$imageCatalogueFileCount = [int]$deploymentSourceState.roots.image_catalogue.files
 $pythonSoftwareFileCount = @(Get-ChildItem -LiteralPath $pythonSoftwareSource -File -Recurse).Count
 $pythonCatalogueFileCount = @(Get-ChildItem -LiteralPath $pythonCatalogueSource -File -Recurse).Count
 $logoFileCount = @(Get-ChildItem -LiteralPath $logoSource -File -Recurse -Filter '*.png').Count
@@ -350,33 +437,32 @@ try {
 
         Write-Host 'The disk is unmounted. It will remain mounted inside one controlled WSL process for the complete sync.'
         Assert-T1OSFilesystemHealthy -ImagePath $imagePath -Operation 'pushing files to it'
-        $wslImagePath = ConvertTo-WslPath -WindowsPath $imagePath
+        $wslImagePath = "$wslProjectRoot/environment/storage.img"
     }
-    $wslBuildSource = ConvertTo-WslPath -WindowsPath $buildSource
-    $wslBootSource = ConvertTo-WslPath -WindowsPath $bootSource
-    $wslDriversSource = ConvertTo-WslPath -WindowsPath $driversSource
-    $wslGraphicsCatalogueSource = ConvertTo-WslPath -WindowsPath $graphicsCatalogueSource
-    $wslVirtualBoxCatalogueSource = ConvertTo-WslPath -WindowsPath $virtualBoxCatalogueSource
-    $wslVirtualBoxSoftwareSource = ConvertTo-WslPath -WindowsPath $virtualBoxSoftwareSource
-    $wslVirtualBoxSettingsSource = ConvertTo-WslPath -WindowsPath $virtualBoxSettingsSource
-    $wslAudioCatalogueSource = ConvertTo-WslPath -WindowsPath $audioCatalogueSource
-    $wslAudioSoftwareSource = ConvertTo-WslPath -WindowsPath $audioSoftwareSource
-    $wslNetworkCatalogueSource = ConvertTo-WslPath -WindowsPath $networkCatalogueSource
-    $wslNetworkSoftwareSource = ConvertTo-WslPath -WindowsPath $networkSoftwareSource
-    $wslNetworkSettingsSource = ConvertTo-WslPath -WindowsPath $networkSettingsSource
-    $wslMediaSettingsSource = ConvertTo-WslPath -WindowsPath $mediaSettingsSource
-    $wslChromiumSoftwareSource = ConvertTo-WslPath -WindowsPath $chromiumSoftwareSource
-    $wslNativeProtocolHeader = ConvertTo-WslPath -WindowsPath $nativeProtocolHeader
-    $wslNativeWatchdogHeader = ConvertTo-WslPath -WindowsPath $nativeWatchdogHeader
-    $wslChromiumProtocolHeader = ConvertTo-WslPath -WindowsPath $chromiumProtocolHeader
-    $wslChromiumSourceManifest = ConvertTo-WslPath -WindowsPath $chromiumSourceManifest
-    $wslRuntimePathContractSource = ConvertTo-WslPath -WindowsPath $runtimePathContractSource
-    $wslImageCatalogueSource = ConvertTo-WslPath -WindowsPath $imageCatalogueSource
-    $wslPythonSoftwareSource = ConvertTo-WslPath -WindowsPath $pythonSoftwareSource
-    $wslPythonCatalogueSource = ConvertTo-WslPath -WindowsPath $pythonCatalogueSource
-    $wslPythonRuntimeConfigSource = ConvertTo-WslPath -WindowsPath $pythonRuntimeConfigSource
-    $wslBootPolicyManifest = ConvertTo-WslPath -WindowsPath $bootPolicyManifest
-    $wslResourceSource = ConvertTo-WslPath -WindowsPath $resourceSource
+    $wslBuildSource = "$wslProjectRoot/source/build software"
+    $wslBootSource = "$wslProjectRoot/source/boot"
+    $wslDriversSource = "$wslProjectRoot/source/drivers"
+    $wslGraphicsCatalogueSource = "$wslProjectRoot/source/catalogue/graphics"
+    $wslVirtualBoxCatalogueSource = "$wslProjectRoot/source/catalogue/virtualbox"
+    $wslVirtualBoxSoftwareSource = "$wslProjectRoot/source/software/virtualbox"
+    $wslVirtualBoxSettingsSource = "$wslProjectRoot/source/settings/virtualbox"
+    $wslAudioCatalogueSource = "$wslProjectRoot/source/catalogue/audio"
+    $wslAudioSoftwareSource = "$wslProjectRoot/source/software/audio"
+    $wslNetworkCatalogueSource = "$wslProjectRoot/source/catalogue/network"
+    $wslNetworkSoftwareSource = "$wslProjectRoot/source/software/network"
+    $wslNetworkSettingsSource = "$wslProjectRoot/source/settings/network"
+    $wslMediaSettingsSource = "$wslProjectRoot/source/settings/media"
+    $wslChromiumSoftwareSource = "$wslProjectRoot/source/software/chromium"
+    $wslNativeProtocolHeader = "$wslProjectRoot/source/native/video/t1_media_decode_protocol.h"
+    $wslNativeWatchdogHeader = "$wslProjectRoot/source/native/video/t1_media_decode_watchdog.h"
+    $wslChromiumProtocolHeader = "$wslProjectRoot/resource/chromium-source/150.0.7871.181/overlay/media/gpu/t1os/t1_media_decode_protocol.h"
+    $wslChromiumSourceManifest = "$wslProjectRoot/resource/chromium-source/150.0.7871.181/manifest.json"
+    $wslRuntimePathContractSource = "$wslProjectRoot/source/settings/runtime paths.json"
+    $wslImageCatalogueSource = "$wslProjectRoot/source/catalogue/image"
+    $wslPythonSoftwareSource = "$wslProjectRoot/source/software/python"
+    $wslPythonCatalogueSource = "$wslProjectRoot/source/catalogue/python"
+    $wslPythonRuntimeConfigSource = "$wslProjectRoot/source/python/build/runtime.json"
+    $wslResourceSource = "$wslProjectRoot/resource"
 
     Write-Host "Comparing build software with $buildDestination..."
     Write-Host "Comparing boot files with $bootDestination..."
@@ -446,6 +532,9 @@ managed_verify_only=${49}
 managed_sync_only=${50}
 profiled_python_config=${51}
 boot_policy_manifest=${52}
+selected_roots=${53}
+exhaustive_verify=${54}
+skip_chromium_engine=${55}
 expanse_resource_destination="$mount_point/the one/resources/expanse"
 cursor_resource_destination="$mount_point/the one/resources/graphics/mouse cursors"
 system_resource_destination="$mount_point/the one/resources/system"
@@ -465,6 +554,14 @@ esac
 [ "${#expected_python_manifest_sha256}" -eq 64 ] || {
     echo 'Expected Python manifest digest does not contain 64 hexadecimal characters.' >&2
     exit 1
+}
+
+root_selected() {
+    requested=$1
+    case ",$selected_roots," in
+        *,$requested,*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 for command_name in rsync mount umount mountpoint findmnt losetup readlink readelf python3 find grep head mv rm cp mkdir rmdir chmod chown cmp sha256sum awk wc sync od tr; do
@@ -493,7 +590,6 @@ cleanup() {
     rm -rf -- "$stage"
 
     if [ "$mounted_here" = 1 ]; then
-        sync
         if ! umount "$mount_point"; then
             echo "Could not release $mount_point after the push." >&2
             status=1
@@ -615,46 +711,62 @@ fi
 # removed, created, copied, chowned, or chmodded. Check every named ancestor
 # without following links, then recursively reject hostile entries in every
 # tree the updater can mutate.
-python3 - "$mount_point" "$preflight_only" "$managed_verify_only" "$managed_sync_only" <<'PY'
+python3 - "$mount_point" "$preflight_only" "$managed_verify_only" "$managed_sync_only" "$selected_roots" <<'PY'
 import os
 import stat
 import sys
 
 mount = os.path.abspath(sys.argv[1])
-managed_python_only = any(value == 'True' for value in sys.argv[2:5])
-managed_python_roots = (
-    'the one/software/python',
-    'the one/catalogue/python',
-    'the one/catalogue/image',
+preflight_only, managed_verify_only, managed_sync_only = (
+    value == 'True' for value in sys.argv[2:5]
 )
-relative_roots = (
-    'the one',
-    'the one/software',
-    'the one/catalogue',
-    *managed_python_roots,
-)
-if not managed_python_only:
-    relative_roots += (
-        'the one/build',
-        'boot',
-        'the one/software/virtualbox',
-        'the one/drivers',
-        'the one/catalogue/graphics',
-        'the one/catalogue/virtualbox',
-        'the one/settings/virtualbox',
-        'the one/catalogue/audio',
-        'the one/software/audio',
-        'the one/catalogue/network',
-        'the one/software/network',
-        'the one/settings/network',
-        'the one/settings/media',
-        'the one/software/chromium',
+selected = {value for value in sys.argv[5].split(',') if value}
+if preflight_only or managed_verify_only or managed_sync_only:
+    selected = {
+        'build', 'boot', 'virtualbox_software', 'image_catalogue', 'python'
+    }
+root_map = {
+    'build': ('the one/build',),
+    'boot': ('boot',),
+    'drivers': ('the one/drivers',),
+    'graphics': ('the one/catalogue/graphics',),
+    'virtualbox_catalogue': ('the one/catalogue/virtualbox',),
+    'virtualbox_software': ('the one/software/virtualbox',),
+    'virtualbox_settings': ('the one/settings/virtualbox',),
+    'audio_catalogue': ('the one/catalogue/audio',),
+    'audio_software': ('the one/software/audio',),
+    'network_catalogue': ('the one/catalogue/network',),
+    'network_software': ('the one/software/network',),
+    'network_settings': ('the one/settings/network',),
+    'media_settings': ('the one/settings/media',),
+    'chromium': ('the one/software/chromium',),
+    'runtime_contract': ('the one/settings',),
+    'image_catalogue': ('the one/catalogue/image',),
+    'python': ('the one/software/python', 'the one/catalogue/python'),
+    'resources': (
         'the one/resources/fonts',
         'the one/resources/expanse',
         'the one/resources/graphics/mouse cursors',
-    )
-integrity_roots = frozenset(managed_python_roots)
-mutable_roots = relative_roots[3:]
+        'the one/resources/system',
+    ),
+}
+unknown = selected - set(root_map)
+if unknown:
+    raise SystemExit(f'unknown selected deployment roots: {sorted(unknown)}')
+relative_roots = tuple(dict.fromkeys(
+    relative
+    for name in sorted(selected)
+    for relative in root_map[name]
+))
+integrity_roots = frozenset({
+    'the one/software/python',
+    'the one/catalogue/python',
+    'the one/catalogue/image',
+    'the one/build',
+    'boot',
+    'the one/software/virtualbox',
+})
+mutable_roots = relative_roots
 
 def lstat_directory(path):
     try:
@@ -743,30 +855,32 @@ if \
     [ "$managed_verify_only" != True ] &&
     [ "$managed_sync_only" != True ]
 then
-    for writable_tree in \
-        "$drivers_destination" \
-        "$graphics_catalogue_destination" \
-        "$virtualbox_catalogue_destination" \
-        "$virtualbox_settings_destination" \
-        "$audio_catalogue_destination" \
-        "$audio_software_destination" \
-        "$network_catalogue_destination" \
-        "$network_software_destination" \
-        "$network_settings_destination" \
-        "$media_settings_destination" \
-        "$chromium_software_destination" \
-        "$font_destination" \
-        "$expanse_resource_destination" \
-        "$cursor_resource_destination" \
-        "$system_resource_destination"
-    do
+    make_tree_writable() {
+        root_name=$1
+        writable_tree=$2
+        root_selected "$root_name" || return 0
         if [ -d "$writable_tree" ]; then
             find "$writable_tree" -xdev -type d -exec chmod u+rwx {} +
             find "$writable_tree" -xdev -type f -exec chmod u+rw {} +
         fi
-    done
+    }
+    make_tree_writable drivers "$drivers_destination"
+    make_tree_writable graphics "$graphics_catalogue_destination"
+    make_tree_writable virtualbox_catalogue "$virtualbox_catalogue_destination"
+    make_tree_writable virtualbox_settings "$virtualbox_settings_destination"
+    make_tree_writable audio_catalogue "$audio_catalogue_destination"
+    make_tree_writable audio_software "$audio_software_destination"
+    make_tree_writable network_catalogue "$network_catalogue_destination"
+    make_tree_writable network_software "$network_software_destination"
+    make_tree_writable network_settings "$network_settings_destination"
+    make_tree_writable media_settings "$media_settings_destination"
+    make_tree_writable chromium "$chromium_software_destination"
+    make_tree_writable resources "$font_destination"
+    make_tree_writable resources "$expanse_resource_destination"
+    make_tree_writable resources "$cursor_resource_destination"
+    make_tree_writable resources "$system_resource_destination"
 
-    if [ -f "$runtime_path_contract_destination" ]; then
+    if root_selected runtime_contract && [ -f "$runtime_path_contract_destination" ]; then
         chmod u+rw "$runtime_path_contract_destination"
     fi
 fi
@@ -1105,11 +1219,17 @@ sync_large_tree() {
     # The Chromium executable is larger than the development image's free
     # workspace. Update its existing extents directly instead of requiring a
     # second full-size temporary copy beside the installed executable.
+    chromium_engine_filter=
+    if [ "$skip_chromium_engine" = True ]; then
+        chromium_engine_filter="--exclude=/program/chrome"
+        echo 'Chromium engine manifest record is unchanged; skipping its 1.24 GiB checksum scan.'
+    fi
     rsync \
         -a \
         --no-whole-file \
         $usb_rsync_metadata_options \
         --inplace \
+        $chromium_engine_filter \
         --checksum \
         --delete-delay \
         --itemize-changes \
@@ -2071,60 +2191,86 @@ if [ "$managed_sync_only" = True ]; then
     sync_managed_python_release
     protect_managed_python_release
     verify_managed_python_release
-    sync
+    sync -f "$mount_point"
     echo 'Managed release roots were synchronized and verified without changing unrelated runtime trees.'
     exit 0
 fi
 
-sync_protected_tree 'build' "$stage/build" "$build_destination"
-sync_python_software_tree 'boot' "$boot_source" "$boot_destination"
-sync_driver_runtime 'driver runtime' "$drivers_source" "$drivers_destination"
-if [ "$target_mode" = image ]; then
-    chmod 0755 "$drivers_destination/tools/modprobe"
+if root_selected build; then
+    sync_protected_tree 'build' "$stage/build" "$build_destination"
 fi
-test -s "$drivers_destination/settings/policy.json"
-test -s "$drivers_destination/settings/runtime.json"
-readelf -h "$drivers_destination/tools/modprobe" >/dev/null
-sync_tree 'graphics catalogue' "$graphics_catalogue_source" "$graphics_catalogue_destination"
-sync_virtualbox_catalogue 'VirtualBox catalogue' "$virtualbox_catalogue_source" "$virtualbox_catalogue_destination"
-sync_python_software_tree 'VirtualBox software' "$virtualbox_software_source" "$virtualbox_software_destination"
-sync_tree 'VirtualBox settings' "$virtualbox_settings_source" "$virtualbox_settings_destination"
-sync_tree 'audio catalogue' "$audio_catalogue_source" "$audio_catalogue_destination"
-sync_tree 'audio software' "$audio_software_source" "$audio_software_destination"
-for media_binary in t1-media-decoderd t1-video-decode; do
-    if [ -f "$audio_software_destination/$media_binary" ]; then
-        if [ "$target_mode" = image ]; then
-            chown 0:0 "$audio_software_destination/$media_binary"
-            chmod 0755 "$audio_software_destination/$media_binary"
-        fi
-        readelf -h "$audio_software_destination/$media_binary" >/dev/null
-    fi
-done
-sync_tree 'network catalogue' "$network_catalogue_source" "$network_catalogue_destination"
-sync_tree 'network software' "$network_software_source" "$network_software_destination"
-sync_file 'network certificate bundle' "$network_settings_source/cacerts.pem" "$network_settings_destination/cacerts.pem"
-if [ ! -e "$network_settings_destination/network.txt" ]; then
-    sync_file 'default network settings' "$network_settings_source/network.txt" "$network_settings_destination/network.txt"
+if root_selected boot; then
+    sync_python_software_tree 'boot' "$boot_source" "$boot_destination"
+fi
+if root_selected drivers; then
+    sync_driver_runtime 'driver runtime' "$drivers_source" "$drivers_destination"
     if [ "$target_mode" = image ]; then
-        chmod 0644 "$network_settings_destination/network.txt"
+        chmod 0755 "$drivers_destination/tools/modprobe"
     fi
-else
-    echo 'Preserving the runtime-managed network.txt file.'
+    test -s "$drivers_destination/settings/policy.json"
+    test -s "$drivers_destination/settings/runtime.json"
+    readelf -h "$drivers_destination/tools/modprobe" >/dev/null
 fi
-if [ -f "$network_settings_source/wireless.txt" ]; then
-    sync_file 'configured wireless settings' "$network_settings_source/wireless.txt" "$network_settings_destination/wireless.txt"
-elif [ -f "$network_settings_destination/wireless.txt" ]; then
-    echo 'Preserving the runtime-managed wireless.txt file.'
+if root_selected graphics; then
+    sync_tree 'graphics catalogue' "$graphics_catalogue_source" "$graphics_catalogue_destination"
 fi
-if [ "$target_mode" = image ]; then
-    chmod 0755 "$network_software_destination/wireless-engine"
-    chmod 0644 "$network_settings_destination/cacerts.pem"
-    if [ -f "$network_settings_destination/wireless.txt" ]; then
-        chmod 0600 "$network_settings_destination/wireless.txt"
+if root_selected virtualbox_catalogue; then
+    sync_virtualbox_catalogue 'VirtualBox catalogue' "$virtualbox_catalogue_source" "$virtualbox_catalogue_destination"
+fi
+if root_selected virtualbox_software; then
+    sync_python_software_tree 'VirtualBox software' "$virtualbox_software_source" "$virtualbox_software_destination"
+fi
+if root_selected virtualbox_settings; then
+    sync_tree 'VirtualBox settings' "$virtualbox_settings_source" "$virtualbox_settings_destination"
+fi
+if root_selected audio_catalogue; then
+    sync_tree 'audio catalogue' "$audio_catalogue_source" "$audio_catalogue_destination"
+fi
+if root_selected audio_software; then
+    sync_tree 'audio software' "$audio_software_source" "$audio_software_destination"
+    for media_binary in t1-media-decoderd t1-video-decode; do
+        if [ -f "$audio_software_destination/$media_binary" ]; then
+            if [ "$target_mode" = image ]; then
+                chown 0:0 "$audio_software_destination/$media_binary"
+                chmod 0755 "$audio_software_destination/$media_binary"
+            fi
+            readelf -h "$audio_software_destination/$media_binary" >/dev/null
+        fi
+    done
+fi
+if root_selected network_catalogue; then
+    sync_tree 'network catalogue' "$network_catalogue_source" "$network_catalogue_destination"
+fi
+if root_selected network_software; then
+    sync_tree 'network software' "$network_software_source" "$network_software_destination"
+    if [ "$target_mode" = image ]; then
+        chmod 0755 "$network_software_destination/wireless-engine"
+    fi
+fi
+if root_selected network_settings; then
+    sync_file 'network certificate bundle' "$network_settings_source/cacerts.pem" "$network_settings_destination/cacerts.pem"
+    if [ ! -e "$network_settings_destination/network.txt" ]; then
+        sync_file 'default network settings' "$network_settings_source/network.txt" "$network_settings_destination/network.txt"
+        if [ "$target_mode" = image ]; then
+            chmod 0644 "$network_settings_destination/network.txt"
+        fi
+    else
+        echo 'Preserving the runtime-managed network.txt file.'
+    fi
+    if [ -f "$network_settings_source/wireless.txt" ]; then
+        sync_file 'configured wireless settings' "$network_settings_source/wireless.txt" "$network_settings_destination/wireless.txt"
+    elif [ -f "$network_settings_destination/wireless.txt" ]; then
+        echo 'Preserving the runtime-managed wireless.txt file.'
+    fi
+    if [ "$target_mode" = image ]; then
+        chmod 0644 "$network_settings_destination/cacerts.pem"
+        if [ -f "$network_settings_destination/wireless.txt" ]; then
+            chmod 0600 "$network_settings_destination/wireless.txt"
+        fi
     fi
 fi
 preserve_media_decode_kill_switch=0
-if \
+if root_selected media_settings && \
     [ "$target_mode" = drive ] &&
     [ -e "$media_settings_destination/video decode service.json" ] &&
     python3 - "$media_settings_destination/video decode service.json" <<'PY'
@@ -2145,16 +2291,19 @@ PY
 then
     preserve_media_decode_kill_switch=1
 fi
-if [ "$preserve_media_decode_kill_switch" = 1 ]; then
-    echo 'Preserving the USB media decode service emergency kill switch.'
-else
-    sync_file 'development media decode service policy' \
-        "$media_settings_source/video decode service.json" \
-        "$media_settings_destination/video decode service.json"
+if root_selected media_settings; then
+    if [ "$preserve_media_decode_kill_switch" = 1 ]; then
+        echo 'Preserving the USB media decode service emergency kill switch.'
+    else
+        sync_file 'development media decode service policy' \
+            "$media_settings_source/video decode service.json" \
+            "$media_settings_destination/video decode service.json"
+    fi
+    if [ "$target_mode" = image ]; then
+        chmod 0644 "$media_settings_destination/video decode service.json"
+    fi
 fi
-if [ "$target_mode" = image ]; then
-    chmod 0644 "$media_settings_destination/video decode service.json"
-fi
+if root_selected media_settings || root_selected chromium || root_selected audio_software; then
 python3 - "$media_settings_destination/video decode service.json" <<'PY'
 import json
 import sys
@@ -2177,13 +2326,17 @@ if not isinstance(policy.get('kill_switch'), bool):
 if not isinstance(policy.get('development_debug'), bool):
     raise SystemExit('media decode service development debug setting is not Boolean')
 PY
-sync_large_tree 'Chromium software' "$chromium_software_source" "$chromium_software_destination"
-if [ "$target_mode" = image ]; then
-    chmod 0755 "$chromium_software_destination/program/chrome" "$chromium_software_destination/tools/"*
-    chown 0:0 "$chromium_software_destination/program/chrome-sandbox"
-    chmod 4755 "$chromium_software_destination/program/chrome-sandbox"
-    test "$(stat -c '%u:%g:%a' "$chromium_software_destination/program/chrome-sandbox")" = '0:0:4755'
 fi
+if root_selected chromium; then
+    sync_large_tree 'Chromium software' "$chromium_software_source" "$chromium_software_destination"
+    if [ "$target_mode" = image ]; then
+        chmod 0755 "$chromium_software_destination/program/chrome" "$chromium_software_destination/tools/"*
+        chown 0:0 "$chromium_software_destination/program/chrome-sandbox"
+        chmod 4755 "$chromium_software_destination/program/chrome-sandbox"
+        test "$(stat -c '%u:%g:%a' "$chromium_software_destination/program/chrome-sandbox")" = '0:0:4755'
+    fi
+fi
+if root_selected media_settings || root_selected chromium || root_selected audio_software; then
 python3 - \
     "$media_settings_destination/video decode service.json" \
     "$audio_software_destination" \
@@ -2601,65 +2754,79 @@ if not found:
         'enabled media decode policy Chromium binary lacks its T1MD build marker'
     )
 PY
-rsync -a --no-whole-file $usb_rsync_metadata_options --checksum -- "$runtime_path_contract_source" "$runtime_path_contract_destination"
-sync_protected_tree 'image catalogue' "$image_catalogue_source" "$image_catalogue_destination"
-sync_managed_python_release
-protect_managed_python_release
-sync_file 'Atkinson font' "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf" "$font_destination/atkinsonhyperlegiblenext.ttf"
-sync_file 'Cambria font' "$stage/resources/fonts/cambria.ttf" "$font_destination/cambria.ttf"
-sync_file 'Fira Code regular font' "$stage/resources/fonts/firacode.ttf" "$font_destination/firacode.ttf"
-sync_file 'Fira Code bold font' "$stage/resources/fonts/firacodebold.ttf" "$font_destination/firacodebold.ttf"
-sync_file 'Fira Code semibold font' "$stage/resources/fonts/firacodesemibold.ttf" "$font_destination/firacodesemibold.ttf"
-sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
-sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
-sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
-verify_protected_tree 'build' "$stage/build" "$build_destination"
-verify_python_software_tree 'boot' "$boot_source" "$boot_destination"
-driver_differences=$(rsync -a --no-whole-file --no-perms --no-owner --no-group \
-    --no-times --omit-dir-times --checksum --delete \
-    --filter='protect /firmware/***' \
-    --filter='protect /modules*/***' \
-    --filter='protect /.t1os-modules-update-*/***' \
-    --filter='protect /nodes/***' \
-    --filter='protect /processes/***' \
-    --filter='protect /state/***' \
-    --itemize-changes --dry-run -- "$drivers_source"/ "$drivers_destination"/)
-if [ -n "$driver_differences" ]; then
-    echo 'driver runtime verification found remaining differences:' >&2
-    printf '%s\n' "$driver_differences" >&2
-    exit 1
 fi
-verify_tree 'graphics catalogue' "$graphics_catalogue_source" "$graphics_catalogue_destination"
-verify_virtualbox_catalogue 'VirtualBox catalogue' "$virtualbox_catalogue_source" "$virtualbox_catalogue_destination"
-verify_python_software_tree 'VirtualBox software' "$virtualbox_software_source" "$virtualbox_software_destination"
-verify_tree 'VirtualBox settings' "$virtualbox_settings_source" "$virtualbox_settings_destination"
-verify_tree 'audio catalogue' "$audio_catalogue_source" "$audio_catalogue_destination"
-verify_tree_without_permissions 'audio software' "$audio_software_source" "$audio_software_destination"
-verify_tree 'network catalogue' "$network_catalogue_source" "$network_catalogue_destination"
-verify_tree_without_permissions 'network software' "$network_software_source" "$network_software_destination"
-cmp -s -- "$network_settings_source/cacerts.pem" "$network_settings_destination/cacerts.pem"
-test -s "$network_settings_destination/network.txt"
+if root_selected runtime_contract; then
+    rsync -a --no-whole-file $usb_rsync_metadata_options --checksum -- "$runtime_path_contract_source" "$runtime_path_contract_destination"
+fi
+if root_selected image_catalogue; then
+    sync_protected_tree 'image catalogue' "$image_catalogue_source" "$image_catalogue_destination"
+fi
+if root_selected python; then
+    sync_managed_python_release
+fi
+if root_selected build || root_selected boot || root_selected virtualbox_software || root_selected image_catalogue || root_selected python; then
+    protect_managed_python_release
+fi
+if root_selected resources; then
+    sync_file 'Atkinson font' "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf" "$font_destination/atkinsonhyperlegiblenext.ttf"
+    sync_file 'Cambria font' "$stage/resources/fonts/cambria.ttf" "$font_destination/cambria.ttf"
+    sync_file 'Fira Code regular font' "$stage/resources/fonts/firacode.ttf" "$font_destination/firacode.ttf"
+    sync_file 'Fira Code bold font' "$stage/resources/fonts/firacodebold.ttf" "$font_destination/firacodebold.ttf"
+    sync_file 'Fira Code semibold font' "$stage/resources/fonts/firacodesemibold.ttf" "$font_destination/firacodesemibold.ttf"
+    sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
+    sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
+    sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+fi
+if [ "$exhaustive_verify" = True ]; then
+    verify_protected_tree 'build' "$stage/build" "$build_destination"
+    verify_python_software_tree 'boot' "$boot_source" "$boot_destination"
+    driver_differences=$(rsync -a --no-whole-file --no-perms --no-owner --no-group \
+        --no-times --omit-dir-times --checksum --delete \
+        --filter='protect /firmware/***' \
+        --filter='protect /modules*/***' \
+        --filter='protect /.t1os-modules-update-*/***' \
+        --filter='protect /nodes/***' \
+        --filter='protect /processes/***' \
+        --filter='protect /state/***' \
+        --itemize-changes --dry-run -- "$drivers_source"/ "$drivers_destination"/)
+    if [ -n "$driver_differences" ]; then
+        echo 'driver runtime verification found remaining differences:' >&2
+        printf '%s\n' "$driver_differences" >&2
+        exit 1
+    fi
+    verify_tree 'graphics catalogue' "$graphics_catalogue_source" "$graphics_catalogue_destination"
+    verify_virtualbox_catalogue 'VirtualBox catalogue' "$virtualbox_catalogue_source" "$virtualbox_catalogue_destination"
+    verify_python_software_tree 'VirtualBox software' "$virtualbox_software_source" "$virtualbox_software_destination"
+    verify_tree 'VirtualBox settings' "$virtualbox_settings_source" "$virtualbox_settings_destination"
+    verify_tree 'audio catalogue' "$audio_catalogue_source" "$audio_catalogue_destination"
+    verify_tree_without_permissions 'audio software' "$audio_software_source" "$audio_software_destination"
+    verify_tree 'network catalogue' "$network_catalogue_source" "$network_catalogue_destination"
+    verify_tree_without_permissions 'network software' "$network_software_source" "$network_software_destination"
+    cmp -s -- "$network_settings_source/cacerts.pem" "$network_settings_destination/cacerts.pem"
+    test -s "$network_settings_destination/network.txt"
     if [ -f "$network_settings_source/wireless.txt" ]; then
         cmp -s -- "$network_settings_source/wireless.txt" "$network_settings_destination/wireless.txt"
     fi
     test -s "$media_settings_destination/video decode service.json"
-verify_tree_without_permissions 'Chromium software' "$chromium_software_source" "$chromium_software_destination"
-cmp -s -- "$runtime_path_contract_source" "$runtime_path_contract_destination"
-verify_protected_tree 'image catalogue' "$image_catalogue_source" "$image_catalogue_destination"
-verify_managed_python_release
-for runtime_font in atkinsonhyperlegiblenext.ttf cambria.ttf firacode.ttf firacodebold.ttf firacodesemibold.ttf; do
-    cmp -s -- "$stage/resources/fonts/$runtime_font" "$font_destination/$runtime_font" || {
-        echo "Runtime font verification found a remaining difference: $runtime_font" >&2
+    verify_tree_without_permissions 'Chromium software' "$chromium_software_source" "$chromium_software_destination"
+    cmp -s -- "$runtime_path_contract_source" "$runtime_path_contract_destination"
+    verify_protected_tree 'image catalogue' "$image_catalogue_source" "$image_catalogue_destination"
+    verify_managed_python_release
+    for runtime_font in atkinsonhyperlegiblenext.ttf cambria.ttf firacode.ttf firacodebold.ttf firacodesemibold.ttf; do
+        cmp -s -- "$stage/resources/fonts/$runtime_font" "$font_destination/$runtime_font" || {
+            echo "Runtime font verification found a remaining difference: $runtime_font" >&2
+            exit 1
+        }
+    done
+    cmp -s -- "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png" || {
+        echo 'Fatal screen artwork verification found a remaining difference.' >&2
         exit 1
     }
-done
-cmp -s -- "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png" || {
-    echo 'Fatal screen artwork verification found a remaining difference.' >&2
-    exit 1
-}
-verify_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
-verify_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    verify_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
+    verify_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+fi
 
+if root_selected build || [ "$exhaustive_verify" = True ]; then
 unexpected_build_files=$(find "$build_destination" -type f \
     ! -name '*.py' \
     ! -path "$build_destination/chromium/hardware diagnostics.json" \
@@ -2676,14 +2843,18 @@ if [ -n "$unexpected_build_files" ]; then
     printf '%s\n' "$unexpected_build_files" >&2
     exit 1
 fi
+fi
 
-validate_catalogue
+if root_selected graphics || root_selected virtualbox_catalogue || root_selected audio_catalogue || root_selected network_catalogue || [ "$exhaustive_verify" = True ]; then
+    validate_catalogue
+fi
 
-if [ -d "$virtualbox_catalogue_destination" ] && ! find "$virtualbox_catalogue_destination" -mindepth 1 -print -quit | grep -q .; then
+if root_selected virtualbox_catalogue && [ -d "$virtualbox_catalogue_destination" ] && ! find "$virtualbox_catalogue_destination" -mindepth 1 -print -quit | grep -q .; then
     rmdir "$virtualbox_catalogue_destination"
 fi
-sync
+sync -f "$mount_point"
 
+if [ "$exhaustive_verify" = True ]; then
 printf 'build files on disk: '
 find "$build_destination" -type f | wc -l
 printf 'boot files on disk: '
@@ -2722,6 +2893,7 @@ printf 'runtime resource files on disk: '
 find "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination" -type f | wc -l
 printf 'Atkinson Hyperlegible Next SHA-256: '
 sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
+fi
 '@
 
     Write-Host 'Synchronising only new, changed, and removed files...'
@@ -2734,10 +2906,18 @@ sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
     $preflightOnly = if ($ValidateManagedTreeOnly) { 'True' } else { 'False' }
     $managedVerifyOnly = if ($VerifyManagedReleaseOnly) { 'True' } else { 'False' }
     $managedSyncOnly = if ($SyncManagedReleaseOnly) { 'True' } else { 'False' }
+    $selectedRootArgument = $selectedManagedRoots -join ','
+    $exhaustiveVerifyArgument = if ($fullTargetVerification) { 'True' } else { 'False' }
+    $skipChromiumEngineArgument = if (
+        $unchangedLargeFiles -contains 'chromium|source/software/chromium/program/chrome'
+    ) { 'True' } else { 'False' }
     $readOnlyReplacementTargets = @()
     if (
         $UsbDrive -and
-        -not ($ValidateManagedTreeOnly -or $VerifyManagedReleaseOnly)
+        -not ($ValidateManagedTreeOnly -or $VerifyManagedReleaseOnly) -and
+        @($selectedManagedRoots | Where-Object {
+            $_ -in @('python', 'image_catalogue', 'build', 'boot', 'virtualbox_software')
+        }).Count -gt 0
     ) {
         # Linux mode bits on an offline T1OS target are not an authorization boundary.
         # DrvFS nevertheless maps NTFS's DOS read-only attribute to a replacement
@@ -2769,9 +2949,12 @@ sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
         }
     }
     try {
+        $preparationStopwatch.Stop()
+        $copyStopwatch = [Diagnostics.Stopwatch]::StartNew()
         $normalizedCopyCommand |
-            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource $wslBootPolicyManifest
+            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource $wslBootPolicyManifest $selectedRootArgument $exhaustiveVerifyArgument $skipChromiumEngineArgument
         $copyExitCode = $LASTEXITCODE
+        $copyStopwatch.Stop()
         if ($copyExitCode -ne 0) {
             $targetName = if ($UsbDrive) { 'T1OS USB drive' } else { 'disk' }
             throw "The files could not be pushed to the $targetName (exit code $copyExitCode)."
@@ -2814,6 +2997,23 @@ sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
     else {
         Assert-T1OSFilesystemHealthy -ImagePath $imagePath -Operation 'accepting the completed push'
     }
+    $completedTargetIdentity = if ($UsbDrive) {
+        $targetIdentity
+    }
+    else {
+        $completedImageItem = Get-Item -LiteralPath $imagePath -Force
+        'image|{0}|{1}|{2}' -f @(
+            $completedImageItem.FullName,
+            $completedImageItem.Length,
+            $completedImageItem.LastWriteTimeUtc.Ticks
+        )
+    }
+    Write-T1OSDeploymentState `
+        -Path $deploymentStatePath `
+        -SourceState $deploymentSourceState `
+        -TargetIdentity $completedTargetIdentity `
+        -FullVerification $fullTargetVerification `
+        -PreviousState $previousDeploymentState
     Write-Host 'Build software, boot files, the managed Python release, drivers, graphics, VirtualBox, audio, network, Chromium, media policy, image catalogue, managed settings, fonts, Expanse artwork, and mouse cursors were incrementally synchronised successfully.'
 }
 catch {
@@ -2830,4 +3030,11 @@ if ($UsbDrive) {
 else {
     Write-Host 'Push to disk completed and the disk is unmounted.'
 }
+$deploymentStopwatch.Stop()
+Write-Host ("Deployment timing: target validation {0:N2}s; source inventory {1:N2}s; preparation {2:N2}s; target sync {3:N2}s; total {4:N2}s." -f `
+    $targetDiscoveryStopwatch.Elapsed.TotalSeconds,
+    $sourceStateStopwatch.Elapsed.TotalSeconds,
+    $preparationStopwatch.Elapsed.TotalSeconds,
+    $copyStopwatch.Elapsed.TotalSeconds,
+    $deploymentStopwatch.Elapsed.TotalSeconds)
 exit 0

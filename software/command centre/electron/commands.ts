@@ -109,7 +109,7 @@ export const commandCatalogue = {
     script: 'push to disk.ps1', disk: 'unmounted', recordsPush: true,
   }),
   'push-to-disk-fast': command({
-    label: 'fast sync storage image', detail: 'use the guarded fast path for a current managed image', group: 'production',
+    label: 'fast sync storage image', detail: 'sync only source roots changed since the last verified image update', group: 'production',
     script: 'push to disk.ps1', arguments: ['-Fast'], disk: 'unmounted', recordsPush: true, advanced: true,
   }),
   'push-to-drive': command({
@@ -140,12 +140,12 @@ export const commandCatalogue = {
   }),
   'update-usb-full': command({
     label: 'full usb update', detail: 'force the complete managed and boot update workflow', group: 'production',
-    script: 'update t1os usb.ps1', arguments: ['-Full'],
+    script: 'update t1os usb.ps1', arguments: ['-Full', '-IncludeBoot'],
     confirm: 'run the full update against the validated connected T1OS USB?', advanced: true,
   }),
   'prepare-usb-maintenance': command({
     label: 'prepare usb maintenance access', detail: 'perform the one-time managed-Python Windows ACL migration', group: 'production',
-    script: 'update t1os usb.ps1', arguments: ['-Prepare', '-ValidateOnly'],
+    script: 'update t1os usb.ps1', arguments: ['-Prepare'],
     confirm: 'prepare maintenance access on the validated T1OS USB?', advanced: true,
   }),
 

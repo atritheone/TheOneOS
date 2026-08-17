@@ -1117,10 +1117,16 @@ def lockscreenreceiptphysicallyverified(state):
     backend = str(state.get("backend", "")).strip().lower()
 
     if backend == "opengl":
+        proof = state.get("presentation_proof")
         return (
             state.get("hardware_accelerated") is True
             and bool(str(state.get("renderer", "")).strip())
             and int(state.get("frame_sequence", 0)) > 0
+            and isinstance(proof, dict)
+            and proof.get("verified") is True
+            and proof.get("scanout") is True
+            and proof.get("nonblack") is True
+            and proof.get("contrast") is True
         )
 
     if backend in ("framebuffer", "kms-framebuffer"):

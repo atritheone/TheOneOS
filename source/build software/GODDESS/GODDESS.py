@@ -2382,6 +2382,10 @@ class LoginPresentationFailure(RuntimeError):
     pass
 
 
+class LoginClientBufferFailure(RuntimeError):
+    pass
+
+
 def acceleratedfailureaction(windowserverproc, acceptresponsive=False):
 
     # WindowServer reserves 70 for a verified GPU/DRM health failure, 71 for
@@ -5535,6 +5539,12 @@ def runstartup(environment, windowserverproc=None):
             if lifecyclestate == 'failed':
                 detail = str(state.get('detail', '')).strip() or 'unspecified failure'
                 stopstartupattempt(process)
+
+                if 'WindowBufferAccessError:' in detail:
+                    raise LoginClientBufferFailure(
+                        f'lock screen window-buffer initialization failed: {detail}'
+                    )
+
                 raise LoginPresentationFailure(
                     f'lock screen reported first-frame failure: {detail}'
                 )
@@ -7840,6 +7850,21 @@ def main():
             fatalhold(
                 'startup software was not found',
                 (LOGPATHS['window server'],),
+            )
+
+        except LoginClientBufferFailure as error:
+            stopbootanimation(bootanimation)
+            terminateprocess(wsproc)
+            recordgraphicsrecovery(
+                graphicsbackend,
+                1,
+                'lockscreen-userspace-buffer-failure',
+                f'{type(error).__name__}: {error}',
+                capturegpu=False,
+            )
+            fatalhold(
+                'lock-screen window buffer access failed',
+                (LOCKSCREENLOG, STARTUPLOG, LOGPATHS['window server']),
             )
 
         except LoginPresentationFailure as error:

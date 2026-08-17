@@ -3,6 +3,8 @@ param(
     [string]$VmName = 'The One OS',
     [string[]]$Modes = @('1280x720', '1920x1080', '1376x843', '1024x768', '2560x1440'),
     [int]$TimeoutSeconds = 20,
+    [ValidateRange(0, 32)]
+    [int]$ModeTolerancePixels = 8,
     [switch]$StartHeadless,
     [int]$BootWaitSeconds = 22,
     [switch]$PowerOffAfter
@@ -89,15 +91,29 @@ function Wait-GuestMode {
         $observedWidth = $size[0]
         $observedHeight = $size[1]
 
-        if ($observedWidth -eq $Width -and $observedHeight -eq $Height) {
+        $widthDelta = [Math]::Abs($observedWidth - $Width)
+        $heightDelta = [Math]::Abs($observedHeight - $Height)
+
+        # A running VirtualBox GUI can immediately feed its drawable client
+        # area back to the guest after setvideomodehint. Window borders and DPI
+        # rounding commonly make that settled mode a few pixels smaller than
+        # the requested outer size. This still proves live guest resizing; the
+        # old failure remained hundreds of pixels away at the previous mode.
+        if (
+            $widthDelta -le $ModeTolerancePixels -and
+            $heightDelta -le $ModeTolerancePixels
+        ) {
             $stable++
             if ($stable -ge 2) {
                 return [ordered]@{
                     passed = $true
+                    exact = $widthDelta -eq 0 -and $heightDelta -eq 0
                     requested_width = $Width
                     requested_height = $Height
                     observed_width = $observedWidth
                     observed_height = $observedHeight
+                    width_delta = $widthDelta
+                    height_delta = $heightDelta
                 }
             }
         }
@@ -108,10 +124,13 @@ function Wait-GuestMode {
 
     return [ordered]@{
         passed = $false
+        exact = $false
         requested_width = $Width
         requested_height = $Height
         observed_width = $observedWidth
         observed_height = $observedHeight
+        width_delta = [Math]::Abs($observedWidth - $Width)
+        height_delta = [Math]::Abs($observedHeight - $Height)
     }
 }
 
@@ -189,6 +208,7 @@ $report = [ordered]@{
     host_version = $hostVersion.Trim()
     guest_version = $guestVersion
     version_matched = $versionMatched
+    mode_tolerance_pixels = $ModeTolerancePixels
     started_headless = $startedByTest
     passed = -not ($results | Where-Object { -not $_.passed })
     transitions = $results

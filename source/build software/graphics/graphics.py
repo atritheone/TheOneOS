@@ -18,6 +18,7 @@ import time
 import math
 import hashlib
 import select
+import stat
 import zlib
 from collections import OrderedDict
 
@@ -1785,6 +1786,34 @@ def _eglapplydeferredkmspresentation():
 
 class GPUDeviceLostError(RuntimeError):
     pass
+
+
+class WindowBufferAccessError(RuntimeError):
+
+    """A client could not validate, open, or map its WindowServer buffer."""
+
+    def __init__(self, stage, path, error, metadata=None):
+
+        self.stage = str(stage)
+        self.path = str(path)
+        self.errno = getattr(error, "errno", None)
+        self.metadata = dict(metadata or {})
+        identity = (
+            f"uid={getattr(os, 'geteuid', lambda: -1)()} "
+            f"gid={getattr(os, 'getegid', lambda: -1)()}"
+        )
+        status = ""
+
+        if self.metadata:
+            status = " " + " ".join(
+                f"{name}={value}"
+                for name, value in sorted(self.metadata.items())
+            )
+
+        super().__init__(
+            f"window buffer {self.stage} failed path={self.path!r} "
+            f"{identity}{status}: {type(error).__name__}: {error}"
+        )
 
 
 def kmsraise(error, operation):
@@ -9992,7 +10021,7 @@ def kmsframebufferclose():
         _backend = "none"
 
 
-def _kmsframebufferinitdevice(device):
+def _kmsframebufferinitdevice(device, resize=False):
 
     global _backend, _drmfd, _drmconnector, _drmcrtc, _drmmode, _drmoriginal
     global _drmdriver, _drmdriverversion, _drmdriverdate, _drmdriverdescription
@@ -10021,6 +10050,7 @@ def _kmsframebufferinitdevice(device):
         )
 
         _drmconnector, _drmcrtc, _drmmode = kmsfindmode(
+            resize=resize,
             preserve_current=True,
         )
         originalpointer = _drm.drmModeGetCrtc(_drmfd, _drmcrtc)
@@ -10208,7 +10238,15 @@ def kmsframebufferrefresh():
     if _backend != "kms-framebuffer" or _drmfd is None:
         return False
 
-    connector, crtc, mode = kmsfindmode(preserve_current=True)
+    # VBoxDRMClient updates the connector's preferred mode before the active
+    # CRTC changes.  Preserving only the current CRTC therefore hides every
+    # host resize from the software compositor.  Let virtual display drivers
+    # select their new preferred mode while physical displays still preserve
+    # the exact active timing.
+    connector, crtc, mode = kmsfindmode(
+        resize=True,
+        preserve_current=True,
+    )
 
     if (
         int(connector) == int(_drmconnector)
@@ -10240,7 +10278,7 @@ def kmsframebufferrefresh():
     oldheight = int(_yres)
     kmsframebufferclose()
 
-    if not device or not _kmsframebufferinitdevice(device):
+    if not device or not _kmsframebufferinitdevice(device, resize=True):
         raise RuntimeError(
             f"software KMS could not rebuild for display route "
             f"{width}x{height}"
@@ -12401,43 +12439,62 @@ def screenshotpng(path):
 # misc functions
 def log(msg, flush=False):
 
-
-    # ensure log directory exists
-    try:
-        os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
-    except Exception:
-        pass
-    
     line = formatlog('graphics', msg)
-
-    # Graphics is imported by most graphical software.  Writing this record to
-    # the host process's stderr would also copy it into that software's log.
-    # Keep the record exclusively in the graphics log.
-    with open(LOGFILE, "a", buffering=1) as f:
-        f.write(line + "\n")
-        f.flush()
-
-        critical = bool(
-            flush
-            or any(
-                token in str(msg).casefold()
-                for token in (
-                    "device loss",
-                    "context lost",
-                    "gpu reset",
-                    "failed",
-                    "failure",
-                    "fatal",
-                )
+    critical = bool(
+        flush
+        or any(
+            token in str(msg).casefold()
+            for token in (
+                "device loss",
+                "context lost",
+                "gpu reset",
+                "failed",
+                "failure",
+                "fatal",
             )
         )
+    )
 
-        if critical:
+    # WindowServer owns the central graphics log.  Graphical clients import
+    # this module too, but deliberately run without authority to modify the
+    # root-owned log tier.  Their stdout/stderr is already drained into a
+    # separate root-owned process log by GODDESS, so use that channel and never
+    # turn a diagnostic write into an application or presentation failure.
+    privileged = getattr(os, 'geteuid', lambda: 0)() == 0
 
-            try:
-                os.fsync(f.fileno())
-            except Exception:
-                pass
+    if privileged:
+
+        try:
+            os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
+
+            with open(LOGFILE, "a", buffering=1) as stream:
+                stream.write(line + "\n")
+                stream.flush()
+
+                if critical:
+
+                    try:
+                        os.fsync(stream.fileno())
+                    except OSError:
+                        pass
+
+            return True
+
+        except OSError as error:
+            fallback = (
+                f"{line} [central graphics log unavailable: "
+                f"{type(error).__name__}: {error}]"
+            )
+
+    else:
+        fallback = line
+
+    try:
+        print(fallback, file=sys.stderr, flush=True)
+    except BaseException:
+        pass
+
+    return False
 
 def normalisecolor(c):
 
@@ -13273,25 +13330,84 @@ def initbuffer(path, w, h):
     _map = None
     _FILE_MAP = None
     _FILE_FD = None
+    _IS_FILE_BUFFER = False
+    _buffer = None
+    _size = 0
+    _backend = "none"
+    descriptor = None
+    mapping = None
+    metadata = {}
+    stage = "validate"
 
     try:
 
-        # open raw buffer file (BGRA32, stride = w*4)
-        _FILE_FD = os.open(path, os.O_RDWR)
+        path = os.fspath(path)
+        width = int(w)
+        height = int(h)
 
-        _size = int(w) * int(h) * 4
+        if not path or width < 1 or height < 1:
+            raise ValueError("window buffer path and dimensions must be positive")
 
-        _FILE_MAP = mmap.mmap(_FILE_FD, _size, mmap.MAP_SHARED, mmap.PROT_READ | mmap.PROT_WRITE, offset=0)
+        expectedsize = width * height * 4
 
-        # set file-buffer mode
+        if expectedsize > FRAMEBUFFERMAXBYTES:
+            raise ValueError(
+                f"window buffer requires {expectedsize} bytes, above the "
+                f"{FRAMEBUFFERMAXBYTES}-byte limit"
+            )
+
+        # Open the exact unguessable path supplied by WindowServer without
+        # following a replacement link.  Keep each stage distinct so a future
+        # DAC, path-lifetime, or mmap regression reports the original syscall.
+        stage = "open"
+        flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+
+        stage = "fstat"
+        status = os.fstat(descriptor)
+        metadata = {
+            "owner": int(status.st_uid),
+            "group": int(status.st_gid),
+            "mode": f"{stat.S_IMODE(status.st_mode):04o}",
+            "size": int(status.st_size),
+            "expected_size": int(expectedsize),
+        }
+
+        if not stat.S_ISREG(status.st_mode):
+            raise PermissionError(errno.EACCES, "window buffer is not a regular file")
+
+        if int(status.st_size) != expectedsize:
+            raise ValueError(
+                f"window buffer size is {status.st_size}, expected {expectedsize}"
+            )
+
+        stage = "mmap"
+        mapping = mmap.mmap(
+            descriptor,
+            expectedsize,
+            mmap.MAP_SHARED,
+            mmap.PROT_READ | mmap.PROT_WRITE,
+            offset=0,
+        )
+
+        stage = "backbuffer"
+        backbuffer = bytearray(expectedsize)
+
+        # Commit process-global state only after every fallible resource and
+        # allocation has succeeded.  A failed replacement cannot leave a stale
+        # buffer marked ready.
+        _FILE_FD = descriptor
+        _FILE_MAP = mapping
         _IS_FILE_BUFFER = True
-
-        # configure a software backbuffer with same size
-        _buffer = bytearray(_size)
+        _buffer = backbuffer
+        _size = expectedsize
+        descriptor = None
+        mapping = None
 
         # geometry and format: BGRA32 with 8 bits per channel
-        _xres = int(w)
-        _yres = int(h)
+        _xres = width
+        _yres = height
         _yvirt = _yres
         _bpp = 32
         _bpp_bytes = 4
@@ -13323,20 +13439,33 @@ def initbuffer(path, w, h):
 
         globals()['_pack'] = _pack_fn
 
-        # reset dirty region
         resetdirty()
-
         _backend = "filebuffer"
+        return True
 
-    except PermissionError:
+    except Exception as error:
 
-        log(f"> graphics initbuffer permission denied")
-        return
+        if mapping is not None:
 
-    except Exception as e:
+            try:
+                mapping.close()
+            except Exception:
+                pass
 
-        log(f"> graphics initbuffer error {e}")
-        return
+        if descriptor is not None:
+
+            try:
+                os.close(descriptor)
+            except Exception:
+                pass
+
+        _FILE_FD = None
+        _FILE_MAP = None
+        _IS_FILE_BUFFER = False
+        _buffer = None
+        _size = 0
+        _backend = "none"
+        raise WindowBufferAccessError(stage, path, error, metadata) from error
 
 
 def blankconsole():

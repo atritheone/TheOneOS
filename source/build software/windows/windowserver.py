@@ -1290,6 +1290,142 @@ def windowservergeneration():
     return int(identity["starttime"])
 
 
+def windowbuffercontentproof(window):
+
+    width, height = windowbufferdimensions(window)
+    stride = int(window.get("buffer_stride", width * 4))
+    sourceoffset = max(0, int(window.get("buffer_offset", 0)))
+    rowbytes = width * 4
+    required = sourceoffset + max(0, height - 1) * stride + rowbytes
+    path = str(window.get("_owned_buffer") or window.get("buffer") or "")
+    proof = {
+        "source": "cpu-window-buffer",
+        "verified": False,
+        "scanout": True,
+        "nonblack": False,
+        "contrast": False,
+        "upload_bytes": int(window.get("_telemetry_gpu_upload_bytes", 0)),
+        "draw_calls": int(window.get("_telemetry_gpu_draw_calls", 0)),
+    }
+
+    if (
+        width < 1
+        or height < 1
+        or stride < rowbytes
+        or required < rowbytes
+        or required > 256 * 1024 * 1024
+        or not path
+    ):
+        return proof
+
+    descriptor = None
+
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(path, flags)
+        status = os.fstat(descriptor)
+
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or int(status.st_size) < required
+            or stat.S_IMODE(status.st_mode) != 0o660
+            or int(status.st_uid) != int(window.get("_buffer_peer_uid", -1))
+            or int(status.st_gid) != int(window.get("_buffer_server_gid", -1))
+        ):
+            return proof
+
+        payload = bytearray()
+
+        while len(payload) < required:
+            chunk = os.read(descriptor, min(1024 * 1024, required - len(payload)))
+
+            if not chunk:
+                return proof
+
+            payload.extend(chunk)
+
+        if sourceoffset == 0 and stride == rowbytes:
+            pixels = bytes(payload[:rowbytes * height])
+        else:
+            pixels = b"".join(
+                bytes(payload[sourceoffset + row * stride:sourceoffset + row * stride + rowbytes])
+                for row in range(height)
+            )
+
+        if len(pixels) != rowbytes * height or len(pixels) < 4:
+            return proof
+
+        blue = pixels[0::4]
+        green = pixels[1::4]
+        red = pixels[2::4]
+        nonblack = bool(any(blue) or any(green) or any(red))
+        contrast = bool(
+            blue.count(blue[0]) != len(blue)
+            or green.count(green[0]) != len(green)
+            or red.count(red[0]) != len(red)
+        )
+        proof["nonblack"] = nonblack
+        proof["contrast"] = contrast
+        proof["verified"] = bool(
+            nonblack
+            and contrast
+            and proof["upload_bytes"] >= rowbytes * height
+            and proof["draw_calls"] > 0
+        )
+        return proof
+
+    except (OSError, TypeError, ValueError):
+        return proof
+
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def managedcontentproof(window):
+
+    generation = int(window.get("_gpu_command_generation", 0))
+    presented = int(window.get("_gpu_presented_generation", 0))
+    commands = window.get("gpu_commands", [])
+    nonblack = False
+
+    for command in commands if isinstance(commands, list) else []:
+        color = command.get("color", []) if isinstance(command, dict) else []
+
+        try:
+            if any(int(value) > 0 for value in list(color)[:3]):
+                nonblack = True
+                break
+        except (TypeError, ValueError):
+            continue
+
+    drawn = int(window.get("_telemetry_scene_commands_drawn", 0))
+    return {
+        "source": "managed-scene",
+        "verified": bool(
+            generation > 0
+            and presented >= generation
+            and drawn > 0
+            and nonblack
+        ),
+        "scanout": True,
+        "nonblack": bool(nonblack),
+        "contrast": bool(nonblack),
+        "managed_generation": generation,
+        "managed_presented_generation": presented,
+        "scene_commands_drawn": drawn,
+    }
+
+
+def acceleratedcontentproof(window):
+
+    if bool(window.get("_managed_only", False)):
+        return managedcontentproof(window)
+
+    return windowbuffercontentproof(window)
+
+
 def writeacceleratedpresentationready(seen, role, path, operation):
 
     presentedwindows = [
@@ -1371,6 +1507,14 @@ def writeacceleratedpresentationready(seen, role, path, operation):
             f"{operation} used a software renderer"
         )
 
+    presentationproof = None
+
+    if role == "lockscreen":
+        presentationproof = acceleratedcontentproof(presentationwindow)
+
+        if not presentationproof.get("verified", False):
+            return False
+
     payload = {
         "format": 1,
         "windowserver_pid": int(os.getpid()),
@@ -1389,6 +1533,10 @@ def writeacceleratedpresentationready(seen, role, path, operation):
         "full_coverage": True,
         "boot_active": bool(bootactive()),
     }
+
+    if presentationproof is not None:
+        payload["presentation_proof"] = presentationproof
+
     payload.update(presentationidentity)
     writepresentationreceipt(path, payload)
     return payload
@@ -8354,6 +8502,7 @@ def pickerpulse():
 def createwindow(cid, req, responseop="WINDOW_CREATED", internal=False):
 
     bufpath = None
+    bufferstage = "request-validation"
     try:
 
         # parse parameters
@@ -8484,20 +8633,51 @@ def createwindow(cid, req, responseop="WINDOW_CREATED", internal=False):
         # assign id
         wid = random.randint(1, 2**31 - 1)
 
-        # Use an unguessable group-writable buffer name. Session applications
-        # can open the path returned to them, but cannot enumerate BUFBASE.
+        # Use an unguessable, peer-owned buffer name. Session applications can
+        # open the exact path returned to them, but cannot enumerate BUFBASE.
+        # Ownership comes only from the authenticated SO_PEERCRED identity;
+        # client JSON never selects the file owner.
         bufpath = os.path.join(
             BUFBASE,
             f"{cid}-{wid}-{random.getrandbits(128):032x}.raw",
         )
 
+        try:
+            peeruid = int(identity.get("uid", -1))
+            peergid = int(identity.get("gid", -1))
+            servergid = int(os.getegid())
+        except (AttributeError, TypeError, ValueError):
+            raise PermissionError("client buffer identity is unavailable")
+
+        if peeruid < 0 or peergid < 0 or servergid < 0:
+            raise PermissionError("client buffer identity is unavailable")
+
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(bufpath, flags, 0o660)
+        bufferstage = "open"
+        descriptor = os.open(bufpath, flags, 0o600)
         try:
+            bufferstage = "truncate"
             os.ftruncate(descriptor, w * h * 4)
-            os.fchown(descriptor, -1, SESSIONGID)
+            # The client owns the buffer while WindowServer's private group
+            # retains read/write access for upload and resize. WindowServer has
+            # narrowly-scoped CAP_CHOWN but intentionally lacks CAP_FOWNER, so
+            # set the final mode before transferring the inode.
+            bufferstage = "chmod"
             os.fchmod(descriptor, 0o660)
+            bufferstage = "chown"
+            os.fchown(descriptor, peeruid, servergid)
+            bufferstage = "verify"
+            bufferstatus = os.fstat(descriptor)
+
+            if (
+                not stat.S_ISREG(bufferstatus.st_mode)
+                or int(bufferstatus.st_uid) != peeruid
+                or int(bufferstatus.st_gid) != servergid
+                or stat.S_IMODE(bufferstatus.st_mode) != 0o660
+                or int(bufferstatus.st_size) != w * h * 4
+            ):
+                raise PermissionError("unsafe window-buffer ownership or mode")
         finally:
             os.close(descriptor)
 
@@ -8545,6 +8725,8 @@ def createwindow(cid, req, responseop="WINDOW_CREATED", internal=False):
             "cursor_mode": "arrow",
             "buffer": bufpath,
             "_owned_buffer": bufpath,
+            "_buffer_peer_uid": peeruid,
+            "_buffer_server_gid": servergid,
             "_external_buffer": False,
             "buffer_offset": 0,
             "buffer_stride": w * 4,
@@ -8681,6 +8863,14 @@ def createwindow(cid, req, responseop="WINDOW_CREATED", internal=False):
                 os.unlink(bufpath)
             except OSError:
                 pass
+        graphicslog(
+            f"> graphics CREATE_WINDOW denied cid={cid} "
+            f"pid={(identity or {}).get('pid')} "
+            f"domain={(identity or {}).get('domain')} "
+            f"role={req.get('role')} size={req.get('w')}x{req.get('h')} "
+            f"stage={bufferstage} "
+            f"error={type(error).__name__}: {error}"
+        )
         sendjson(cid, {"op": "ERROR", "code": "denied", "detail": str(error)})
 
     except Exception as e:
@@ -8692,6 +8882,14 @@ def createwindow(cid, req, responseop="WINDOW_CREATED", internal=False):
                 os.unlink(bufpath)
             except OSError:
                 pass
+        graphicslog(
+            f"> graphics CREATE_WINDOW failed cid={cid} "
+            f"pid={(identity or {}).get('pid')} "
+            f"domain={(identity or {}).get('domain')} "
+            f"role={req.get('role')} size={req.get('w')}x{req.get('h')} "
+            f"stage={bufferstage} "
+            f"error={type(e).__name__}: {e}"
+        )
         sendjson(cid, {"op": "ERROR", "code": "create_failed", "detail": str(e)})
 
 

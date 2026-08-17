@@ -168,7 +168,19 @@ try {
     }
     $filesystemInitialCheck | Set-Content -LiteralPath (Join-Path $Destination 'filesystem-check-initial.txt')
 
-    $filesystemRepairPerformed = $filesystemInitialCheckExitCode -ne 0
+    # A read-only e2fsck deliberately skips journal replay and can still exit
+    # zero.  Runtime logs commonly live only in that pending journal after a VM
+    # save, so exit code alone would produce a clean-looking but stale export.
+    # Replay/repair only the disposable clone whenever e2fsck reports that it
+    # skipped recovery; the attached VDI is never modified.
+    $filesystemInitialText = ($filesystemInitialCheck | ForEach-Object {
+        [string]$_
+    }) -join "`n"
+    $filesystemJournalPending = $filesystemInitialText -match '(?i)(skipping journal recovery|needs journal recovery|recovering journal)'
+    $filesystemRepairPerformed = (
+        $filesystemInitialCheckExitCode -ne 0 -or
+        $filesystemJournalPending
+    )
     $filesystemRepairExitCode = $null
     if ($filesystemRepairPerformed) {
         Write-Warning "The cloned runtime filesystem needs journal recovery or repair (e2fsck exit code $filesystemInitialCheckExitCode). Repairing only the disposable clone..."
@@ -270,6 +282,7 @@ try {
         source_vdi_uuid = $mediumUuid
         guest_log_path = '/the one/logs'
         filesystem_initial_check_exit_code = $filesystemInitialCheckExitCode
+        filesystem_journal_pending = $filesystemJournalPending
         filesystem_repair_performed = $filesystemRepairPerformed
         filesystem_repair_exit_code = $filesystemRepairExitCode
         filesystem_check_exit_code = $filesystemCheckExitCode

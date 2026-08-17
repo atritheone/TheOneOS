@@ -249,7 +249,8 @@ function Set-CpuBootOverride {
 
     [System.IO.File]::WriteAllText($bootConfig, $text)
     Invoke-VBox -Arguments @('storageattach', $VmName, '--storagectl', 'SATA', '--port', '1', '--device', '0', '--type', 'dvddrive', '--medium', 'none') -Quiet
-    & pwsh -NoLogo -NoProfile -NonInteractive -File $createIso
+    & pwsh -NoLogo -NoProfile -NonInteractive -File $createIso `
+        -GrubConfigSource $bootConfig
 
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $bootIso -PathType Leaf)) {
         throw 'Could not rebuild the boot ISO for the graphics test mode.'
