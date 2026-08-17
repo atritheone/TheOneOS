@@ -92,8 +92,10 @@ RTCSETTIME = 0x4024700A
 RTCREADTIME = 0x80247009
 TIMEZONEFILE = '/the one/settings/time/timezone.txt'
 INTERNETTIMEFILE = '/the one/settings/time/internet.txt'
+VIRTUALBOXTIMEFILE = '/the one/settings/time/virtualbox.txt'
 ZONEINFODIR = '/the one/software/chromium/resources/zoneinfo'
 DEFAULTTIMEZONE = 'Australia/Sydney'
+VIRTUALBOXGUESTNODE = '/the one/drivers/nodes/vboxguest'
 MINIMUMCLOCKEPOCH = 1609459200.0
 MAXIMUMCLOCKEPOCH = 4102444800.0
 
@@ -2040,9 +2042,51 @@ def settingenabled(path):
         return False
 
 
+def virtualboxrtc():
+
+    # VirtualBox presents the emulated CMOS clock as UTC.  Physical T1OS
+    # installations retain the project's local-wall-clock motherboard policy.
+    return os.path.exists(VIRTUALBOXGUESTNODE)
+
+
+def rtcclockzone(name, virtualbox=None):
+
+    if virtualbox is None:
+        virtualbox = virtualboxrtc()
+    return datetime.timezone.utc if virtualbox else timezoneinfo(name)
+
+
+def rtcfieldsepoch(fields, name, virtualbox=None):
+
+    second, minute, hour, day, month, year = (int(value) for value in fields[:6])
+    wallclock = datetime.datetime(year + 1900, month + 1, day, hour, minute, second)
+    zone = rtcclockzone(name, virtualbox)
+    candidates = []
+    for fold in (0, 1):
+        candidate = wallclock.replace(tzinfo=zone, fold=fold)
+        epoch = candidate.timestamp()
+        if datetime.datetime.fromtimestamp(epoch, zone).replace(tzinfo=None) == wallclock:
+            candidates.append(epoch)
+    if not candidates:
+        raise ValueError('motherboard time does not exist in ' + str(name))
+    return max(candidates)
+
+
+def rtcclockfields(epoch, name, virtualbox=None):
+
+    local = datetime.datetime.fromtimestamp(
+        float(epoch), rtcclockzone(name, virtualbox))
+    timetable = local.timetuple()
+    return (
+        local.second, local.minute, local.hour, local.day,
+        local.month - 1, local.year - 1900,
+        (local.weekday() + 1) % 7, timetable.tm_yday - 1,
+        1 if local.dst() and local.dst() != datetime.timedelta(0) else 0,
+    )
+
+
 def rtcwallclockepoch(name):
 
-    zone = timezoneinfo(name)
     last_error = None
     for node in ('/the one/drivers/nodes/rtc0', '/the one/drivers/nodes/rtc'):
         try:
@@ -2058,18 +2102,7 @@ def rtcwallclockepoch(name):
                 fcntl.ioctl(descriptor, RTCREADTIME, value, True)
             finally:
                 os.close(descriptor)
-            second, minute, hour, day, month, year, _, _, _ = struct.unpack('9i', value)
-            wallclock = datetime.datetime(
-                year + 1900, month + 1, day, hour, minute, second)
-            candidates = []
-            for fold in (0, 1):
-                candidate = wallclock.replace(tzinfo=zone, fold=fold)
-                epoch = candidate.timestamp()
-                if datetime.datetime.fromtimestamp(epoch, zone).replace(tzinfo=None) == wallclock:
-                    candidates.append(epoch)
-            if not candidates:
-                raise ValueError('motherboard time does not exist in ' + name)
-            return max(candidates)
+            return rtcfieldsepoch(struct.unpack('9i', value), name)
         except (OSError, ValueError) as error:
             last_error = error
     if last_error is not None:
@@ -2079,13 +2112,7 @@ def rtcwallclockepoch(name):
 
 def writemotherboardclock(epoch, name):
 
-    local = datetime.datetime.fromtimestamp(float(epoch), timezoneinfo(name))
-    timetable = local.timetuple()
-    value = struct.pack(
-        '9i', local.second, local.minute, local.hour, local.day,
-        local.month - 1, local.year - 1900,
-        (local.weekday() + 1) % 7, timetable.tm_yday - 1,
-        1 if local.dst() and local.dst() != datetime.timedelta(0) else 0)
+    value = struct.pack('9i', *rtcclockfields(epoch, name))
     for node in ('/the one/drivers/nodes/rtc0', '/the one/drivers/nodes/rtc'):
         try:
             descriptor = os.open(
@@ -2121,8 +2148,9 @@ def initialiseclockfrommotherboard():
         name = configuredtimezone()
         epoch = rtcwallclockepoch(name)
         setclockepoch(epoch, name, update_motherboard=False)
+        clockkind = 'UTC VirtualBox RTC' if virtualboxrtc() else 'local motherboard time'
         print(
-            f'> operations server initialized system clock from local motherboard time ({name})',
+            f'> operations server initialized system clock from {clockkind} ({name})',
             file=sys.stderr, flush=True)
         return True
     except Exception as error:
@@ -4443,6 +4471,24 @@ def diagnostic():
             raise RuntimeError('master settings snapshot is not session-readable')
         result['checks']['master_settings_permissions'] = True
 
+        # 2026-07-23 00:00:00 UTC is 10:00 in Sydney.  A VirtualBox RTC stores
+        # the first value; physical local-RTC policy stores the second.
+        clockepoch = 1784764800
+        virtualfields = rtcclockfields(
+            clockepoch, DEFAULTTIMEZONE, virtualbox=True)
+        hardwarefields = rtcclockfields(
+            clockepoch, DEFAULTTIMEZONE, virtualbox=False)
+        if (
+            virtualfields[:6] != (0, 0, 0, 23, 6, 126) or
+            hardwarefields[:6] != (0, 0, 10, 23, 6, 126) or
+            rtcfieldsepoch(
+                virtualfields, DEFAULTTIMEZONE, virtualbox=True) != clockepoch or
+            rtcfieldsepoch(
+                hardwarefields, DEFAULTTIMEZONE, virtualbox=False) != clockepoch
+        ):
+            raise RuntimeError('VirtualBox UTC RTC conversion is incorrect')
+        result['checks']['virtualbox_utc_rtc'] = True
+
         softwarepython = '/software/opengltest2.py'
         if cataloguearguments(
             'brick', ['--run-file', softwarepython]
@@ -4474,8 +4520,11 @@ def diagnostic():
         peerrecord = processstat(os.getpid())
         diagnosticpeer = {
             'pid': os.getpid(),
-            'uid': os.getuid(),
-            'gid': os.getgid(),
+            # The read-only chroot harness enters as root, while this fixture
+            # deliberately models the Brick peer that invokes the diagnostic
+            # on a live system.
+            'uid': DESKTOPUID,
+            'gid': DESKTOPGID,
             'started': int(peerrecord['started']),
             'domain': 'brick',
         }
@@ -4701,7 +4750,8 @@ def diagnostic():
         })
 
         if stale.get('status') != 'error' or stale.get('message') != 'operation changed':
-            raise RuntimeError('stale process identity was not denied')
+            raise RuntimeError(
+                f'stale process identity was not denied: {stale!r}')
 
         result['checks']['stale_identity_denied'] = True
         killed = handlekill({

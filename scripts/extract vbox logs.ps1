@@ -6,7 +6,10 @@ param(
 
     [switch]$SaveRunningVm,
 
-    [switch]$KeepRawClone
+    [switch]$KeepRawClone,
+
+    [ValidateRange(1, 100)]
+    [int]$RetainedBoots = 5
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,6 +31,7 @@ $mountPoint = "/mnt/t1os-log-export-$token"
 $runtimeMounted = $false
 $resumeVm = $false
 $completed = $false
+$managedDestinationRoot = Join-Path $environmentRoot 'extracted logs'
 
 function Get-T1OSVBoxManage {
     $command = Get-Command VBoxManage -ErrorAction SilentlyContinue
@@ -126,6 +130,35 @@ function ConvertTo-T1OSWslPath {
         throw "WSL returned an empty path for: $Path"
     }
     return $translated
+}
+
+function Remove-T1OSExpiredLogExports {
+    $resolvedRoot = [System.IO.Path]::GetFullPath($script:managedDestinationRoot)
+
+    if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+        return
+    }
+
+    $rootPrefix = $resolvedRoot.TrimEnd('\') + '\'
+    $exports = @(
+        Get-ChildItem -LiteralPath $resolvedRoot -Directory |
+            Where-Object {
+                $_.Name -match '^\d{8}T\d{6}Z$' -and
+                (Test-Path -LiteralPath (Join-Path $_.FullName 'manifest.json') -PathType Leaf)
+            } |
+            Sort-Object Name -Descending
+    )
+
+    foreach ($expired in @($exports | Select-Object -Skip $RetainedBoots)) {
+        $resolvedExpired = [System.IO.Path]::GetFullPath($expired.FullName)
+
+        if (-not $resolvedExpired.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove unexpected log-export path: $resolvedExpired"
+        }
+
+        Remove-Item -LiteralPath $resolvedExpired -Recurse -Force
+        Write-Host "Removed expired boot-log export: $resolvedExpired"
+    }
 }
 
 $vbox = Get-T1OSVBoxManage
@@ -299,6 +332,7 @@ try {
     Write-Host "Extracted $fileCount log files ($contentBytes bytes) to:"
     Write-Host "  $Destination"
     Write-Host "Archive SHA-256: $archiveHash"
+    Remove-T1OSExpiredLogExports
 }
 finally {
     if ($runtimeMounted) {

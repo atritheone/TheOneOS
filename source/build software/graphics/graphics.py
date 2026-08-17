@@ -168,6 +168,33 @@ def uiscalefactor(default=1.0):
     return max(0.5, min(3.0, value))
 
 
+def displayuiscale(width, height, preference=None, basewidth=1920, baseheight=1080):
+
+    """Return one uniform UI scale for the complete display.
+
+    The smaller axis ratio fits the logical desktop into any aspect ratio
+    without stretching it.  ``preference`` remains the user's multiplier on
+    top of automatic high-DPI scaling.
+    """
+
+    try:
+        preference = uiscalefactor() if preference is None else float(preference)
+        preference = max(0.5, min(3.0, preference))
+        width = float(width)
+        height = float(height)
+        basewidth = float(basewidth)
+        baseheight = float(baseheight)
+
+        if width <= 0.0 or height <= 0.0 or basewidth <= 0.0 or baseheight <= 0.0:
+            return preference
+
+        automatic = min(width / basewidth, height / baseheight)
+        return max(0.5, min(3.0, automatic * preference))
+
+    except Exception:
+        return 1.0
+
+
 def dropdownstyle():
 
     return {
@@ -3613,6 +3640,7 @@ def managedstate(cpu=False):
         "pending_at": 0.0,
         "need_submit": False,
         "cpu": bool(cpu),
+        "strict_gpu": False,
         "batch": False,
         "command_limit": 0,
         "text_limit": 1024,
@@ -3649,6 +3677,7 @@ def managedconfigure(state, capabilities, required=("rectangle", "text"), cpu=No
 
     caps = capabilities if isinstance(capabilities, dict) else {}
     state["capabilities"] = dict(caps)
+    state["strict_gpu"] = False
     state["active"] = False
     state["pending"] = False
     state["pending_at"] = 0.0
@@ -3677,17 +3706,23 @@ def managedconfigure(state, capabilities, required=("rectangle", "text"), cpu=No
         state["text_limit"] = max(1, int(caps.get("text_limit", 1024)))
         state["damage_limit"] = max(1, int(caps.get("damage_limit", 64)))
         state["batch"] = bool(caps.get("atomic_scene", False))
-        state["available"] = (
+        state["strict_gpu"] = (
             not bool(state.get("cpu", False))
             and version >= 1
             and bool(caps.get("accelerated", False))
             and bool(caps.get("managed_resources", False))
-            and all(str(value) in commands for value in required)
         )
+        # Accelerated managed graphics is a one-way rendering contract.  A
+        # missing optional command may leave a surface unable to draw, but it
+        # must never make that client silently rasterize with the CPU.
+        state["available"] = bool(state["strict_gpu"])
+        if state["strict_gpu"] and not all(str(value) in commands for value in required):
+            state["failure"] = "managed graphics is missing required commands"
 
     except Exception:
 
         state["available"] = False
+        state["strict_gpu"] = False
         state["batch"] = False
         state["command_limit"] = 0
         state["text_limit"] = 1024
@@ -3708,6 +3743,31 @@ def managedconfigure(state, capabilities, required=("rectangle", "text"), cpu=No
 def manageddisable(state, reason):
 
     wasmanaged = bool(state.get("available") or state.get("active") or state.get("pending"))
+
+    if state.get("strict_gpu") and not state.get("cpu"):
+        # Keep the last GPU frame and force the next submission to be a full
+        # retained scene.  Returning true tells every client that CPU fallback
+        # is forbidden while the accelerated managed path remains selected.
+        state["available"] = True
+        state["active"] = True
+        state["pending"] = False
+        state["pending_at"] = 0.0
+        state["need_submit"] = True
+        state["damage"] = []
+        state["failure"] = str(reason)
+        state["managed_only"] = True
+        state["scene"] = []
+        state["pending_scene"] = None
+        state["pending_patch"] = False
+        state["pending_generation"] = 0
+        state["pending_clear_generation"] = 0
+        state["presented"] = False
+        state["presentation_frame_sequence"] = 0
+        state["presentation_reason"] = str(reason)
+        if wasmanaged:
+            state["errors"] = int(state.get("errors", 0)) + 1
+        return True
+
     state["available"] = False
     state["active"] = False
     state["pending"] = False
@@ -3728,6 +3788,15 @@ def manageddisable(state, reason):
         state["errors"] = int(state.get("errors", 0)) + 1
 
     return False
+
+
+def managedstrict(state):
+
+    return bool(
+        isinstance(state, dict)
+        and state.get("strict_gpu")
+        and not state.get("cpu")
+    )
 
 
 def managedmarkdamage(state, rect, bounds=None):
@@ -4007,6 +4076,16 @@ def managedsubmit(state, sender, winid, commands):
         state["presentation_frame_sequence"] = 0
         state["presentation_reason"] = "pending"
         state["maximum_commands"] = max(int(state.get("maximum_commands", 0)), len(commands))
+
+        if managedstrict(state):
+            # Queuing the retained scene transfers ownership of this surface
+            # to the GPU path immediately.  GRAPHICS_COMMITTED confirms
+            # presentation, but the acknowledgement delay must never be
+            # interpreted by a caller as permission to rasterize a competing
+            # CPU frame into the shared buffer.
+            state["active"] = True
+            state["managed_only"] = True
+
         return bool(state.get("active"))
 
     except Exception as e:
@@ -4076,7 +4155,10 @@ def managedresponse(state, message):
             state["active"] = True
             state["frames"] = int(state.get("frames", 0)) + 1
             state["last_commands"] = max(0, int(message.get("count", 0)))
-            state["managed_only"] = bool(message.get("managed_only", False))
+            committedmanagedonly = bool(message.get("managed_only", False))
+            state["managed_only"] = bool(
+                committedmanagedonly or managedstrict(state)
+            )
             state["scene"] = list(state.get("pending_scene") or state.get("scene") or [])
             state["pending_scene"] = None
             state["generation"] = max(0, int(message.get("generation", state.get("generation", 0))))
@@ -4089,6 +4171,18 @@ def managedresponse(state, message):
                 state["patches"] = int(state.get("patches", 0)) + 1
 
             state["pending_patch"] = False
+
+            if managedstrict(state) and not committedmanagedonly:
+                # A resize may land between submission and commit, leaving an
+                # opaque background sized for the previous surface.  Keep GPU
+                # ownership and rebuild from a complete scene at the current
+                # geometry instead of exposing a CPU fallback opportunity.
+                state["scene"] = []
+                state["need_submit"] = True
+                state["failure"] = "managed scene geometry changed during commit"
+                state["presentation_reason"] = state["failure"]
+                state["presented"] = False
+
             return True
 
         return manageddisable(state, "managed graphics lost acceleration")
@@ -4115,8 +4209,8 @@ def managedresponse(state, message):
             ):
                 state["pending_clear_generation"] = 0
 
-        state["active"] = False
-        state["managed_only"] = False
+        state["active"] = bool(managedstrict(state))
+        state["managed_only"] = bool(managedstrict(state))
         presented = bool(message.get("presented", True))
         state["presented"] = presented
         state["presentation_frame_sequence"] = max(
@@ -13377,9 +13471,14 @@ def initbuffer(path, w, h):
         if not stat.S_ISREG(status.st_mode):
             raise PermissionError(errno.EACCES, "window buffer is not a regular file")
 
-        if int(status.st_size) != expectedsize:
+        # WindowServer retains the largest allocation reached by a window so
+        # clients that are still replacing an older mapping cannot fault when
+        # the logical window shrinks.  Only the logical width/height prefix is
+        # mapped here, so a larger retained capacity is valid; a short file is
+        # never valid.
+        if int(status.st_size) < expectedsize:
             raise ValueError(
-                f"window buffer size is {status.st_size}, expected {expectedsize}"
+                f"window buffer size is {status.st_size}, expected at least {expectedsize}"
             )
 
         stage = "mmap"

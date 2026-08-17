@@ -72,6 +72,7 @@ function Get-T1OSDeploymentRootDefinitions {
             (Join-Path $ProjectRoot 'source\python\build\runtime.json')
         )
         resources = @(
+            (Join-Path $ProjectRoot 'source\software\system')
             (Join-Path $ProjectRoot 'resource\fonts\atkinsonhyperlegiblenext.ttf')
             (Join-Path $ProjectRoot 'resource\fonts\cambria.ttf')
             (Join-Path $ProjectRoot 'resource\fonts\Fira_Code_v6.2\ttf\FiraCode-Retina.ttf')

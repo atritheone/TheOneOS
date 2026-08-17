@@ -534,9 +534,7 @@ stage_source_trees() {
         ! -path "$expected_build/chromium/google api credentials.example.json" \
         ! -path "$expected_build/python/tools.json" \
         ! -path "$expected_build/python/pip-*.whl" \
-        ! -path "$expected_build/python/patchelf" \
         ! -path "$expected_build/python/python-command" \
-        ! -path "$expected_build/python/patchelf licence.txt" \
         -print)
     if [ -n "$unexpected_build_files" ]; then
         echo 'Current staged build contains an unexpected non-Python file:' >&2

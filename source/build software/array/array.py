@@ -38,7 +38,7 @@ from exchange.exchange import exmeta, exget, exclear, exset, exsetfiles
 from rubbish.rubbish import storepaths, restorefromrubbishrid, emptyrubbish
 from graphics.graphics import initbuffer, presentdirty as gfxpresentdirty, present as gfxpresent
 from graphics.graphics import fillrectfast, drawrect, drawline, drawtextttf, measuretext, measurelineadvances, ttfbbox, initttffont
-from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedstate, managedconfigure, manageddisable, managedstrict, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 from media.capabilities import (
     AUDIO_EXTENSIONS as MEDIAAUDIOEXTENSIONS,
     VIDEO_EXTENSIONS as MEDIAVIDEOEXTENSIONS,
@@ -3674,39 +3674,7 @@ def initfont():
 
 def squarerootscale(w, h, basew, baseh):
 
-    try:
-
-        w = float(w)
-        h = float(h)
-
-        basew = float(basew)
-        baseh = float(baseh)
-
-    except Exception:
-
-        return 1.0
-
-    if w <= 0 or h <= 0 or basew <= 0 or baseh <= 0:
-        return 1.0
-
-    try:
-
-        ratio = (w * h) / (basew * baseh)
-
-    except Exception:
-
-        return 1.0
-
-    if ratio <= 0:
-        return 1.0
-
-    try:
-
-        return ratio ** 0.5
-
-    except Exception:
-
-        return 1.0
+    return displayuiscale(w, h, 1.0, basew, baseh)
 
 
 def scalesize(v):
@@ -3733,7 +3701,8 @@ def applyuiscale():
     global HSCROLL_HEIGHT, STATUSMENU_PAD_X, STATUSMENU_PAD_Y, STATUSMENU_ITEM_H, STATUSXSTART, CONFIRMW, CONFIRMH, CONFIRMBTNW, CONFIRMBTNH, CONFIRMPAD, CONFIRMGAP
     global TOOLBARH, EXPLORERTOP, DETAILHEADERH, PROPERTIESW, CONTENTTOP
 
-    UISCALE = squarerootscale(SCREENW, SCREENH, BASESCREENW, BASESCREENH) * uiscalefactor()
+    UISCALE = displayuiscale(
+        SCREENW, SCREENH, uiscalefactor(), BASESCREENW, BASESCREENH)
 
     FONTSIZEHEADER = scalesize(BASEFONTSIZEHEADER)
 
@@ -3872,7 +3841,9 @@ def graphicsdisable(reason, clear=True):
 
     global GRAPHICSSCENE
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        GRAPHICSSCENE = []
+        return True
 
     try:
 
@@ -10972,7 +10943,7 @@ def renderdirty():
 
         w = WINW - x0
 
-    if GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only"):
+    if GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE):
 
         if graphicspresent([int(x0), int(y0), int(w), int(h)]):
 
@@ -13038,8 +13009,6 @@ def present():
 
 def presentrect(x, y, w, h):
 
-    gfxpresentdirty(x, y, w, h)
-
     managed = False
 
     try:
@@ -13050,13 +13019,16 @@ def presentrect(x, y, w, h):
 
         log(f"managed graphics present error {e}")
 
-    if not managed:
+    if managed or (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
+        return
 
-        sendws({
-            "op": "DAMAGE",
-            "winid": WINID,
-            "rect": [int(x), int(y), int(w), int(h)]
-        })
+    gfxpresentdirty(x, y, w, h)
+
+    sendws({
+        "op": "DAMAGE",
+        "winid": WINID,
+        "rect": [int(x), int(y), int(w), int(h)]
+    })
 
 
 # input functions
@@ -16672,6 +16644,10 @@ def graphicsdiagnostic():
 
         state["SCREENH"] = 1440
 
+        # Diagnostics must not inherit the scale selected in the last live VM
+        # session; their geometry fixtures are expressed at 100 percent.
+        state["uiscalefactor"] = lambda: 1.0
+
         applyuiscale()
 
         state["WINW"] = 1200
@@ -17561,17 +17537,25 @@ def graphicsdiagnostic():
 
         result["checks"]["outlined_panels"] = {"status": 4, "context": 4, "confirm": 4}
 
-        filecommand = next((command for command in scene if command.get("kind") == "text" and "nostic-file-" in str(command.get("text", ""))), None)
-
-        if filecommand is None:
-
-            raise RuntimeError("managed diagnostic file text was not emitted")
-
         expectedrow = next(index for index, item in enumerate(TREE) if "diagnostic-file-" in item["name"])
 
         expectedy = CONTENTTOP + ((expectedrow - SCROLL) * ROWH) + (ROWH // 2) - (FONTSIZEROW // 2)
 
-        if int(filecommand.get("y", -1)) != int(graphicstexty(expectedy, FONTSIZEROW, FONT)):
+        expectedtexty = int(graphicstexty(expectedy, FONTSIZEROW, FONT))
+
+        filecommand = next((
+            command for command in scene
+            if command.get("kind") == "text"
+            and command.get("clip") == mainclip
+            and int(command.get("y", -1)) == expectedtexty
+            and str(command.get("text", ""))
+        ), None)
+
+        if filecommand is None:
+
+            raise RuntimeError("managed diagnostic file row was not emitted")
+
+        if int(filecommand.get("y", -1)) != expectedtexty:
 
             raise RuntimeError("managed Atkinson baseline does not match the CPU text baseline")
 
@@ -17635,6 +17619,7 @@ def graphicsdiagnostic():
             "count": len(scene),
             "batch": True,
             "accelerated": True,
+            "managed_only": True,
         })
 
         if not GRAPHICSSTATE.get("active") or GRAPHICSSTATE.get("pending"):
@@ -17681,9 +17666,14 @@ def graphicsdiagnostic():
 
         managedresponse(errorstate, {"op": "ERROR", "code": "graphics_scene_failed", "detail": "diagnostic"})
 
-        if errorstate.get("available") or errorstate.get("active"):
+        if (
+            not errorstate.get("available")
+            or not errorstate.get("active")
+            or not errorstate.get("managed_only")
+            or not errorstate.get("need_submit")
+        ):
 
-            raise RuntimeError("Array graphics error did not select the CPU fallback")
+            raise RuntimeError("Array graphics error escaped strict GPU rendering")
 
         timeoutstate = managedstate()
 
@@ -17693,17 +17683,22 @@ def graphicsdiagnostic():
 
         timeoutstate["pending_at"] = time.monotonic() - 3.0
 
-        if managedtick(timeoutstate, timeout=2.0):
+        if (
+            not managedtick(timeoutstate, timeout=2.0)
+            or not timeoutstate.get("active")
+            or not timeoutstate.get("managed_only")
+            or not timeoutstate.get("need_submit")
+        ):
 
-            raise RuntimeError("Array managed commit timeout did not select the CPU fallback")
+            raise RuntimeError("Array managed timeout escaped strict GPU rendering")
 
         result["checks"]["cpu_fallback"] = True
 
         result["checks"]["missing_capability_fallback"] = True
 
-        result["checks"]["error_fallback"] = True
+        result["checks"]["error_gpu_retention"] = True
 
-        result["checks"]["timeout_fallback"] = True
+        result["checks"]["timeout_gpu_retention"] = True
 
         result["checks"]["first_frame_complete"] = True
 

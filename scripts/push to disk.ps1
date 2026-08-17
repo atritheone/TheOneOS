@@ -42,6 +42,7 @@ $chromiumSourceManifest = Join-Path $chromiumOverlayRoot 'manifest.json'
 $runtimePathContractSource = Join-Path $projectRoot 'source\settings\runtime paths.json'
 $imageCatalogueSource = Join-Path $projectRoot 'source\catalogue\image'
 $pythonSoftwareSource = Join-Path $projectRoot 'source\software\python'
+$systemSoftwareSource = Join-Path $projectRoot 'source\software\system'
 $pythonCatalogueSource = Join-Path $projectRoot 'source\catalogue\python'
 $pythonManifestSource = Join-Path $pythonSoftwareSource 'manifest.json'
 $pythonReleaseLockSource = Join-Path $projectRoot 'source\python\locks\release.json'
@@ -157,7 +158,7 @@ function Get-T1OSUsbDriveTarget {
     throw "More than one T1OS USB drive was found. Keep only the intended target connected: $($identities -join '; ')"
 }
 
-foreach ($requiredDirectory in @($buildSource, $bootSource, $driversSource, $graphicsCatalogueSource, $virtualBoxCatalogueSource, $virtualBoxSoftwareSource, $virtualBoxSettingsSource, $audioCatalogueSource, $audioSoftwareSource, $networkCatalogueSource, $networkSoftwareSource, $networkSettingsSource, $chromiumSoftwareSource, $imageCatalogueSource, $pythonSoftwareSource, $pythonCatalogueSource, $resourceSource, $logoSource)) {
+foreach ($requiredDirectory in @($buildSource, $bootSource, $driversSource, $graphicsCatalogueSource, $virtualBoxCatalogueSource, $virtualBoxSoftwareSource, $virtualBoxSettingsSource, $audioCatalogueSource, $audioSoftwareSource, $networkCatalogueSource, $networkSoftwareSource, $networkSettingsSource, $chromiumSoftwareSource, $imageCatalogueSource, $pythonSoftwareSource, $systemSoftwareSource, $pythonCatalogueSource, $resourceSource, $logoSource)) {
     if (-not (Test-Path -LiteralPath $requiredDirectory -PathType Container)) {
         throw "Source directory not found: $requiredDirectory"
     }
@@ -538,6 +539,8 @@ skip_chromium_engine=${55}
 expanse_resource_destination="$mount_point/the one/resources/expanse"
 cursor_resource_destination="$mount_point/the one/resources/graphics/mouse cursors"
 system_resource_destination="$mount_point/the one/resources/system"
+system_software_source="$build_source/../software/system"
+system_software_destination="$mount_point/the one/software/system"
 
 case "$expected_python_release" in
     ''|*[!0-9A-Za-z._+-]*)
@@ -879,6 +882,7 @@ then
     make_tree_writable resources "$expanse_resource_destination"
     make_tree_writable resources "$cursor_resource_destination"
     make_tree_writable resources "$system_resource_destination"
+    make_tree_writable resources "$system_software_destination"
 
     if root_selected runtime_contract && [ -f "$runtime_path_contract_destination" ]; then
         chmod u+rw "$runtime_path_contract_destination"
@@ -941,9 +945,7 @@ unexpected_build_files=$(find "$stage/build" -type f \
     ! -path "$stage/build/chromium/google api credentials.example.json" \
     ! -path "$stage/build/python/tools.json" \
     ! -path "$stage/build/python/pip-*.whl" \
-    ! -path "$stage/build/python/patchelf" \
     ! -path "$stage/build/python/python-command" \
-    ! -path "$stage/build/python/patchelf licence.txt" \
     -print)
 if [ -n "$unexpected_build_files" ]; then
     echo 'The staged build contains an unexpected non-Python file:' >&2
@@ -1153,7 +1155,7 @@ then
     virtualbox_catalogue_destination="$stage/empty-virtualbox-catalogue"
 fi
 
-mkdir -p "$build_destination" "$boot_destination" "$drivers_destination" "$graphics_catalogue_destination" "$virtualbox_catalogue_destination" "$virtualbox_software_destination" "$virtualbox_settings_destination" "$audio_catalogue_destination" "$audio_software_destination" "$network_catalogue_destination" "$network_software_destination" "$network_settings_destination" "$media_settings_destination" "$chromium_software_destination" "$image_catalogue_destination" "$python_software_destination" "$python_catalogue_destination" "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination"
+mkdir -p "$build_destination" "$boot_destination" "$drivers_destination" "$graphics_catalogue_destination" "$virtualbox_catalogue_destination" "$virtualbox_software_destination" "$virtualbox_settings_destination" "$audio_catalogue_destination" "$audio_software_destination" "$network_catalogue_destination" "$network_software_destination" "$network_settings_destination" "$media_settings_destination" "$chromium_software_destination" "$image_catalogue_destination" "$python_software_destination" "$python_catalogue_destination" "$system_software_destination" "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination"
 
 # rsync archive mode is useful for storage.img, whose POSIX metadata is part of
 # the installed image. On the physical NTFS USB only content and topology are
@@ -2189,9 +2191,9 @@ if [ "$managed_sync_only" = True ]; then
         "$image_catalogue_source" \
         "$image_catalogue_destination"
     sync_managed_python_release
+    sync -f "$mount_point"
     protect_managed_python_release
     verify_managed_python_release
-    sync -f "$mount_point"
     echo 'Managed release roots were synchronized and verified without changing unrelated runtime trees.'
     exit 0
 fi
@@ -2764,10 +2766,8 @@ fi
 if root_selected python; then
     sync_managed_python_release
 fi
-if root_selected build || root_selected boot || root_selected virtualbox_software || root_selected image_catalogue || root_selected python; then
-    protect_managed_python_release
-fi
 if root_selected resources; then
+    sync_tree 'system software' "$system_software_source" "$system_software_destination"
     sync_file 'Atkinson font' "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf" "$font_destination/atkinsonhyperlegiblenext.ttf"
     sync_file 'Cambria font' "$stage/resources/fonts/cambria.ttf" "$font_destination/cambria.ttf"
     sync_file 'Fira Code regular font' "$stage/resources/fonts/firacode.ttf" "$font_destination/firacode.ttf"
@@ -2776,6 +2776,29 @@ if root_selected resources; then
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
     sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
     sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    chmod 0555 "$system_software_destination/patchelf"
+    if [ "$target_mode" = image ]; then
+        chown 0:0 "$system_software_destination" "$system_software_destination/patchelf"
+        chmod 0755 "$system_software_destination"
+    fi
+fi
+# Fonts are immutable shared display resources.  WindowServer renders managed
+# client text itself, so image builds must not inherit developer-worktree mode
+# bits that make a font readable only by the desktop account.
+if [ "$target_mode" = image ]; then
+    chown 0:0 "$font_destination"
+    chmod 0755 "$font_destination"
+    for runtime_font in atkinsonhyperlegiblenext.ttf cambria.ttf firacode.ttf firacodebold.ttf firacodesemibold.ttf; do
+        chown 0:0 "$font_destination/$runtime_font"
+        chmod 0444 "$font_destination/$runtime_font"
+    done
+fi
+# Make every completed write visible and durable before content verification.
+# This is particularly important on physical DrvFS targets, where an atomic
+# rsync replacement can otherwise be observed through a stale cached handle.
+sync -f "$mount_point"
+if root_selected build || root_selected boot || root_selected virtualbox_software || root_selected image_catalogue || root_selected python; then
+    protect_managed_python_release
 fi
 if [ "$exhaustive_verify" = True ]; then
     verify_protected_tree 'build' "$stage/build" "$build_destination"
@@ -2812,11 +2835,20 @@ if [ "$exhaustive_verify" = True ]; then
     cmp -s -- "$runtime_path_contract_source" "$runtime_path_contract_destination"
     verify_protected_tree 'image catalogue' "$image_catalogue_source" "$image_catalogue_destination"
     verify_managed_python_release
+    verify_tree_without_permissions 'system software' "$system_software_source" "$system_software_destination"
+    readelf -h "$system_software_destination/patchelf" >/dev/null
+    [ -x "$system_software_destination/patchelf" ]
     for runtime_font in atkinsonhyperlegiblenext.ttf cambria.ttf firacode.ttf firacodebold.ttf firacodesemibold.ttf; do
         cmp -s -- "$stage/resources/fonts/$runtime_font" "$font_destination/$runtime_font" || {
             echo "Runtime font verification found a remaining difference: $runtime_font" >&2
             exit 1
         }
+        if [ "$target_mode" = image ]; then
+            [ "$(stat -c '%u:%g:%a' "$font_destination/$runtime_font")" = '0:0:444' ] || {
+                echo "Runtime font permissions are unsafe: $runtime_font" >&2
+                exit 1
+            }
+        fi
     done
     cmp -s -- "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png" || {
         echo 'Fatal screen artwork verification found a remaining difference.' >&2
@@ -2834,9 +2866,7 @@ unexpected_build_files=$(find "$build_destination" -type f \
     ! -path "$build_destination/chromium/google api credentials.json" \
     ! -path "$build_destination/python/tools.json" \
     ! -path "$build_destination/python/pip-*.whl" \
-    ! -path "$build_destination/python/patchelf" \
     ! -path "$build_destination/python/python-command" \
-    ! -path "$build_destination/python/patchelf licence.txt" \
     -print)
 if [ -n "$unexpected_build_files" ]; then
     echo 'The deployed build contains an unexpected non-Python file:' >&2
@@ -2852,7 +2882,6 @@ fi
 if root_selected virtualbox_catalogue && [ -d "$virtualbox_catalogue_destination" ] && ! find "$virtualbox_catalogue_destination" -mindepth 1 -print -quit | grep -q .; then
     rmdir "$virtualbox_catalogue_destination"
 fi
-sync -f "$mount_point"
 
 if [ "$exhaustive_verify" = True ]; then
 printf 'build files on disk: '
@@ -2889,6 +2918,8 @@ printf 'managed Python software files on disk: '
 find "$python_software_destination" -type f | wc -l
 printf 'managed Python catalogue files on disk: '
 find "$python_catalogue_destination" -type f | wc -l
+printf 'system software files on disk: '
+find "$system_software_destination" -type f | wc -l
 printf 'runtime resource files on disk: '
 find "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination" -type f | wc -l
 printf 'Atkinson Hyperlegible Next SHA-256: '

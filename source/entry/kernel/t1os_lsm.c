@@ -543,6 +543,13 @@ static bool t1os_is_ephemeral_path(const char *path)
 		 path[sizeof(root) - 1] == '/'));
 }
 
+static bool t1os_is_reign_time_output_path(const char *path)
+{
+	return path &&
+	       (!strcmp(path, "/the one/settings/time/common.txt") ||
+		!strcmp(path, "/the one/settings/time/atreyan.txt"));
+}
+
 /* is this path one of the specifically restricted ones? */
 static bool t1os_is_special_path(const char *path)
 {
@@ -551,6 +558,8 @@ static bool t1os_is_special_path(const char *path)
 
 	if (!strcmp(path, "/the one/settings") ||
 	    !strcmp(path, "/the one/settings/"))
+		return true;
+	if (t1os_is_reign_time_output_path(path))
 		return true;
 
 	/* Settings is a protected namespace root, not an inventory of every T1OS
@@ -782,6 +791,8 @@ static bool t1os_special_write_allowed(const char *path)
 {
 	if (t1os_is_ephemeral_path(path))
 		return true;
+	if (t1os_is_reign_time_output_path(path))
+		return t1os_domain_is(T1OS_DOMAIN_REIGN);
 
 	if (!strcmp(path, "/.ephemeral/authentication") ||
 	    !strcmp(path, "/.ephemeral/authentication/") ||
@@ -1574,9 +1585,9 @@ static int t1os_path_mkdir(const struct path *dir,
 }
 
 /* Make node: mknod */
-static bool t1os_reign_time_output_create_allowed(const struct path *dir,
-						  struct dentry *dentry,
-						  umode_t mode)
+static bool t1os_time_output_bootstrap_create_allowed(const struct path *dir,
+						       struct dentry *dentry,
+						       umode_t mode)
 {
 	static const char parent[] = "/the one/settings/time";
 	static const char common[] = "common.txt";
@@ -1584,7 +1595,7 @@ static bool t1os_reign_time_output_create_allowed(const struct path *dir,
 	char *buffer, *path;
 	bool name_allowed, allowed = false;
 
-	if (!t1os_domain_is(T1OS_DOMAIN_REIGN) || !S_ISREG(mode) ||
+	if (!t1os_is_goddess_process() || !S_ISREG(mode) ||
 	    !dir || !dir->dentry || !dentry ||
 	    dentry->d_parent != dir->dentry)
 		return false;
@@ -1623,7 +1634,7 @@ static int t1os_path_mknod(const struct path *dir,
 	    S_ISCHR(mode) &&
 	    t1os_is_nvidia_device_node_path(&p))
 		return 0;
-	if (t1os_reign_time_output_create_allowed(dir, dentry, mode))
+	if (t1os_time_output_bootstrap_create_allowed(dir, dentry, mode))
 		return 0;
 
 	return t1os_check_struct_path(&p);

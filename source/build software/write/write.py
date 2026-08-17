@@ -34,7 +34,7 @@ from architect.architect import check
 from GODDESS.GODDESS import formatlog
 from exchange.exchange import exset, exget
 from graphics.graphics import initbuffer, fillbufferfile, initttffont, drawtextttf, measuretext, clear, presentdirty, drawrect, setpixel, fillrect, fillrectfast, getdirty, resetdirty, measurelineadvances
-from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 import graphics.graphics as gfx
 
 
@@ -492,11 +492,7 @@ def applyuiscale(w, h):
 
     try:
 
-        area = max(1, int(w) * int(h))
-
-        base = BASE_W * BASE_H
-
-        UISCALE = ((area / base) ** 0.5) * uiscalefactor()
+        UISCALE = displayuiscale(w, h, uiscalefactor())
 
     except Exception:
 
@@ -4066,7 +4062,12 @@ def dispatchmessage(msg):
             managedresponse(GRAPHICSSTATE, msg)
             graphicsscheduleretry()
 
-            if code != 'graphics_clear_failed' and ws_sock is not None and WINDOW_ID:
+            if (
+                code != 'graphics_clear_failed'
+                and not GRAPHICSSTATE.get('available')
+                and ws_sock is not None
+                and WINDOW_ID
+            ):
                 sendmsg({
                     'op': 'GRAPHICS_CLEAR',
                     'winid': int(WINDOW_ID),
@@ -4504,7 +4505,10 @@ def graphicsdisable(reason, clear=True):
 
     global GRAPHICSSCENE
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        GRAPHICSSCENE = []
+        graphicsscheduleretry()
+        return True
     GRAPHICSSCENE = []
     graphicsscheduleretry()
 
@@ -12873,10 +12877,27 @@ def writegraphicsdiagnostic():
             raise RuntimeError('managed menu panel geometry was not calculated')
 
         panelx, panely, panelwidth, panelheight, _ = MENU_PANEL
-        menuborders = [command for command in rectanglecommands if command.get('color') == MENU_BORDER and list(command.get('clip', [])) == [panelx, panely, panelwidth, panelheight]]
+        expectedmenuborders = [
+            [panelx, panely, panelwidth, 1],
+            [panelx, panely + panelheight - 1, panelwidth, 1],
+            [panelx, panely + 1, 1, panelheight - 2],
+            [panelx + panelwidth - 1, panely + 1, 1, panelheight - 2],
+        ]
+        menuborders = [
+            list(command.get('rect', []))
+            for command in rectanglecommands
+            if (
+                command.get('color') == MENU_BORDER
+                and list(command.get('clip', []))
+                == [panelx, panely, panelwidth, panelheight]
+                and list(command.get('rect', [])) in expectedmenuborders
+            )
+        ]
 
-        if len(menuborders) != 4:
-            raise RuntimeError(f'managed menu border expected four edges and found {len(menuborders)}')
+        if menuborders != expectedmenuborders:
+            raise RuntimeError(
+                f'managed menu border differs from its four edges '
+                f'{menuborders} != {expectedmenuborders}')
 
         menuitems = menudefinitions()['file']
         menuhovery = panely + MENU_PAD_Y + (1 * MENU_ITEM_H)
@@ -12981,6 +13002,7 @@ def writegraphicsdiagnostic():
 
         closecontextmenu()
         MENUBAR_OPEN = 'file'
+        MENU_HOVER_ACTION = 'file_open'
         computemenupanel(MENUBAR_OPEN)
 
         if not any(command.get('color') == SCROLLBAR_THUMB_COLOR for command in rectanglecommands):
@@ -13069,7 +13091,9 @@ def writegraphicsdiagnostic():
             'winid': 99,
             'count': len(scene),
             'batch': True,
+            'generation': int(GRAPHICSSTATE.get('pending_generation', 0)),
             'accelerated': True,
+            'managed_only': True,
         })
 
         if not GRAPHICSSTATE.get('active') or GRAPHICSSTATE.get('pending'):
@@ -13092,7 +13116,10 @@ def writegraphicsdiagnostic():
             raise RuntimeError('Write did not use a retained scene patch for cursor movement')
 
         if len(requests[1].get('upsert', [])) > 2 or len(requests[1].get('remove', [])) > 2:
-            raise RuntimeError('cursor movement replaced unrelated retained scene nodes')
+            raise RuntimeError(
+                'cursor movement replaced unrelated retained scene nodes '
+                f'upsert={len(requests[1].get("upsert", []))} '
+                f'remove={requests[1].get("remove", [])}')
 
         managedresponse(GRAPHICSSTATE, {
             'op': 'GRAPHICS_COMMITTED',
@@ -13100,8 +13127,9 @@ def writegraphicsdiagnostic():
             'count': len(patchscene),
             'batch': True,
             'patch': True,
-            'generation': int(GRAPHICSSTATE.get('generation', 0)) + 1,
+            'generation': int(GRAPHICSSTATE.get('pending_generation', 0)),
             'accelerated': True,
+            'managed_only': True,
         })
 
         FIRST_VISIBLE_X = 0
@@ -13152,8 +13180,9 @@ def writegraphicsdiagnostic():
             'winid': 99,
             'count': len(pastescene),
             'batch': True,
-            'generation': int(GRAPHICSSTATE.get('generation', 0)) + 1,
+            'generation': int(GRAPHICSSTATE.get('pending_generation', 0)),
             'accelerated': True,
+            'managed_only': True,
         })
 
         cpustate = managedstate(cpu=True)
@@ -13165,22 +13194,32 @@ def writegraphicsdiagnostic():
         managedconfigure(errorstate, capabilities, required=('rectangle', 'text'))
         managedresponse(errorstate, {'op': 'ERROR', 'code': 'graphics_scene_failed', 'detail': 'diagnostic'})
 
-        if errorstate.get('available') or errorstate.get('active'):
-            raise RuntimeError('managed graphics error did not select the CPU fallback')
+        if (
+            not errorstate.get('available')
+            or not errorstate.get('active')
+            or not errorstate.get('managed_only')
+            or not errorstate.get('need_submit')
+        ):
+            raise RuntimeError('managed graphics error escaped strict GPU rendering')
 
         timeoutstate = managedstate()
         managedconfigure(timeoutstate, capabilities, required=('rectangle', 'text'))
         timeoutstate['pending'] = True
         timeoutstate['pending_at'] = time.monotonic() - 3.0
 
-        if managedtick(timeoutstate, timeout=2.0):
-            raise RuntimeError('managed graphics commit timeout did not select the CPU fallback')
+        if (
+            not managedtick(timeoutstate, timeout=2.0)
+            or not timeoutstate.get('active')
+            or not timeoutstate.get('managed_only')
+            or not timeoutstate.get('need_submit')
+        ):
+            raise RuntimeError('managed graphics timeout escaped strict GPU rendering')
 
         result['checks'] = {
             'capability_negotiation': True,
             'cpu_fallback': True,
-            'error_fallback': True,
-            'timeout_fallback': True,
+            'error_gpu_retention': True,
+            'timeout_gpu_retention': True,
             'opaque_background': True,
             'rectangle_text_only': sorted(kinds),
             'atkinson_baseline': True,

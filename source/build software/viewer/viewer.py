@@ -28,7 +28,7 @@ import graphics.graphics as gfx
 from graphics.graphics import initbuffer, fillrectfast, blitfilepartfast, drawtextttf
 from graphics.graphics import initttffont, present as gfxpresent
 from graphics.graphics import managedstate, managedconfigure, manageddisable, managedclear
-from graphics.graphics import managedmarkdamage, managedtick, managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedmarkdamage, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 
 
 
@@ -653,9 +653,7 @@ def applyscale():
 
     global UISCALE, TOOLBARH, STATUSH, PAD, FONTSIZE
 
-    if SCREENW > 0 and SCREENH > 0:
-        automatic = max(0.75, min(2.0, min(SCREENW / 1920.0, SCREENH / 1080.0)))
-        UISCALE = automatic * uiscalefactor()
+    UISCALE = displayuiscale(SCREENW, SCREENH, uiscalefactor())
 
     TOOLBARH = scale(BASETOOLBARH)
     STATUSH = scale(BASESTATUSH)
@@ -1076,9 +1074,9 @@ def submitscene():
 
     except Exception as error:
 
-        manageddisable(GRAPHICSSTATE, f'viewer scene failed: {error}')
+        retained = manageddisable(GRAPHICSSTATE, f'viewer scene failed: {error}')
         log(f'managed graphics disabled {error}')
-        return False
+        return bool(retained)
 
 
 def graphicsresponse(message):
@@ -1185,10 +1183,11 @@ def paint():
         return
 
     REDRAW = False
-    drawcpu()
 
     if GRAPHICSSTATE.get('available'):
         submitscene()
+    else:
+        drawcpu()
 
 
 

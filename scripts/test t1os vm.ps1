@@ -643,7 +643,10 @@ function Invoke-T1OSFeatureTest {
     $settings = Save-T1OSGuiStage -Name '08-settings-python' -TimeoutSeconds 30
     $featureChecks.settings_python_page_visible = $true
 
-    $scale = [Math]::Max(0.5, [Math]::Sqrt(($Width * $Height) / (1920.0 * 1080.0)))
+    $scale = [Math]::Max(
+        0.5,
+        [Math]::Min($Width / 1920.0, $Height / 1080.0)
+    )
     $titleBar = 28
     # fieldrow reserves roughly the left third for the label.  Click the
     # actual editable value box so both Settings' button and text-cursor hit

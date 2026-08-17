@@ -35,7 +35,7 @@ if not DIAGNOSTICMODE:
     from graphics.graphics import blitfilepartfast, drawline, drawrect
     from graphics.graphics import drawtextttf, fillrectfast, initbuffer
     from graphics.graphics import initttffont, measuretext, present as gfxpresent
-    from graphics.graphics import uiscalefactor
+    from graphics.graphics import uiscalefactor, displayuiscale
 
 else:
 
@@ -194,9 +194,8 @@ def applyscale():
     global UISCALE, PAD, ROWH, STATUSH, FONTSIZE, SMALLFONT
 
     try:
-        ratio = ((max(1, SCREENW) * max(1, SCREENH)) / float(1920 * 1080)) ** 0.5
         factor = uiscalefactor() if not DIAGNOSTICMODE else 1.0
-        UISCALE = max(0.65, min(2.5, ratio * factor))
+        UISCALE = displayuiscale(SCREENW, SCREENH, factor)
     except Exception:
         UISCALE = 1.0
 

@@ -207,6 +207,8 @@ def validateacceleratedcontentproof(source):
         (
             "windowbufferdimensions",
             "windowbuffercontentproof",
+            "gpuwindowdynamicvideo",
+            "gpuwindowretainedsystem",
             "managedcontentproof",
             "acceleratedcontentproof",
         ),
@@ -248,18 +250,19 @@ def validateacceleratedcontentproof(source):
 
         proof = namespace["acceleratedcontentproof"](window)
 
-        if not (
-            proof.get("verified")
-            and proof.get("nonblack")
-            and proof.get("contrast")
-        ):
-            raise SystemExit("a visible CPU-authored lock-screen buffer failed proof")
+        if proof.get("verified"):
+            raise SystemExit("a visible CPU-authored lock screen passed GPU-only proof")
 
     managed = {
+        "role": "lockscreen",
         "_managed_only": True,
         "_gpu_command_generation": 2,
         "_gpu_presented_generation": 0,
         "_telemetry_scene_commands_drawn": 3,
+        "_telemetry_scene_texture_renders": 1,
+        "_telemetry_gpu_draw_calls": 1,
+        "_telemetry_cpu_damage_bytes": 0,
+        "_telemetry_gpu_upload_bytes": 0,
         "gpu_commands": [{"kind": "text", "color": [239, 239, 239, 255]}],
     }
 
@@ -270,6 +273,17 @@ def validateacceleratedcontentproof(source):
 
     if not namespace["acceleratedcontentproof"](managed).get("verified"):
         raise SystemExit("a physically presented managed lock screen failed proof")
+
+    managed["role"] = "window"
+
+    if namespace["acceleratedcontentproof"](managed).get("verified"):
+        raise SystemExit("a non-system managed surface passed lock-screen proof")
+
+    managed["role"] = "lockscreen"
+    managed["_telemetry_cpu_damage_bytes"] = 4
+
+    if namespace["acceleratedcontentproof"](managed).get("verified"):
+        raise SystemExit("a CPU-authored managed lock screen passed GPU-only proof")
 
 
 def validatedriverserverzombiedetection(source):
@@ -560,6 +574,21 @@ def validatewindowbufferpermissions(graphics):
                 or len(graphics._buffer) != expected
             ):
                 raise SystemExit("valid window-buffer state was not committed atomically")
+        finally:
+            graphics.baselineclose()
+
+        # WindowServer keeps the high-water allocation after a logical shrink
+        # so an older client mapping cannot fault.  The client maps only the
+        # current logical prefix and must accept that retained capacity.
+        with open(path, "wb") as stream:
+            stream.truncate(expected * 2)
+
+        if graphics.initbuffer(path, 7, 5) is not True:
+            raise SystemExit("a retained-capacity window buffer did not initialize")
+
+        try:
+            if len(graphics._FILE_MAP) != expected or len(graphics._buffer) != expected:
+                raise SystemExit("retained capacity leaked into logical buffer geometry")
         finally:
             graphics.baselineclose()
 
@@ -2337,8 +2366,25 @@ def main():
         projectroot / "source/build software/lock screen/lock screen.py"
     ).read_text(encoding="utf-8")
 
-    if "T1OS_LOCKSCREEN_GRAPHICS', 'cpu'" not in lockscreen:
-        raise SystemExit("lock screen does not default to the CPU-authored buffer path")
+    if "T1OS_LOCKSCREEN_GRAPHICS', 'managed'" not in lockscreen:
+        raise SystemExit("lock screen does not default to managed GPU rendering")
+
+    for required in (
+        "initlock managed GPU path active; CPU window buffer is not mapped",
+        "def graphicsgpurequired(",
+        "if graphicsgpurequired():",
+        "graphicswaitinitial(timeout=2.0)",
+        "managed GPU presentation did not complete after map",
+    ):
+
+        if required not in lockscreen:
+            raise SystemExit(f"lock screen GPU-only rendering contract is missing {required!r}")
+
+    mapposition = lockscreen.index("ok = wsmap(_winid)")
+    waitposition = lockscreen.index("graphicswaitinitial(timeout=2.0)")
+
+    if waitposition <= mapposition:
+        raise SystemExit("lock screen waits for GPU presentation before mapping its window")
 
     for required in (
         "if op == 'ERROR':",
@@ -2664,20 +2710,42 @@ def main():
     )
 
     if (
-        len(receiptmessages) != 1
-        or receiptmessages[0][1].get("presented") is not False
-        or receiptmessages[0][1].get("superseded") is not False
-        or receiptwindows[5]["_gpu_commit_receipts"]
+        receiptmessages
+        or [
+            value.get("generation")
+            for value in receiptwindows[5]["_gpu_commit_receipts"]
+        ] != [8]
     ):
         raise SystemExit(
-            "an unmapped initial scene was reported as physically presented"
+            "an unmapped initial GPU scene was not retained for its first "
+            "visible frame"
+        )
+
+    if receiptnamespace["graphicsframecommitreceipts"]({}):
+        raise SystemExit(
+            "an unmapped initial GPU scene was captured by an unrelated frame"
+        )
+
+    receiptwindows[5]["mapped"] = True
+    firstvisible = receiptnamespace["graphicsframecommitreceipts"]({5: 8})
+    receiptnamespace["graphicsstagecommitreceipts"](firstvisible)
+    receiptnamespace["graphicsfinishcommitreceipts"]()
+
+    if (
+        len(receiptmessages) != 1
+        or receiptmessages[0][1].get("generation") != 8
+        or receiptmessages[0][1].get("presented") is not True
+        or receiptwindows[5]["_gpu_presented_generation"] != 8
+    ):
+        raise SystemExit(
+            "a pre-map GPU scene did not receive the first visible frame's "
+            "physical presentation receipt"
         )
 
     # If an unmap arrives while gpuend() is waiting, the newly cancelled
     # request must not overtake the older generation already captured in the
     # rendered frame.
     receiptmessages.clear()
-    receiptwindows[5]["mapped"] = True
     receiptwindows[5]["_gpu_command_generation"] = 9
     presentationresponse(
         1,

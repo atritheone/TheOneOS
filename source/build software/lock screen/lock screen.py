@@ -88,7 +88,7 @@ _graphicslastcommands = 0
 _graphicsbuildtotalms = 0.0
 _graphicsbuildmaximumms = 0.0
 _graphicsbuildcount = 0
-_graphicsmode = str(os.environ.get('T1OS_LOCKSCREEN_GRAPHICS', 'cpu')).strip().lower()
+_graphicsmode = str(os.environ.get('T1OS_LOCKSCREEN_GRAPHICS', 'managed')).strip().lower()
 _graphicscpuoverride = _graphicsmode not in ('managed', 'gpu', 'on', '1', 'true')
 _graphicsstate = managedstate(cpu=_graphicscpuoverride)
 
@@ -1177,23 +1177,27 @@ def applyfbsize(w, h):
 
         return False
 
-    if not waitbufferready(_bufpath, _screenw, _screenh):
-
-        logline(f'buffer did not grow for framebuffer {_screenw}x{_screenh}')
-
-        return False
-
-    try:
-
-        initbuffer(_bufpath, _screenw, _screenh)
-
-        _gfx_ready = True
-
-    except Exception:
-
+    if _graphicsstate.get('available'):
         _gfx_ready = False
+    else:
 
-        return False
+        if not waitbufferready(_bufpath, _screenw, _screenh):
+
+            logline(f'buffer did not grow for framebuffer {_screenw}x{_screenh}')
+
+            return False
+
+        try:
+
+            initbuffer(_bufpath, _screenw, _screenh)
+
+            _gfx_ready = True
+
+        except Exception:
+
+            _gfx_ready = False
+
+            return False
 
     try:
 
@@ -1382,6 +1386,9 @@ def graphicsrestorecpu():
 
     try:
 
+        if graphicsgpurequired():
+            return False
+
         if not _gfx_ready:
             return False
 
@@ -1401,9 +1408,20 @@ def graphicsrestorecpu():
         return False
 
 
+def graphicsgpurequired():
+
+    return bool(
+        not _directfb
+        and not _graphicscpuoverride
+        and _graphicscaps.get('accelerated') is True
+    )
+
+
 def graphicsdisable(reason, clear=True):
 
-    manageddisable(_graphicsstate, reason)
+    if manageddisable(_graphicsstate, reason):
+        graphicssyncstate()
+        return True
 
     try:
 
@@ -1416,6 +1434,7 @@ def graphicsdisable(reason, clear=True):
 
     graphicssyncstate()
     graphicsrestorecpu()
+    return False
 
 
 def graphicsresponse(msg):
@@ -2207,16 +2226,26 @@ def renderframe(force=False):
 
         rects = builddamagerects(timestr, datestr)
 
-    if (
-        not _directfb
-        and _graphicsstate.get('active')
-        and _graphicsstate.get('managed_only')
-        and graphicspresent(rects, timestr, datestr)
-    ):
+    if not _directfb and _graphicsstate.get('available'):
 
-        _last_timestr = timestr
-        _last_datestr = datestr
-        return True
+        # Text glyph extents and baselines belong to the GPU renderer.  CPU-side
+        # estimates can be smaller than the actual rendered clock, which lets a
+        # retained partial repaint clear the time/date bands without redrawing
+        # every glyph.  Clock changes are sparse, so repaint the complete GPU
+        # scene and keep the lock screen entirely on the accelerated path.
+        rects = [[0, 0, int(_screenw), int(_screenh)]]
+
+        managed = graphicspresent(rects, timestr, datestr)
+
+        if managed or _graphicsstate.get('pending'):
+            _last_timestr = timestr
+            _last_datestr = datestr
+            return True
+
+        return False
+
+    if graphicsgpurequired():
+        return False
 
     try:
 
@@ -2298,7 +2327,7 @@ def settlefbsize(timeout=0.2):
             graphicsresponse(msg)
 
 
-def unlockrequest(msg, winid=None):
+def unlockrequest(msg, winid=None, authorized=None):
 
     # A queued firmware/VM activation key must not make the process exit in
     # the narrow interval between publishing its verified first frame and
@@ -2311,28 +2340,29 @@ def unlockrequest(msg, winid=None):
     # Startup is the authority that removes the boot animation and verifies
     # physical presentation.  Do not accept an activation key until its
     # acknowledgement is bound to this exact lock-screen process.
-    try:
-        with open(POSTHANDOFFSTATE, 'r', encoding='utf-8') as stream:
-            handoff = json.load(stream)
-        if not (
-            isinstance(handoff, dict)
-            and handoff.get('format') == 1
-            and handoff.get('state') == 'ready'
-            and int(handoff.get('pid', 0)) == int(os.getpid())
-            and handoff.get('boot_active') is False
-            and handoff.get('physically_verified') is True
-        ):
+    if authorized is not True:
+        try:
+            with open(POSTHANDOFFSTATE, 'r', encoding='utf-8') as stream:
+                handoff = json.load(stream)
+            if not (
+                isinstance(handoff, dict)
+                and handoff.get('format') == 1
+                and handoff.get('state') == 'ready'
+                and int(handoff.get('pid', 0)) == int(os.getpid())
+                and handoff.get('boot_active') is False
+                and handoff.get('physically_verified') is True
+            ):
+                return False
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            detail = (
+                'post-handoff authorization unavailable '
+                + type(error).__name__
+                + ': '
+                + str(error)
+            )
+            if _lastdiagnostic != detail:
+                logline(detail)
             return False
-    except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
-        detail = (
-            'post-handoff authorization unavailable '
-            + type(error).__name__
-            + ': '
-            + str(error)
-        )
-        if _lastdiagnostic != detail:
-            logline(detail)
-        return False
 
     try:
         target = int(_winid if winid is None else winid)
@@ -2349,12 +2379,6 @@ def unlockrequest(msg, winid=None):
     if op == 'KEY':
         key = str(msg.get('key', '')).strip().upper()
         return state == 'down' and key in ('SPACE', 'ENTER')
-
-    if op == 'POINTER_BUTTON':
-        try:
-            return state == 'down' and int(msg.get('button', 0)) == 1
-        except (TypeError, ValueError):
-            return False
 
     return False
 
@@ -2596,21 +2620,25 @@ def initlock():
 
         logstate('initlock after create')
 
-        logline('initlock step initbuffer')
-
-        try:
-
-            initbuffer(_bufpath, _screenw, _screenh)
-
-            _gfx_ready = True
-
-        except Exception as e:
-
-            logexc('initlock initbuffer exception', e)
-
+        if _graphicsstate.get('available'):
+            logline('initlock managed GPU path active; CPU window buffer is not mapped')
             _gfx_ready = False
+        else:
+            logline('initlock step initbuffer')
 
-            return False
+            try:
+
+                initbuffer(_bufpath, _screenw, _screenh)
+
+                _gfx_ready = True
+
+            except Exception as e:
+
+                logexc('initlock initbuffer exception', e)
+
+                _gfx_ready = False
+
+                return False
 
 
         try:
@@ -2719,9 +2747,6 @@ def initlock():
 
     if not _directfb:
 
-        # do not expose the surface until both render paths contain a complete frame
-        graphicswaitinitial()
-
         logline('initlock step wsmap')
 
         try:
@@ -2739,6 +2764,28 @@ def initlock():
             logexc('initlock wsmap exception', e)
 
             return False
+
+        # Managed acknowledgements are tied to a completed physical page flip.
+        # The window must therefore be mapped before waiting for its first GPU
+        # receipt; waiting while unmapped can only time out and disable the
+        # otherwise healthy managed renderer.
+        if graphicsgpurequired() and not graphicswaitinitial(timeout=2.0):
+            logline('initlock managed GPU presentation did not complete after map')
+            return False
+
+        # Re-submit once after the mapped presentation barrier.  Virtual GPU
+        # hosts can acknowledge the first page flip while still handing off
+        # the preceding boot surface; a mapped GPU-only repaint makes the lock
+        # scene, rather than a black transition buffer, the stable front frame.
+        if graphicsgpurequired():
+
+            if not renderframe(force=True):
+                logline('initlock mapped managed GPU repaint failed')
+                return False
+
+            if not graphicswaitinitial(timeout=2.0):
+                logline('initlock mapped managed GPU repaint did not present')
+                return False
 
         logline('initlock step wsfocus')
 
@@ -2934,6 +2981,7 @@ def graphicsdiagnostic():
             'managed_resources': True,
             'atomic_scene': True,
             'damage_regions': True,
+            'retained_scene': True,
             'commands': ['rectangle', 'image', 'text'],
             'command_limit': 1024,
             'text_limit': 1024,
@@ -2994,6 +3042,7 @@ def graphicsdiagnostic():
             'count': len(scene),
             'batch': True,
             'accelerated': True,
+            'managed_only': True,
         })
         graphicssyncstate()
 
@@ -3005,6 +3054,24 @@ def graphicsdiagnostic():
             'commands': len(scene),
             'damage': len(requests[0].get('damage', [])),
         }
+
+        # A clock tick must retain the complete scene while asking the GPU to
+        # repaint the full lock screen.  GPU text metrics are authoritative;
+        # CPU-estimated partial bounds previously clipped the time and date.
+        updatedscene = graphicsbuildscene('10:28 PM', '17:07:6AE')
+        managedmarkdamage(_graphicsstate, [0, 0, _screenw, _screenh], bounds=(_screenw, _screenh))
+        managedsubmit(_graphicsstate, lambda request: requests.append(request) or True, 81, updatedscene)
+
+        if len(requests) != 2 or requests[1].get('op') != 'GRAPHICS_PATCH':
+            raise RuntimeError('clock update did not use a retained GPU scene patch')
+
+        if requests[1].get('damage') != [[0, 0, 2560, 1440]]:
+            raise RuntimeError('clock update did not request a complete GPU repaint')
+
+        if len(requests[1].get('order', [])) != len(updatedscene):
+            raise RuntimeError('clock update did not retain the complete lock-screen scene')
+
+        result['checks']['clock_update_full_gpu_repaint'] = True
         result['checks']['command_budget'] = {
             'commands': len(scene),
             'limit': int(_graphicsstate.get('command_limit', 0)),
@@ -3023,7 +3090,7 @@ def graphicsdiagnostic():
                 'winid': 81,
                 'key': 'SPACE',
                 'state': 'down',
-        }, winid=81):
+        }, winid=81, authorized=True):
             raise RuntimeError('Space did not advance the lock screen')
 
         if not unlockrequest({
@@ -3031,7 +3098,7 @@ def graphicsdiagnostic():
                 'winid': 81,
                 'key': 'ENTER',
                 'state': 'down',
-        }, winid=81):
+        }, winid=81, authorized=True):
             raise RuntimeError('Enter did not advance the lock screen')
 
         if (
@@ -3040,32 +3107,30 @@ def graphicsdiagnostic():
                     'winid': 81,
                     'key': 'A',
                     'state': 'down',
-                }, winid=81)
+                }, winid=81, authorized=True)
                 or unlockrequest({
                     'op': 'POINTER_MOTION',
                     'winid': 81,
-                }, winid=81)
+                }, winid=81, authorized=True)
                 or unlockrequest({
                     'op': 'KEY',
                     'winid': 82,
                     'key': 'ENTER',
                     'state': 'down',
-                }, winid=81)
+                }, winid=81, authorized=True)
                 or unlockrequest({
                     'op': 'POINTER_BUTTON',
                     'winid': 81,
                     'button': 1,
                     'state': 'up',
-                }, winid=81)):
+                }, winid=81, authorized=True)
+                or unlockrequest({
+                    'op': 'POINTER_BUTTON',
+                    'winid': 81,
+                    'button': 1,
+                    'state': 'down',
+                }, winid=81, authorized=True)):
             raise RuntimeError('lock screen advanced for a non-activation event')
-
-        if not unlockrequest({
-                'op': 'POINTER_BUTTON',
-                'winid': 81,
-                'button': 1,
-                'state': 'down',
-        }, winid=81):
-            raise RuntimeError('primary click did not advance the lock screen')
 
         result['checks']['session_activation_input'] = True
 
@@ -3086,8 +3151,12 @@ def graphicsdiagnostic():
         rejected['winid'] = 82
         managedresponse(rejected, {'op': 'ERROR', 'winid': 82, 'code': 'graphics_scene_failed', 'detail': 'diagnostic'})
 
-        if rejected.get('available') or rejected.get('active'):
-            raise RuntimeError('managed error did not select CPU fallback')
+        if (
+                not rejected.get('available')
+                or not rejected.get('active')
+                or not rejected.get('managed_only')
+                or not rejected.get('need_submit')):
+            raise RuntimeError('managed error escaped strict GPU rendering')
 
         timedout = managedstate()
         managedconfigure(timedout, capabilities, required=('rectangle', 'text'))
@@ -3095,13 +3164,18 @@ def graphicsdiagnostic():
         timedout['pending_at'] = time.monotonic() - 3.0
         managedtick(timedout, timeout=0.1)
 
-        if timedout.get('available') or timedout.get('pending'):
-            raise RuntimeError('managed commit timeout did not select CPU fallback')
+        if (
+                not timedout.get('available')
+                or timedout.get('pending')
+                or not timedout.get('active')
+                or not timedout.get('managed_only')
+                or not timedout.get('need_submit')):
+            raise RuntimeError('managed timeout escaped strict GPU rendering')
 
         result['checks']['cpu_fallback'] = True
         result['checks']['missing_capability_fallback'] = True
-        result['checks']['error_fallback'] = True
-        result['checks']['timeout_fallback'] = True
+        result['checks']['error_gpu_retention'] = True
+        result['checks']['timeout_gpu_retention'] = True
         result['checks']['direct_framebuffer_fallback'] = True
         result['checks']['first_frame_before_map'] = True
         result['performance'] = {

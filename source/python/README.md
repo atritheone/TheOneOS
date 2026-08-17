@@ -110,9 +110,9 @@ clear python cache
 T1OS does not install `pip`, `pip3`, or a `python -m pip` module. Commands added
 by installed wheels use one small locked native launcher, because Linux
 shebangs cannot represent the space in `/the one`; the launcher delegates to
-`pythonentry.py`, which selects the package's recorded entry point. A private,
+the consolidated `python.py`, which selects the package's recorded entry point. A private,
 hash-locked `pip-26.1.2` wheel remains inaccessible to users and is used by
-`/the one/build/python/pip.py` only to resolve dependencies and unpack wheels
+`/the one/build/python/python.py` only to resolve dependencies and unpack wheels
 inside a transaction workspace.
 
 Settings lists both built-in and added packages. An Architect can type a

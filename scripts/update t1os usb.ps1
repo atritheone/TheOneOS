@@ -7,11 +7,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$projectRoot = Split-Path -Path $PSScriptRoot -Parent
 $targetValidator = Join-Path $PSScriptRoot 'push to disk.ps1'
 $aclPreparer = Join-Path $PSScriptRoot 'migrate managed python usb acl.ps1'
 $bootUpdater = Join-Path $PSScriptRoot 'push hardware kernel to usb.ps1'
+$systemPatchelf = Join-Path $projectRoot 'source\software\system\patchelf'
 
-foreach ($required in @($targetValidator, $aclPreparer, $bootUpdater)) {
+foreach ($required in @($targetValidator, $aclPreparer, $bootUpdater, $systemPatchelf)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required T1OS USB update component is missing: $required"
     }
@@ -57,11 +59,11 @@ if ($IncludeBoot) {
 }
 
 if ($Full) {
-    Write-Host 'Running the exhaustive managed userspace synchronization...'
+    Write-Host 'Running the exhaustive managed userspace and system-software synchronization...'
     & $targetValidator -UsbDrive -Full
 }
 else {
-    Write-Host 'Planning the incremental managed userspace update...'
+    Write-Host 'Planning the incremental managed userspace and system-software update...'
     & $targetValidator -UsbDrive -Fast
 }
 if ($LASTEXITCODE -ne 0) {

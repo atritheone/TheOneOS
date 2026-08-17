@@ -38,7 +38,7 @@ from GODDESS.GODDESS import formatlog, popenisolated, softwarelogpath
 from operations.operations import PowerRequestError, requestpower
 from exchange.exchange import exmeta
 from graphics.graphics import fillbufferfile, initbuffer, clear, present, drawrect, drawline, initttffont, drawtextttf, measuretext, getttfface
-from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 from search.search import iterfindnames as searchiterfindnames
 
 
@@ -562,6 +562,29 @@ def log(msg):
 
 
 # managed graphics functions
+_CPUFILLBUFFERFILE = fillbufferfile
+
+
+def graphicsstrictgpu():
+
+    return bool(
+        not GRAPHICSCPUOVERRIDE
+        and GRAPHICSCAPS.get("accelerated")
+        and GRAPHICSCAPS.get("managed_resources")
+    )
+
+
+def fillbufferfile(*args, **kwargs):
+
+    # Once the retained GPU protocol is available, shell painting must never
+    # rasterize into the shared CPU buffer.  graphicscapture temporarily
+    # replaces this wrapper while it records equivalent GPU commands.
+    if graphicsstrictgpu() and not GRAPHICSBUILDING:
+        return True
+
+    return _CPUFILLBUFFERFILE(*args, **kwargs)
+
+
 def graphicsrequired(role):
 
     if role == "desktop":
@@ -1260,6 +1283,12 @@ def graphicsfallback(sock, role, reason, clear=True):
 
     log(f"managed graphics disabled role={role} winid={wid} reason={reason}")
 
+    if graphicsstrictgpu():
+        # Preserve the last committed GPU scene.  A managed-protocol failure
+        # must be visible as a failure, never hidden by CPU raster fallback.
+        log(f"strict GPU mode suppressed CPU fallback role={role} winid={wid}")
+        return False
+
     if clear and sock is not None and wid > 0:
 
         try:
@@ -1368,15 +1397,31 @@ def graphicsmanagedpaint(sock, role, dirty=None):
 
     state = graphicsstatefor(role)
 
-    if state is None or not state.get("active") or not state.get("managed_only"):
-        return False
+    if state is None or not state.get("available"):
+        # Under an active system-wide GPU contract, do not enter the CPU paint
+        # path just because one surface encountered a protocol error.
+        return bool(graphicsstrictgpu())
 
     width, height = graphicsdimensions(role)
 
     if dirty is None:
         dirty = [0, 0, width, height]
 
-    return bool(graphicspresent(sock, role, dirty))
+    presented = bool(graphicspresent(sock, role, dirty))
+
+    # A managed scene commit is asynchronous.  While its acknowledgement is
+    # pending the GPU path already owns this surface, so falling through to
+    # the CPU painter would race the retained scene and violates managed-only
+    # presentation.  Treat an accepted pending submission as handled.
+    if graphicsstrictgpu() and state.get("available"):
+        return bool(
+            presented
+            or state.get("active")
+            or state.get("pending")
+            or state.get("need_submit")
+        )
+
+    return presented
 
 
 def graphicsrestorecpu(sock, role):
@@ -1418,10 +1463,12 @@ def graphicssuspend(sock, role):
     if state is None or not state.get("available") or wid <= 0:
         return False
 
+    # Retain the last committed scene while resize requests settle.  Clearing
+    # here temporarily selected the shared CPU surface and allowed a delayed
+    # clear acknowledgement to erase the replacement Start-menu scene.
     state["_suspended"] = True
-    cleared = managedclear(state, lambda request: graphicssend(sock, request), wid)
     state["need_submit"] = False
-    return cleared
+    return True
 
 
 def graphicsresponse(sock, msg):
@@ -1451,6 +1498,10 @@ def graphicsresponse(sock, msg):
 
         GRAPHICSSCENES.pop(role, None)
         log(f"managed graphics response fallback role={role} reason={state.get('failure', '')}")
+
+        if graphicsstrictgpu():
+            log(f"strict GPU mode retained last scene role={role} winid={wid}")
+            return handled
 
         try:
             sendline(sock, {"op": "GRAPHICS_CLEAR", "winid": wid})
@@ -1529,27 +1580,8 @@ def readfbsize():
 
 def scalefromfb(w, h):
 
-    try:
-
-        if w <= 0 or h <= 0:
-            return 1.0
-
-        base = float(BASE_DESKTOPW * BASE_DESKTOPH)
-
-        cur = float(int(w) * int(h))
-
-        s = math.sqrt(cur / base)
-
-        if s < 0.65:
-            s = 0.65
-
-        if s > 2.25:
-            s = 2.25
-
-        return float(s)
-
-    except Exception:
-        return 1.0
+    return displayuiscale(
+        w, h, 1.0, BASE_DESKTOPW, BASE_DESKTOPH)
 
 
 def s(value, minval=1):
@@ -1574,8 +1606,10 @@ def applyscale(preference=None):
         if preference is None:
             preference = uiscalefactor()
         preference = max(0.5, min(3.0, float(preference)))
-        globals()["SCALE"] = (
-            scalefromfb(DESKTOPW, DESKTOPH) * preference)
+        globals()["SCALE"] = max(
+            0.5,
+            min(3.0, scalefromfb(DESKTOPW, DESKTOPH) * preference),
+        )
 
         globals()["BRICKFONTSIZE"] = s(BASE_BRICKFONTSIZE, 9)
 
@@ -1834,6 +1868,10 @@ def iconcachedir():
     parent = os.path.realpath("/.ephemeral/expanse")
     root = os.path.abspath(ICONCACHEROOT)
 
+    # Expanse is the owner of this private runtime namespace.  A clean boot or
+    # isolated diagnostic may legitimately be the first process to create it.
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+
     parentstatus = os.lstat(parent)
 
     if (
@@ -1907,6 +1945,9 @@ def surfacestagingpath(role):
 
 
 def commitcpusurface(staged, live, expected):
+
+    if graphicsstrictgpu() and not GRAPHICSBUILDING:
+        return True
 
     expected = int(expected)
 
@@ -2219,11 +2260,12 @@ def ensurefont():
         return False
 
 
-def initstartitems():
+def initstartitems(username=None):
 
     try:
 
-        username = getusername()
+        if username is None:
+            username = getusername()
 
         globals()["STARTPLACEITEMS"] = [
             {"label": "root", "path": "/", "rect": None},
@@ -10800,6 +10842,9 @@ def paintstartmenu(sock):
 
 def blitrawscaledintobuffer(srcpath, srcw, srch, dstpath, dsttotalw, dstx, dsty, outw, outh):
 
+    if graphicsstrictgpu() and not GRAPHICSBUILDING:
+        return True
+
     try:
 
         srcw = int(srcw)
@@ -11046,6 +11091,10 @@ def textbaseliney(by, recth, size):
 
 
 def drawttffile(path, totalw, totalh, x, y, text, color, size):
+
+    if graphicsstrictgpu() and not GRAPHICSBUILDING:
+        return True
+
     try:
 
         if not ensurefont():
@@ -11414,8 +11463,12 @@ def handleerror(sock, msg):
 
         log(f"server error code={code} winid={wid} detail={detail}")
 
-        # if a pending map failed, stop spamming and decide next step
-        if wid in AWAITMAP:
+        # Only a MAP failure invalidates a pending map.  Graphics/DAMAGE
+        # errors can arrive while the first asynchronous managed scene is
+        # awaiting its acknowledgement; treating those as MAP failures used
+        # to create replacement taskbars until the client window limit was
+        # exhausted.
+        if wid in AWAITMAP and code in ("map_failed", "unknown_window", "not_owner"):
 
             AWAITMAP.pop(wid, None)
 
@@ -11763,7 +11816,10 @@ def handlefbsize(sock, msg):
         preference = uiscalefactor()
 
     sizechanged = bool(w != DESKTOPW or h != DESKTOPH)
-    targetscale = scalefromfb(w, h) * preference
+    targetscale = max(
+        0.5,
+        min(3.0, scalefromfb(w, h) * preference),
+    )
     scalechanged = abs(float(targetscale) - float(SCALE)) > 0.001
 
     if not sizechanged and not scalechanged:
@@ -11806,15 +11862,11 @@ def handlefbsize(sock, msg):
     try:
 
         if DESKTOPID is not None:
-
-            if sizechanged:
-                sendline(sock, {
-                    "op": "RESIZE",
-                    "winid": DESKTOPID,
-                    "w": DESKTOPW,
-                    "h": DESKTOPH,
-                })
-
+            # WindowServer owns display-driven desktop resizing.  Update the
+            # retained scene geometry without issuing the client-forbidden
+            # desktop RESIZE request.
+            graphicsupdategeometry(
+                "desktop", DESKTOPW, DESKTOPH, DESKTOPBUF)
             paintdesktop(sock)
 
     except Exception as e:
@@ -11873,9 +11925,12 @@ def handlefbsize(sock, msg):
             graphicsupdategeometry(
                 "startmenu", STARTW, STARTH, STARTBUF)
 
+            # Build the resized retained scene even while the menu is hidden,
+            # so its next map cannot expose stale CPU pixels or old scale.
+            paintstartmenu(sock)
+
             if STARTMAPPED:
                 openstartmenu(sock)
-                paintstartmenu(sock)
 
     except Exception as e:
 
@@ -12741,7 +12796,8 @@ def startmenupaintdiagnostic(emit=True):
     }
     names = (
         "STARTID", "STARTBUF", "STARTW", "STARTH", "STARTLEFTW",
-        "STARTPLACEITEMS", "STARTSOFTITEMS", "POWERMENUOPEN", "STARTMENUPAINTERROR"
+        "STARTPLACEITEMS", "STARTSOFTITEMS", "POWERMENUOPEN", "STARTMENUPAINTERROR",
+        "GRAPHICSCPUOVERRIDE"
     )
     previous = {name: globals().get(name) for name in names}
     path = f"/the one/logs/.expanse-startmenu-{os.getpid()}.buf"
@@ -12758,6 +12814,12 @@ def startmenupaintdiagnostic(emit=True):
         globals()["STARTPLACEITEMS"] = []
         globals()["STARTSOFTITEMS"] = []
         globals()["POWERMENUOPEN"] = False
+        # This diagnostic deliberately validates the recovery renderer used
+        # only when GPU-managed graphics is unavailable.
+        globals()["GRAPHICSCPUOVERRIDE"] = True
+        os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+        with open(path, "wb") as surface:
+            surface.truncate(int(STARTW) * int(STARTH) * 4)
         left, right = socket.socketpair()
         paintstartmenu(left)
 
@@ -12839,6 +12901,22 @@ def graphicsdiagnostic():
         applyscale()
         initttffont(FONTPATH, BRICKFONTSIZE)
 
+        if (
+            abs(float(SCALE) - (4.0 / 3.0)) > 0.001
+            or int(TASKBARH) != 64
+            or abs(float(scalefromfb(2560, 1600)) - (4.0 / 3.0)) > 0.001
+        ):
+            raise RuntimeError(
+                f"Expanse uniform display scale is inconsistent "
+                f"scale={SCALE} taskbar={TASKBARH} aspect={scalefromfb(2560, 1600)}"
+            )
+
+        result["checks"]["uniform_display_scale"] = {
+            "scale_1440p": round(float(SCALE), 4),
+            "taskbar_height": int(TASKBARH),
+            "scale_2560x1600": round(float(scalefromfb(2560, 1600)), 4),
+        }
+
         masterpaths = iconmasterpaths()
 
         if len(masterpaths) != 21:
@@ -12880,7 +12958,11 @@ def graphicsdiagnostic():
                 largeicon[0] == firsticon[0] or
                 int(ICONCACHEHITS) <= cachehits
         ):
-            raise RuntimeError("PNG icon cache did not preserve hits and resolution-specific surfaces")
+            raise RuntimeError(
+                "PNG icon cache did not preserve hits and resolution-specific surfaces "
+                f"first={firsticon} second={secondicon} large={largeicon} "
+                f"hits={ICONCACHEHITS}/{cachehits} failures={sorted(ICONCACHEFAILURES)}"
+            )
 
         for prepared in (firsticon, largeicon):
 
@@ -12897,7 +12979,10 @@ def graphicsdiagnostic():
             "resolution_variants": 2,
             "surface_bytes": os.path.getsize(firsticon[0]) + os.path.getsize(largeicon[0]),
         }
-        initstartitems()
+        # The graphics diagnostic runs outside an authenticated desktop
+        # session, so give discovery a valid synthetic identity rather than
+        # depending on the production session-authorisation file.
+        initstartitems("diagnostic")
 
         playeritems = [
             item for item in STARTSOFTITEMS
@@ -13259,6 +13344,7 @@ def graphicsdiagnostic():
                 "count": len(scene),
                 "batch": True,
                 "accelerated": True,
+                "managed_only": True,
             })
 
             if not state.get("active") or state.get("pending"):
@@ -13292,8 +13378,14 @@ def graphicsdiagnostic():
             "detail": "diagnostic",
         })
 
-        if tooltipstate.get("available") or tooltipstate.get("active") or not taskbarstate.get("active"):
-            raise RuntimeError("managed failure was not isolated to one Expanse surface")
+        if (
+            not tooltipstate.get("available")
+            or not tooltipstate.get("active")
+            or not tooltipstate.get("managed_only")
+            or not tooltipstate.get("need_submit")
+            or not taskbarstate.get("active")
+        ):
+            raise RuntimeError("managed failure escaped strict GPU rendering")
 
         cpustate = managedstate(cpu=True)
 
@@ -13311,13 +13403,18 @@ def graphicsdiagnostic():
         managedsubmit(timeoutstate, lambda request: True, 500, [scenes["desktop"][0]])
         timeoutstate["pending_at"] = time.monotonic() - 3.0
 
-        if managedtick(timeoutstate, timeout=2.0):
-            raise RuntimeError("Expanse managed timeout did not select the CPU fallback")
+        if (
+            not managedtick(timeoutstate, timeout=2.0)
+            or not timeoutstate.get("active")
+            or not timeoutstate.get("managed_only")
+            or not timeoutstate.get("need_submit")
+        ):
+            raise RuntimeError("Expanse managed timeout escaped strict GPU rendering")
 
         result["checks"]["cpu_fallback"] = True
         result["checks"]["missing_capability_fallback"] = True
-        result["checks"]["error_fallback"] = True
-        result["checks"]["timeout_fallback"] = True
+        result["checks"]["error_gpu_retention"] = True
+        result["checks"]["timeout_gpu_retention"] = True
         result["checks"]["surface_failure_isolation"] = True
 
         samples = {role: [] for role in definitions}

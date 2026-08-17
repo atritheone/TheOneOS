@@ -75,7 +75,9 @@ SHUTDOWNHEALTHREQUEST = os.path.join(
 SESSIONIDENTITY = '/the one/settings/session/identity.json'
 
 
-def _normaliseownedtree(descriptor, *, directorymode=0o700, filemode=None):
+def _normaliseownedtree(
+        descriptor, *, directorymode=0o700, filemode=None,
+        rootownedfiles=()):
 
     """Normalize an existing tree without following links or flattening modes."""
 
@@ -98,8 +100,23 @@ def _normaliseownedtree(descriptor, *, directorymode=0o700, filemode=None):
             finally:
                 os.close(child)
         elif statmodule.S_ISREG(status.st_mode):
+            if name in rootownedfiles:
+                if (
+                    status.st_uid != 0 or status.st_gid != 0 or
+                    status.st_nlink != 1 or
+                    statmodule.S_IMODE(status.st_mode) != 0o644
+                ):
+                    raise PermissionError(
+                        f'protected root-owned output is unsafe: {name}')
+                # Goddess verifies these endpoints but never changes or writes
+                # them. Reign owns all content publication through the exact
+                # LSM path allowance.
+                continue
+            owner = (
+                (T1OS_DESKTOP_UID, T1OS_DESKTOP_GID)
+            )
             os.chown(
-                name, T1OS_DESKTOP_UID, T1OS_DESKTOP_GID,
+                name, owner[0], owner[1],
                 dir_fd=descriptor, follow_symlinks=False)
             # Preserve owner read/write/execute and all read/execute semantics;
             # remove only set-id and group/other write authority.
@@ -122,7 +139,7 @@ def normaliseservicesettings():
     settingsroot = '/the one/settings'
     os.chown(settingsroot, 0, 0, follow_symlinks=False)
     os.chmod(settingsroot, 0o755, follow_symlinks=False)
-    for relative in ('audio', 'display', 'mouse', 'network'):
+    for relative in ('audio', 'display', 'mouse', 'network', 'time'):
         path = os.path.join(settingsroot, relative)
         if not os.path.exists(path):
             os.mkdir(path, mode=0o755)
@@ -132,11 +149,52 @@ def normaliseservicesettings():
             getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
         )
         try:
+            if relative == 'time':
+                defaults = (
+                    ('internet.txt', b'false\n'),
+                    ('virtualbox.txt', b'true\n'),
+                    ('timezone.txt', b'Australia/Sydney\n'),
+                )
+                for name, value in defaults:
+                    try:
+                        setting = os.open(
+                            name,
+                            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                            getattr(os, 'O_NOFOLLOW', 0) |
+                            getattr(os, 'O_CLOEXEC', 0),
+                            0o644,
+                            dir_fd=descriptor,
+                        )
+                    except FileExistsError:
+                        continue
+                    try:
+                        if os.write(setting, value) != len(value):
+                            raise OSError('short write publishing time default')
+                        os.fsync(setting)
+                    finally:
+                        os.close(setting)
+                # Establish the protected publication endpoints without ever
+                # opening them for write. The kernel permits PID 1 to create
+                # only these two empty regular inodes; Reign is their writer.
+                for name in ('common.txt', 'atreyan.txt'):
+                    try:
+                        os.mknod(
+                            name, statmodule.S_IFREG | 0o644,
+                            dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
             # These are service-consumed, non-secret settings.  The desktop
             # Settings process owns mutation, while boot services must be able
             # to traverse and read them without broad DAC-bypass capability.
+            # The desktop owns the three user-selectable policy inputs. Reign
+            # exclusively publishes these two derived clock outputs and
+            # validates that they remain root-owned before every update.
+            rootownedfiles = (
+                ('common.txt', 'atreyan.txt') if relative == 'time' else ()
+            )
             _normaliseownedtree(
-                descriptor, directorymode=0o755, filemode=0o644)
+                descriptor, directorymode=0o755, filemode=0o644,
+                rootownedfiles=rootownedfiles)
             if relative == 'network':
                 # Network atomically replaces only its exact LSM-authorized DNS
                 # output; the directory DAC must permit its root-owned temp.

@@ -647,12 +647,12 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -eq 'player') {
 
-        if (-not $actual.checks.geometry -or -not $actual.checks.playing_scene -or -not $actual.checks.metadata_scene -or -not $actual.checks.embedded_artwork -or -not $actual.checks.metadata_worker -or -not $actual.checks.paused_scene -or -not $actual.checks.drag_preview -or -not $actual.checks.time_format -or -not $actual.checks.compact_layout -or -not $actual.checks.open_prompt -or -not $actual.checks.focus_input -or -not $actual.checks.playback_lifecycle) {
+        if (-not $actual.checks.geometry -or -not $actual.checks.playing_scene -or -not $actual.checks.metadata_scene -or -not $actual.checks.embedded_artwork -or -not $actual.checks.metadata_worker -or -not $actual.checks.deferred_artwork -or -not $actual.checks.pending_artwork_state -or -not $actual.checks.paused_scene -or -not $actual.checks.drag_preview -or -not $actual.checks.time_format -or -not $actual.checks.compact_layout -or -not $actual.checks.focus_input -or -not $actual.checks.playback_lifecycle) {
             throw 'the Player diagnostic did not validate its playback controls, states, and responsive layout.'
         }
 
-        if (-not $actual.checks.managed_graphics -or -not $actual.checks.cpu_fallback -or -not $actual.checks.cpu_paint) {
-            throw 'the Player diagnostic did not validate managed rendering and the CPU fallback.'
+        if (-not $actual.checks.managed_graphics -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention -or -not $actual.checks.cpu_fallback -or -not $actual.checks.cpu_paint) {
+            throw 'the Player diagnostic did not validate managed rendering, strict GPU recovery, and the unavailable-GPU recovery painter.'
         }
 
         Write-Host 'Player managed graphics diagnostic passed.'
@@ -701,8 +701,8 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -eq 'write') {
 
-        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.error_fallback -or -not $actual.checks.timeout_fallback) {
-            throw 'the Write diagnostic did not exercise managed negotiation and every CPU fallback path.'
+        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
+            throw 'the Write diagnostic did not exercise managed negotiation and strict GPU recovery.'
         }
 
         if (-not $actual.checks.opaque_background -or -not $actual.checks.atkinson_baseline -or -not $actual.checks.variable_width_clipping) {
@@ -794,8 +794,8 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -eq 'array') {
 
-        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_fallback -or -not $actual.checks.timeout_fallback) {
-            throw 'the Array diagnostic did not exercise managed negotiation and every CPU fallback path.'
+        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
+            throw 'the Array diagnostic did not exercise managed negotiation and strict GPU recovery.'
         }
 
         if (-not $actual.checks.opaque_background -or -not $actual.checks.first_frame_complete -or -not $actual.checks.atkinson_baseline -or -not $actual.checks.variable_width_clipping -or -not $actual.checks.tree_clipping) {
@@ -862,9 +862,10 @@ function Invoke-GraphicsBaseline {
             -not $actual.checks.gpu_performance -or
             -not $actual.checks.gpu_column -or
             -not $actual.checks.column_resize -or
-            -not $actual.checks.default_sort.descending
+            [string]$actual.checks.default_sort.column -ne 'name' -or
+            [bool]$actual.checks.default_sort.descending
         ) {
-            throw 'the Operations Centre diagnostic did not preserve GPU telemetry, column resizing, descending operation sort, or graphics fallback.'
+            throw 'the Operations Centre diagnostic did not preserve GPU telemetry, column resizing, alphabetical operation sort, or graphics fallback.'
         }
 
         if ([int]$actual.checks.command_budget -ge 768) {
@@ -893,11 +894,11 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -eq 'expanse') {
 
-        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_fallback -or -not $actual.checks.timeout_fallback) {
-            throw 'the Expanse diagnostic did not exercise managed negotiation and every CPU fallback path.'
+        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
+            throw 'the Expanse diagnostic did not exercise managed negotiation and strict GPU recovery.'
         }
 
-        if ([int]$actual.checks.opaque_backgrounds -ne 7 -or -not $actual.checks.first_frame_complete -or -not $actual.checks.atkinson_baseline -or -not $actual.checks.variable_width_clipping -or [int]$actual.checks.bgra_images -lt 1 -or [int]$actual.checks.png_icons -ne 20 -or -not $actual.checks.dedicated_software_icons -or -not $actual.checks.calculator_software -or -not $actual.checks.operations_centre_software -or -not $actual.checks.png_icon_cache.hit -or [int]$actual.checks.png_icon_cache.resolution_variants -ne 2) {
+        if ([int]$actual.checks.opaque_backgrounds -ne 7 -or -not $actual.checks.first_frame_complete -or -not $actual.checks.atkinson_baseline -or -not $actual.checks.variable_width_clipping -or [int]$actual.checks.bgra_images -lt 1 -or [int]$actual.checks.png_icons -ne 21 -or -not $actual.checks.dedicated_software_icons -or -not $actual.checks.calculator_software -or -not $actual.checks.operations_centre_software -or -not $actual.checks.png_icon_cache.hit -or [int]$actual.checks.png_icon_cache.resolution_variants -ne 2) {
             throw 'the Expanse diagnostic did not validate complete first frames, PNG masters, resolution-specific icon caching, Atkinson text, clipping, and BGRA surfaces.'
         }
 
@@ -983,8 +984,8 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -in @('startup', 'lockscreen', 'boot')) {
 
-        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_fallback -or -not $actual.checks.timeout_fallback) {
-            throw "the $Mode diagnostic did not exercise managed negotiation and every CPU fallback path."
+        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.missing_capability_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
+            throw "the $Mode diagnostic did not exercise managed negotiation and strict GPU recovery."
         }
 
         if (-not $actual.checks.opaque_background -or -not $actual.checks.first_frame_complete -or -not $actual.checks.first_frame_before_map) {

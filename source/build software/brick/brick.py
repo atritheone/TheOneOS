@@ -79,7 +79,7 @@ from operations.operations import (
     runoperation,
 )
 _prefer_source_build()
-from python.pythonclient import PythonManagerError, request as pythonrequest
+from python.python import PythonManagerError, request as pythonrequest
 
 try:
     _prefer_source_build()
@@ -2443,11 +2443,8 @@ def applyuiscale(w, h):
     if w <= 0 or h <= 0:
         return
 
-    basearea = float(BASESCREENW * BASESCREENH)
-
-    area = float(w * h)
-
-    UISCALE = math.sqrt(area / basearea) * uiscalefactor()
+    UISCALE = displayuiscale(
+        w, h, uiscalefactor(), BASESCREENW, BASESCREENH)
 
     if UISCALE < 0.50:
         UISCALE = 0.50
@@ -4329,22 +4326,8 @@ def contentlayout():
 # window functions
 def windowsqrt(scale_w, scale_h):
 
-    if scale_w <= 0 or scale_h <= 0:
-        return 1.0
-
-    basearea = float(BASESCREENW * BASESCREENH)
-
-    area = float(scale_w * scale_h)
-
-    s = math.sqrt(area / basearea)
-
-    if s < 0.50:
-        s = 0.50
-
-    if s > 3.00:
-        s = 3.00
-
-    return s
+    return displayuiscale(
+        scale_w, scale_h, 1.0, BASESCREENW, BASESCREENH)
 
 
 def windowrequest():
@@ -4546,8 +4529,9 @@ def handleservermsg(msg):
 
             if code.startswith("graphics_"):
                 managedresponse(GRAPHICSSTATE, msg)
+                graphicssyncstate()
 
-                if code != "graphics_clear_failed" and SOCK and WINID:
+                if code != "graphics_clear_failed" and not GRAPHICSAVAILABLE and SOCK and WINID:
                     sendline(SOCK, {
                         "op": "GRAPHICS_CLEAR",
                         "winid": WINID,
@@ -7007,7 +6991,10 @@ def graphicsdisable(reason, clear=True):
 
     global GRAPHICSSCENE
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        GRAPHICSSCENE = []
+        graphicssyncstate()
+        return True
     GRAPHICSSCENE = []
 
     try:
@@ -7020,6 +7007,7 @@ def graphicsdisable(reason, clear=True):
 
     graphicssyncstate()
     graphicsrestorecpu()
+    return False
 
 
 def graphicssuspend():
@@ -19135,6 +19123,7 @@ def graphicsdiagnostic():
 
         try:
 
+            os.makedirs(os.path.dirname(diagnosticimage), mode=0o700, exist_ok=True)
             with open(diagnosticimage, 'wb') as stream:
                 stream.write(bytes((0, 0, 255, 255)) * 16)
 

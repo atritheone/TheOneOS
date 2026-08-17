@@ -36,7 +36,7 @@ def _prefer_build_root():
 _prefer_build_root()
 
 try:
-    from python.pythonclient import (
+    from python.python import (
         PythonManagerError,
         request as pythonrequest,
     )
@@ -205,6 +205,9 @@ SCREENW = 1920
 SCREENH = 1080
 GRAPHICSBACKEND = 'none'
 GRAPHICSCONNECTOR = 0
+GRAPHICSSTATE = None
+GRAPHICSSTRICT = False
+GRAPHICSCOMMANDS = None
 NEEDWINDOW = True
 HASFOCUS = True
 NEEDREDRAW = True
@@ -284,11 +287,13 @@ def clamp(value, minimum, maximum):
 
 def uiscalefor(width, height, requested=1.0):
     try:
-        area = max(1.0, float(width) * float(height))
-        basearea = float(BASESCREENW * BASESCREENH)
-        automatic = (area / basearea) ** 0.5
         requested = clamp(float(requested), 0.5, 3.0)
-        return max(0.5, automatic * requested)
+        width = float(width)
+        height = float(height)
+        if width <= 0.0 or height <= 0.0:
+            return requested
+        automatic = min(width / float(BASESCREENW), height / float(BASESCREENH))
+        return clamp(automatic * requested, 0.5, 3.0)
     except Exception:
         return 1.0
 
@@ -2929,18 +2934,50 @@ def layout():
 
 
 def loadgraphics():
-    global gfx
+    global gfx, GRAPHICSSTATE
     buildroot = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     while buildroot in sys.path:
         sys.path.remove(buildroot)
     sys.path.insert(0, buildroot)
     import graphics.graphics as graphics
     gfx = graphics
+    GRAPHICSSTATE = gfx.managedstate()
+
+
+def configuregraphics(capabilities):
+    global GRAPHICSSTRICT
+    capabilities = capabilities if isinstance(capabilities, dict) else {}
+    GRAPHICSSTRICT = bool(
+        capabilities.get('accelerated') and
+        capabilities.get('managed_resources'))
+    if GRAPHICSSTATE is not None:
+        gfx.managedconfigure(
+            GRAPHICSSTATE, capabilities,
+            required=('rectangle', 'text'))
+
+
+def managedclip(clip=None):
+    if clip is None:
+        return [0, 0, int(PIXELW), int(PIXELH)]
+    return scalerect(clip)
 
 
 def drawtext(x, y, text, colour=COLOURTEXT, size=15, clip=None):
     try:
         physicalclip = scalerect(clip) if clip is not None else None
+        if GRAPHICSCOMMANDS is not None:
+            pixelsize = scalepixel(size, 1)
+            GRAPHICSCOMMANDS.append({
+                'kind': 'text',
+                'x': scalepixel(x),
+                'y': scalepixel(y) + pixelsize,
+                'text': str(text),
+                'size': pixelsize,
+                'font': FONT,
+                'color': int(colour),
+                'clip': physicalclip or managedclip(),
+            })
+            return
         gfx.drawtextttf(
             scalepixel(x), scalepixel(y), str(text), int(colour),
             scalepixel(size, 1), fontpath=FONT, clip=physicalclip)
@@ -2950,6 +2987,15 @@ def drawtext(x, y, text, colour=COLOURTEXT, size=15, clip=None):
 
 def fill(rect, colour):
     physical = scalerect(rect)
+    if GRAPHICSCOMMANDS is not None:
+        if physical[2] > 0 and physical[3] > 0:
+            GRAPHICSCOMMANDS.append({
+                'kind': 'rectangle',
+                'rect': physical,
+                'color': int(colour),
+                'clip': managedclip(),
+            })
+        return
     gfx.fillrectfast(physical[0], physical[1], physical[2], physical[3], int(colour))
 
 
@@ -3065,10 +3111,18 @@ def dropdownrow(name, label, value, rect, options, disabled=False):
     shown = next((choice['label'] for choice in choices if choice['value'] == value), str(value))
     shown = elidetext(shown, valuebox[2] - 48)
     opened = bool(DROPDOWN and DROPDOWN.get('name') == name)
-    physical = scalerect(valuebox)
-    gfx.drawdropdowncontrol(
-        physical[0], physical[1], physical[2], physical[3], shown,
-        FONT, scalepixel(15, 1), opened=opened)
+    if GRAPHICSCOMMANDS is not None:
+        fill(valuebox, COLOURBG)
+        border(valuebox, COLOURTEXT if opened else COLOURDIVIDER)
+        drawtext(valuebox[0] + 12, valuebox[1] + 10, shown,
+                 COLOURMUTED if disabled else COLOURTEXT, 15)
+        drawtext(valuebox[0] + valuebox[2] - 26, valuebox[1] + 9,
+                 '⌄', COLOURMUTED, 16)
+    else:
+        physical = scalerect(valuebox)
+        gfx.drawdropdowncontrol(
+            physical[0], physical[1], physical[2], physical[3], shown,
+            FONT, scalepixel(15, 1), opened=opened)
     CONTROLS['dropdowns'][name] = {
         'rect': valuebox,
         'options': choices,
@@ -3130,10 +3184,21 @@ def paintdropdown():
     hovered = None if DROPDOWNHOVER is None else int(DROPDOWNHOVER) - offset
     if hovered is not None and not (0 <= hovered < len(choices)):
         hovered = None
-    physical = scalerect(popup)
-    gfx.drawdropdownmenu(
-        physical, labels, FONT, fontsize=scalepixel(15, 1),
-        rowheight=scalepixel(34, 1), selected=selected, hovered=hovered)
+    if GRAPHICSCOMMANDS is not None:
+        fill(popup, COLOURBG)
+        border(popup, COLOURDIVIDER)
+        for index, label in enumerate(labels):
+            row = [popup[0] + 1, popup[1] + index * 34 + 1,
+                   max(0, popup[2] - 2), 34]
+            if index == hovered:
+                fill(row, COLOURSTATUS)
+            drawtext(row[0] + 10, row[1] + 8, label,
+                     COLOURTEXT if index == selected else COLOURMUTED, 15)
+    else:
+        physical = scalerect(popup)
+        gfx.drawdropdownmenu(
+            physical, labels, FONT, fontsize=scalepixel(15, 1),
+            rowheight=scalepixel(34, 1), selected=selected, hovered=hovered)
 
 
 def dropdownoptionat(x, y):
@@ -3294,10 +3359,17 @@ def pythonscrollmaximum(modules=None):
 
 
 def paint():
-    global NEEDREDRAW, CONTROLS
+    global NEEDREDRAW, CONTROLS, GRAPHICSCOMMANDS
     if not NEEDREDRAW or BUFFER is None or WINID is None:
         return
     NEEDREDRAW = False
+    managed = bool(
+        GRAPHICSSTRICT and GRAPHICSSTATE is not None and
+        GRAPHICSSTATE.get('available'))
+    if GRAPHICSSTRICT and not managed:
+        # Never hide a managed-rendering failure with shared-buffer pixels.
+        return
+    GRAPHICSCOMMANDS = [] if managed else None
     CONTROLS = layout()
     fill([0, 0, WINW, WINH], COLOURBG)
     # Array keeps its header and sidebar on the same black canvas and separates
@@ -3710,6 +3782,21 @@ def paint():
     if statusvisible():
         drawtext(205, WINH - 50, STATUS, COLOURERROR if STATUSERROR else COLOURTEXT, 13)
     paintdropdown()
+    if managed:
+        commands = GRAPHICSCOMMANDS
+        GRAPHICSCOMMANDS = None
+        if (
+            not commands or commands[0].get('kind') != 'rectangle' or
+            commands[0].get('rect') != [0, 0, int(PIXELW), int(PIXELH)]
+        ):
+            raise RuntimeError('Settings managed scene has no complete background')
+        gfx.managedmarkdamage(
+            GRAPHICSSTATE, [0, 0, int(PIXELW), int(PIXELH)],
+            bounds=(int(PIXELW), int(PIXELH)))
+        gfx.managedsubmit(
+            GRAPHICSSTATE, lambda request: sendws(request) or True,
+            WINID, commands)
+        return
     gfx.present()
     sendws({'op': 'DAMAGE', 'winid': WINID, 'rect': [0, 0, PIXELW, PIXELH]})
 
@@ -4388,7 +4475,8 @@ def bindbuffer(path, width, height):
     PIXELW, PIXELH = max(1, int(width)), max(1, int(height))
     WINW = max(1, int(round(PIXELW / max(0.01, UISCALE))))
     WINH = max(1, int(round(PIXELH / max(0.01, UISCALE))))
-    gfx.initbuffer(BUFFER, PIXELW, PIXELH)
+    if not GRAPHICSSTRICT:
+        gfx.initbuffer(BUFFER, PIXELW, PIXELH)
     gfx.initttffont(FONT, scalepixel(15, 1))
     redraw()
 
@@ -4406,6 +4494,7 @@ def handlews(message):
         scalechanged = applyuiscale()
         if operation == 'WELCOME':
             graphicsstate = message.get('graphics', {})
+            configuregraphics(graphicsstate)
             GRAPHICSBACKEND = str(graphicsstate.get('backend', GRAPHICSBACKEND)).lower()
             try:
                 GRAPHICSCONNECTOR = int(graphicsstate.get('connector') or 0)
@@ -4435,6 +4524,13 @@ def handlews(message):
         sendws({'op': 'FOCUS_SET', 'winid': WINID})
     elif operation == 'RESIZED':
         bindbuffer(message.get('buffer', BUFFER), message.get('w', PIXELW), message.get('h', PIXELH))
+    elif operation in ('GRAPHICS_COMMITTED', 'GRAPHICS_CLEARED') or (
+            operation == 'ERROR' and
+            str(message.get('code', '')).startswith('graphics_')):
+        if GRAPHICSSTATE is not None:
+            gfx.managedresponse(GRAPHICSSTATE, message)
+            if GRAPHICSSTATE.get('need_submit'):
+                redraw()
     elif operation == 'FOCUS':
         HASFOCUS = str(message.get('state', 'in')).lower() in ('in', 'focused', 'focus', '1', 'true')
         redraw()
@@ -4601,6 +4697,7 @@ def main():
 def diagnostic():
     global SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE, TERMINALNAME, MASTER
     global architect_authorize, architect_revoke, service_secret_delete, service_secret_exists, service_secret_put, settings_account_get, settings_hostname_set, settings_master_update, settings_recovery_authorize, settings_time_set
+    global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE
     if os.name == 'nt':
         result = {
             'passed': False,
@@ -5084,7 +5181,31 @@ def diagnostic():
                 and 'night_light_latitude' not in stored
                 and 'night_light_longitude' not in stored)
             result['checks']['ui_scale_default'] = DEFAULTDISPLAY.get('ui_scale') == 1.0
-            result['checks']['settings_high_dpi_scale'] = abs(uiscalefor(3840, 2160, 1.0) - 2.0) < 0.001
+            result['checks']['settings_uniform_display_scale'] = (
+                abs(uiscalefor(2560, 1440, 1.0) - (4.0 / 3.0)) < 0.001
+                and abs(uiscalefor(2560, 1600, 1.0) - (4.0 / 3.0)) < 0.001
+                and abs(uiscalefor(3840, 2160, 1.0) - 2.0) < 0.001)
+            previouslayoutstate = (UISCALE, WINW, WINH, SECTION, DISPLAYPAGE)
+            try:
+                UISCALE = uiscalefor(2560, 1440, 1.0)
+                WINW, WINH = BASEWINW, BASEWINH
+                SECTION, DISPLAYPAGE = 'display', 'main'
+                displayrows = layout()['rows']
+                valueboxes = (
+                    fieldvaluebox(displayrows['display']),
+                    dropdownvaluebox(displayrows['resolution']),
+                    dropdownvaluebox(displayrows['ui_scale']),
+                )
+                physicalboxes = tuple(scalerect(rect) for rect in valueboxes)
+                result['checks']['settings_field_alignment'] = (
+                    len({rect[0] for rect in valueboxes}) == 1
+                    and len({rect[2] for rect in valueboxes}) == 1
+                    and len({rect[0] for rect in physicalboxes}) == 1
+                    and len({rect[2] for rect in physicalboxes}) == 1
+                    and scalerect([0, 0, BASEWINW, BASEWINH])
+                    == [0, 0, 1227, 960])
+            finally:
+                UISCALE, WINW, WINH, SECTION, DISPLAYPAGE = previouslayoutstate
             result['checks']['muted_text_contrast'] = COLOURMUTED == 0x8A8A8A
             DISPLAY['width'], DISPLAY['height'] = 2560, 1440
             result['checks']['live_opengl_resolution'] = (

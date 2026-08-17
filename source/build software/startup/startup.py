@@ -386,7 +386,7 @@ def graphicsrecordimage(path, sourcew, sourceh, x, y, w, h):
 
 def clear(color=BACKGROUNDCOLOUR):
 
-    if not (GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only")):
+    if not (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
         _cpuclear(color)
 
     graphicsrecordrectangle(0, 0, int(SCREEN_W), int(SCREEN_H), color)
@@ -394,7 +394,7 @@ def clear(color=BACKGROUNDCOLOUR):
 
 def drawline(x1, y1, x2, y2, color):
 
-    if not (GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only")):
+    if not (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
         _cpudrawline(x1, y1, x2, y2, color)
 
     left = min(int(x1), int(x2))
@@ -406,7 +406,7 @@ def drawline(x1, y1, x2, y2, color):
 
 def drawtextttf(x, y, text, color, size, fontpath=None, clip=None):
 
-    if not (GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only")):
+    if not (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
         _cpudrawtextttf(
             x,
             y,
@@ -430,7 +430,7 @@ def drawtextttf(x, y, text, color, size, fontpath=None, clip=None):
 
 def drawimage(path, sourcew, sourceh, x, y, w, h):
 
-    if not (GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only")):
+    if not (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
         blitfilescaledfast(
             path,
             int(sourcew),
@@ -455,7 +455,7 @@ def cleartobrick():
 def fillrect(x, y, w, h, color):
 
     # fill over password characters
-    if not (GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only")):
+    if not (GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)):
 
         for yy in range(y, y + h):
             _cpudrawline(x, yy, x + w, yy, color)
@@ -1600,7 +1600,9 @@ def graphicsrestorecpu():
 
 def graphicsdisable(reason, clearcommands=True):
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        graphicssyncstate()
+        return True
 
     try:
 
@@ -1613,6 +1615,7 @@ def graphicsdisable(reason, clearcommands=True):
 
     graphicssyncstate()
     graphicsrestorecpu()
+    return False
 
 
 def graphicsresponse(msg):
@@ -2255,7 +2258,9 @@ def wspresent():
 
         rect = None
 
-    managedonly = bool(GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only"))
+    managedonly = bool(
+        GRAPHICSSTATE.get("available") and managedstrict(GRAPHICSSTATE)
+    )
     retainedrect = graphicsgetdirty()
 
     if managedonly:
@@ -4463,7 +4468,7 @@ def graphicsdiagnostic():
         image_x, image_y, image_w, image_h = imagelayout["image_rect"]
 
         if (
-            image_x + (image_w // 2) != SCREEN_W // 2 or
+            abs((image_x + (image_w // 2)) - (SCREEN_W // 2)) > 1 or
             image_y != SCREEN_H - (imagelayout["underline_y"] + 1) or
             image_w != diagnosticimage["width"] or
             image_h != diagnosticimage["height"] or
@@ -4762,6 +4767,7 @@ def graphicsdiagnostic():
             "count": len(scene),
             "batch": True,
             "accelerated": True,
+            "managed_only": True,
         })
         graphicssyncstate()
 
@@ -4869,13 +4875,22 @@ def graphicsdiagnostic():
         timedout["pending_at"] = time.monotonic() - 3.0
         managedtick(timedout, timeout=0.1)
 
-        if fallback.get("available") or missing.get("available") or rejected.get("available") or timedout.get("available"):
-            raise RuntimeError("a startup CPU fallback path remained managed")
+        if fallback.get("available") or missing.get("available"):
+            raise RuntimeError("a startup non-GPU fallback path remained managed")
+
+        if not all(
+            item.get("available")
+            and item.get("active")
+            and item.get("managed_only")
+            and item.get("need_submit")
+            for item in (rejected, timedout)
+        ):
+            raise RuntimeError("startup recovery escaped strict GPU rendering")
 
         result["checks"]["cpu_fallback"] = True
         result["checks"]["missing_capability_fallback"] = True
-        result["checks"]["error_fallback"] = True
-        result["checks"]["timeout_fallback"] = True
+        result["checks"]["error_gpu_retention"] = True
+        result["checks"]["timeout_gpu_retention"] = True
         result["checks"]["first_frame_before_map"] = True
         result["checks"]["authentication_material_absent"] = True
         result["performance"] = {

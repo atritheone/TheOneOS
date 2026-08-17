@@ -29,7 +29,7 @@ import graphics.graphics as gfx
 from graphics.graphics import initbuffer, fillrectfast, drawrect, drawline, drawtextttf
 from graphics.graphics import initttffont, measuretext, present as gfxpresent
 from graphics.graphics import managedstate, managedconfigure, manageddisable, managedclear
-from graphics.graphics import managedmarkdamage, managedtick, managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedmarkdamage, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 
 
 
@@ -206,8 +206,7 @@ def applyscale():
 
     try:
 
-        ratio = ((max(1, SCREENW) * max(1, SCREENH)) / float(1920 * 1080)) ** 0.5
-        UISCALE = max(0.65, min(2.5, ratio * uiscalefactor()))
+        UISCALE = displayuiscale(SCREENW, SCREENH, uiscalefactor())
 
     except Exception:
         UISCALE = 1.0
@@ -1503,9 +1502,9 @@ def submitscene():
 
     except Exception as error:
 
-        manageddisable(GRAPHICSSTATE, f'operations centre scene failed {error}')
+        retained = manageddisable(GRAPHICSSTATE, f'operations centre scene failed {error}')
         log(f'managed graphics disabled {error}')
-        return False
+        return bool(retained)
 
 
 def graphicsresponse(message):
@@ -1585,10 +1584,11 @@ def paint():
         return
 
     REDRAW = False
-    drawcpu()
 
     if GRAPHICSSTATE.get('available'):
         submitscene()
+    else:
+        drawcpu()
 
 
 

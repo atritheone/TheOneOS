@@ -44,7 +44,7 @@ from graphics.graphics import initbuffer, initttffont, measuretext
 from graphics.graphics import fillrectfast, blitfilepartfast, blitfilescaledfast, drawtextttf, present as gfxpresent
 from graphics.graphics import managedstate, managedconfigure, manageddisable
 from graphics.graphics import managedmarkdamage, managedclear, managedtick
-from graphics.graphics import managedsubmit, managedresponse, uiscalefactor
+from graphics.graphics import managedsubmit, managedresponse, uiscalefactor, displayuiscale
 
 
 
@@ -284,8 +284,7 @@ def applyscale(width=None, height=None):
 
             SCREENH = max(1, int(height))
 
-        area = max(1, SCREENW * SCREENH)
-        UISCALE = ((area / float(1920 * 1080)) ** 0.5) * uiscalefactor()
+        UISCALE = displayuiscale(SCREENW, SCREENH, uiscalefactor())
 
     except Exception:
 
@@ -2294,7 +2293,9 @@ def graphicsdisable(reason, clear=True):
 
     global GRAPHICSSCENE
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        GRAPHICSSCENE = []
+        return True
     GRAPHICSSCENE = []
 
     if clear and WINID is not None:
@@ -2302,6 +2303,7 @@ def graphicsdisable(reason, clear=True):
         sendws({'op': 'GRAPHICS_CLEAR', 'winid': WINID})
 
     redraw()
+    return False
 
 
 def graphicssuspend():
@@ -3636,20 +3638,32 @@ def graphicsdiagnostic():
         errorstate['pending'] = True
         managedresponse(errorstate, {'op': 'ERROR', 'code': 'graphics_scene_failed'})
 
-        if errorstate.get('available'):
+        if (
+            not errorstate.get('available')
+            or not errorstate.get('active')
+            or not errorstate.get('managed_only')
+            or not errorstate.get('need_submit')
+        ):
 
-            raise RuntimeError('player retained managed rendering after a server error')
+            raise RuntimeError('player escaped strict GPU rendering after a server error')
 
         timeoutstate = managedstate()
         managedconfigure(timeoutstate, capabilities, required=('rectangle', 'image', 'text'))
         timeoutstate['pending'] = True
         timeoutstate['pending_at'] = time.monotonic() - 10.0
 
-        if managedtick(timeoutstate, timeout=0.1):
+        if (
+            not managedtick(timeoutstate, timeout=0.1)
+            or not timeoutstate.get('active')
+            or not timeoutstate.get('managed_only')
+            or not timeoutstate.get('need_submit')
+        ):
 
-            raise RuntimeError('player retained managed rendering after a commit timeout')
+            raise RuntimeError('player escaped strict GPU rendering after a commit timeout')
 
         result['checks']['managed_graphics'] = True
+        result['checks']['error_gpu_retention'] = True
+        result['checks']['timeout_gpu_retention'] = True
         result['checks']['cpu_fallback'] = True
         PLAYSTATE = 'paused'
         paused = buildscene()

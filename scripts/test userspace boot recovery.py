@@ -55,7 +55,7 @@ def main():
         'static bool t1os_is_ephemeral_path',
         'if (t1os_is_ephemeral_path(name)) {',
         't1os_struct_path_is_ephemeral(&destination)',
-        '"/the one/settings/network/dns.txt.temporary-"',
+        'static bool t1os_is_reign_time_output_path',
         '!strcmp(target, "/.ephemeral")',
     )
 
@@ -73,7 +73,7 @@ def main():
 
     inputserver = source('source/build software/input/inputserver.py')
     windowserver = source('source/build software/windows/windowserver.py')
-    pythonmanager = source('source/build software/python/pip.py')
+    pythonmanager = source('source/build software/python/python.py')
     network = source('source/build software/network/network.py')
     for implementation, name in (
         (function(inputserver, 'makepaths'), 'InputServer'),
@@ -98,6 +98,12 @@ def main():
     require(
         function(goddess, 'normaliseservicesettings'),
         'directorymode=0o755, filemode=0o644',
+        "('virtualbox.txt', b'true\\n')",
+        "('timezone.txt', b'Australia/Sydney\\n')",
+        'os.mknod(',
+        'statmodule.S_IFREG | 0o644',
+        "('common.txt', 'atreyan.txt')",
+        'rootownedfiles=rootownedfiles',
         "if relative == 'network':",
         'os.fchmod(descriptor, 0o777)',
     )
@@ -145,6 +151,7 @@ def main():
         "'action': 'TIME_SAMPLE_SET'",
         "result.get('status') != 'ok'",
     )
+    assert reign.index("if __name__ == '__main__':") < reign.index('    initialise()')
 
     array = source('source/build software/array/array.py')
     typedlaunch = function(array, 'opsrun')

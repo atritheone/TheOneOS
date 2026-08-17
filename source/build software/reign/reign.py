@@ -27,6 +27,7 @@ SYSTEMROOT = os.environ.get('T1OS_SYSTEM_ROOT', '/the one')
 COMMONTIMEFILE = os.path.join(SYSTEMROOT, 'settings', 'time', 'common.txt')
 ATREYANTIMEFILE = os.path.join(SYSTEMROOT, 'settings', 'time', 'atreyan.txt')
 INTERNETTIMEFILE = os.path.join(SYSTEMROOT, 'settings', 'time', 'internet.txt')
+VIRTUALBOXTIMEFILE = os.path.join(SYSTEMROOT, 'settings', 'time', 'virtualbox.txt')
 TIMEZONEFILE = os.path.join(SYSTEMROOT, 'settings', 'time', 'timezone.txt')
 ZONEINFODIR = os.path.join(SYSTEMROOT, 'software', 'chromium', 'resources', 'zoneinfo')
 DEFAULTTIMEZONE = 'Australia/Sydney'
@@ -405,10 +406,10 @@ def writecommon():
         # commom time file not found error
         print('common time file not found', flush=True)
 
-    except PermissionError:
+    except PermissionError as e:
 
         # permission denied error
-        print('permission denied to write common time file', flush=True)
+        print(f'permission denied to write common time file ({e})', flush=True)
 
     except OSError as e:
 
@@ -443,10 +444,10 @@ def writeatreyan():
         # atreyan time file not found error
         print('atreyan time file not found', flush=True)
 
-    except PermissionError:
+    except PermissionError as e:
 
         # permission denied error
-        print('permission denied to write atreyan time file', flush=True)
+        print(f'permission denied to write atreyan time file ({e})', flush=True)
 
     except OSError as e:
 
@@ -526,32 +527,49 @@ def initialise():
 
         print(f'error creating time tier {e}', flush=True)
 
-    # Internet time is deliberately opt-in so an offline machine always starts
-    # from the motherboard clock without waiting for a network connection.
-    if not os.path.exists(INTERNETTIMEFILE):
+    # Publish the complete default policy before GODDESS launches VirtualBox.
+    # Internet time remains opt-in; VirtualBox host sync is the VM default.
+    defaults = (
+        (INTERNETTIMEFILE, 'false\n'),
+        (VIRTUALBOXTIMEFILE, 'true\n'),
+        (TIMEZONEFILE, DEFAULTTIMEZONE + '\n'),
+    )
+    for path, value in defaults:
+        if os.path.exists(path):
+            continue
         try:
 
-            with open(INTERNETTIMEFILE, 'w') as f:
-
-                f.write('false\n')
+            descriptor = os.open(
+                path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+                0o644,
+            )
+            try:
+                os.write(descriptor, value.encode('ascii'))
+            finally:
+                os.close(descriptor)
 
         except FileNotFoundError:
 
             print('time settings tier not found', flush=True)
 
+        except FileExistsError:
+
+            pass
+
         except PermissionError:
 
-            print('permission denied writing internet time setting', flush=True)
+            print('permission denied writing time setting', flush=True)
 
         except OSError as e:
 
-            print(f'error writing internet time setting {e}', flush=True)
-
-
-initialise()
+            print(f'error writing time setting {e}', flush=True)
 
 
 if __name__ == '__main__':
+
+    initialise()
 
     # write common on launch
     writecommon()

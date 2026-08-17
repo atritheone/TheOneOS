@@ -44,7 +44,7 @@ from GODDESS.GODDESS import (
 from exchange.exchange import exsetfiles
 from graphics.graphics import init as ginit, close as gclose, clear as gclear, present as gpresent
 from graphics.graphics import beginscaledfileframe, endscaledfileframe, blitfilepartfast, blitfilescaledfast, fillrectfast, drawcursor, cursorbox, drawline, drawrect, drawtextttf, setpixel, getscreensize, refreshfb, measuretext
-from graphics.graphics import backendinfo, framebufferpresentationproof, screenshotpng
+from graphics.graphics import backendinfo, framebufferpresentationproof, screenshotpng, displayuiscale
 from graphics.graphics import setdisplayadjustment, refreshdisplayadjustment, displayadjustment, displayadjustregions
 from graphics.graphics import GPUDeviceLostError
 from graphics.graphics import gpuavailable, gpuhealthcheck, gpumetrics, gpubeginregions, gpusetregion, gpuframestats, gpuinvalidatesurface
@@ -1387,6 +1387,7 @@ def managedcontentproof(window):
 
     generation = int(window.get("_gpu_command_generation", 0))
     presented = int(window.get("_gpu_presented_generation", 0))
+    retained = bool(gpuwindowretainedsystem(window))
     commands = window.get("gpu_commands", [])
     nonblack = False
 
@@ -1401,13 +1402,22 @@ def managedcontentproof(window):
             continue
 
     drawn = int(window.get("_telemetry_scene_commands_drawn", 0))
+    renders = int(window.get("_telemetry_scene_texture_renders", 0))
+    composited = int(window.get("_telemetry_gpu_draw_calls", 0))
+    cpu_bytes = int(window.get("_telemetry_cpu_damage_bytes", 0))
+    buffer_uploads = int(window.get("_telemetry_gpu_upload_bytes", 0))
     return {
-        "source": "managed-scene",
+        "source": "managed-gpu-scene",
         "verified": bool(
             generation > 0
             and presented >= generation
             and drawn > 0
+            and renders > 0
+            and composited > 0
             and nonblack
+            and retained
+            and cpu_bytes == 0
+            and buffer_uploads == 0
         ),
         "scanout": True,
         "nonblack": bool(nonblack),
@@ -1415,6 +1425,11 @@ def managedcontentproof(window):
         "managed_generation": generation,
         "managed_presented_generation": presented,
         "scene_commands_drawn": drawn,
+        "scene_texture_renders": renders,
+        "gpu_composite_draws": composited,
+        "cpu_damage_bytes": cpu_bytes,
+        "buffer_upload_bytes": buffer_uploads,
+        "retained_gpu_scene": retained,
     }
 
 
@@ -1423,7 +1438,13 @@ def acceleratedcontentproof(window):
     if bool(window.get("_managed_only", False)):
         return managedcontentproof(window)
 
-    return windowbuffercontentproof(window)
+    return {
+        "source": "unmanaged-lockscreen-rejected",
+        "verified": False,
+        "scanout": True,
+        "nonblack": False,
+        "contrast": False,
+    }
 
 
 def writeacceleratedpresentationready(seen, role, path, operation):
@@ -2821,26 +2842,7 @@ def winshortcutsallowed():
 
 def squarerootscale():
 
-    basew = 1920
-
-    baseh = 1080
-
-    if SCREENW <= 0 or SCREENH <= 0:
-        return 1.0
-
-    bdiag = (float(basew) * float(basew) + float(baseh) * float(baseh)) ** 0.5
-
-    sdiag = (float(SCREENW) * float(SCREENW) + float(SCREENH) * float(SCREENH)) ** 0.5
-
-    if bdiag <= 0.0 or sdiag <= 0.0:
-        return 1.0
-
-    ratio = sdiag / bdiag
-
-    if ratio <= 0.0:
-        return 1.0
-
-    return (ratio ** 0.5) * max(0.5, min(3.0, float(GPUUISCALE)))
+    return displayuiscale(SCREENW, SCREENH, GPUUISCALE)
 
 
 def scalesize(value):
@@ -10533,7 +10535,7 @@ def movewindow(cid, req):
             sendjson(cid, {"op": "ERROR", "code": "unknown_window"})
             return
 
-        if windows[wid]["role"] == "desktop":
+        if windows[wid]["role"] == "desktop" and not req.get("_desktop_internal"):
             sendjson(cid, {"op": "ERROR", "code": "denied", "detail": "desktop pinned"})
             return
 
@@ -10638,7 +10640,7 @@ def resizewindow(cid, req):
             return
 
         # disallow desktop resize
-        if windows[wid]["role"] == "desktop":
+        if windows[wid]["role"] == "desktop" and not req.get("_desktop_internal"):
             sendjson(cid, {"op": "ERROR", "code": "denied", "detail": "desktop pinned"})
             return
 
@@ -12908,14 +12910,10 @@ def graphicspresentationresponse(cid, win, response):
             "response": dict(response),
         }
 
-        if not bool(win.get("mapped")):
-            graphicsdefercommitreceipt(
-                receipt,
-                "window is not mapped",
-                superseded=False,
-            )
-            return True
-
+        # A system client may build its first managed scene before mapping so
+        # the first visible frame is already complete.  Keep that receipt on
+        # the window until MAP_WINDOW makes it drawable; only an explicit
+        # unmap/destruction is allowed to cancel it.
         receipts = win.setdefault("_gpu_commit_receipts", [])
 
         if len(receipts) >= GPUCOMMANDDAMAGELIMIT:
@@ -12972,12 +12970,7 @@ def graphicsframecommitreceipts(renderedgenerations):
                 continue
 
             if not bool(win.get("mapped")):
-                output.append({
-                    "receipt": receipt,
-                    "presented": False,
-                    "superseded": True,
-                    "presentation_reason": "window was unmapped before presentation",
-                })
+                retained.append(receipt)
                 continue
 
             if renderedgeneration is None:
@@ -13596,6 +13589,28 @@ def markdamage(cid, req):
             return
 
         win = windows[wid]
+
+        # An accelerated managed compositor is an exclusive rendering mode.
+        # Accepting shared-buffer DAMAGE here would silently mix a CPU-rendered
+        # client surface into an otherwise GPU-only frame.  Clients must submit
+        # a retained GRAPHICS_SCENE while this capability is active.
+        if (
+            GPUCOMPOSITOR
+            and gpuavailable()
+            and bool(graphicscapabilities().get("managed_resources", False))
+        ):
+            sendjson(cid, {
+                "op": "ERROR",
+                "code": "cpu_rendering_disabled",
+                "detail": "accelerated managed graphics is active",
+                "winid": int(wid),
+            })
+            graphicslog(
+                f"> rejected CPU damage winid={int(wid)} "
+                f"role={str(win.get('role', 'window'))} pid={int(win.get('pid', 0) or 0)}"
+            )
+            return
+
         gx = int(win["x"])
         gy = int(win["y"])
         gw = int(win["w"])
@@ -14091,7 +14106,10 @@ def gpuwindowscenetexture(win):
 
     commands = win.get("gpu_commands", [])
 
-    if not gpuwindowmanagedonly(win) or any(str(command.get("kind", "")) == "layer" for command in commands):
+    if (
+        not gpuwindowmanagedonly(win)
+        or any(str(command.get("kind", "")) == "layer" for command in commands)
+    ):
         gpuwindowscenerelease(win)
         return None
 
@@ -15487,11 +15505,7 @@ def gpudrawwindow(win, clip=None):
     y = originaly - (height - originalheight) * 0.5 + offsety
     role = str(win.get("role", ""))
     beforedraws = int(gpuframestats().get("draw_calls", 0))
-    scenehandle = (
-        gpuwindowscenetexture(win)
-        if managedonly and not dynamicvideo
-        else None
-    )
+    scenehandle = gpuwindowscenetexture(win) if managedonly and not dynamicvideo else None
 
     if retainedsystem:
 
@@ -18046,7 +18060,24 @@ def refreshwindows(previouswork=None):
         if not win:
             continue
 
-        if str(win.get("role", "")) != "window":
+        role = str(win.get("role", ""))
+
+        if role == "desktop":
+            # The desktop is client-pinned but display-owned.  Keep its logical
+            # geometry and retained scene exactly matched to the scan-out after
+            # a VirtualBox/KMS mode change, using the server-only resize path.
+            win["x"] = 0
+            win["y"] = 0
+            if int(win.get("w", 0)) != int(SCREENW) or int(win.get("h", 0)) != int(SCREENH):
+                resizewindow(win["cid"], {
+                    "winid": int(wid),
+                    "w": int(SCREENW),
+                    "h": int(SCREENH),
+                    "_desktop_internal": True,
+                })
+            continue
+
+        if role != "window":
             continue
 
         if isfullscreen(win):
@@ -19203,7 +19234,7 @@ def handlesignal(signum, frame):
 
 def windowcompositordiagnostic():
 
-    global SCREENW, SCREENH, WORKX, WORKY, WORKW, WORKH, BUFBASE, CHROMIUMXWDBUFFER
+    global SCREENW, SCREENH, WORKX, WORKY, WORKW, WORKH, BUFBASE, CHROMIUMXWDBUFFER, VBOXDNDBASE
     global GPUCOMPOSITOR, GPUFAILED, GPUSHADOWS, GPUTRANSITIONS, GPUOCCLUSION
     global STARTUPCURSORWAIT, BOOTCURSORHIDE, CURSORENABLED, FOCUSWID
     global POINTERX, POINTERY, GPUCOMMANDERRORS, GPUCOMMANDLASTERROR, GPUFULLFRAMEFALLBACKS
@@ -19222,6 +19253,7 @@ def windowcompositordiagnostic():
     diagnosticbase = "/.ephemeral/windowserver-diagnostic"
     originalbufbase = BUFBASE
     originalchromiumxwdbuffer = CHROMIUMXWDBUFFER
+    originalvboxdndbase = VBOXDNDBASE
     originalstatebase = STATEBASE
     originaltelemetrypath = TELEMETRYPATH
     originallasttelemetry = LASTTELEMETRY
@@ -19229,6 +19261,7 @@ def windowcompositordiagnostic():
     originalopenoperationscentre = openoperationscentre
     originallocksession = locksession
     originaltakescreenshot = takescreenshot
+    originalprocessidentitycurrent = processidentitycurrent
     replies = []
     createdpaths = []
 
@@ -19658,6 +19691,7 @@ def windowcompositordiagnostic():
         CHROMIUMXWDBUFFER = externalpath
         windows[7] = browser
         clients[1]["windows"].append(7)
+        clients[1]["identity"] = {"domain": "chromium"}
         replies.clear()
         setwindowexternalbuffer(1, {
             "winid": 7,
@@ -19683,14 +19717,14 @@ def windowcompositordiagnostic():
         scaledmetrics = endscaledfileframe()
 
         if (
-            not firstscaled
-            or not secondscaled
-            or int(scaledmetrics.get("source_reads", 0)) != 1
-            or int(scaledmetrics.get("cache_hits", 0)) != 1
-            or int(scaledmetrics.get("regions", 0)) != 2
+            firstscaled
+            or secondscaled
+            or int(scaledmetrics.get("source_reads", 0)) != 0
+            or int(scaledmetrics.get("cache_hits", 0)) != 0
+            or int(scaledmetrics.get("regions", 0)) != 0
         ):
             raise RuntimeError(
-                "scaled Chromium CPU fallback reread its full source "
+                "accelerated Chromium external buffer entered the CPU path "
                 f"{scaledmetrics}"
             )
 
@@ -19707,23 +19741,37 @@ def windowcompositordiagnostic():
 
         browser["damage"] = []
         DAMAGERECTS.clear()
+        replies.clear()
+        sourcedamage = [
+            externalsourcewidth // 2,
+            externalsourceheight // 2,
+            externalsourcewidth // 2,
+            externalsourceheight // 2,
+        ]
         markdamage(1, {
             "winid": 7,
-            "rect": [
-                externalsourcewidth // 2,
-                externalsourceheight // 2,
-                externalsourcewidth // 2,
-                externalsourceheight // 2,
-            ],
+            "rect": sourcedamage,
         })
         expectedscreen = [70, 62, 34, 26]
+        mappedoutput = windowbufferrecttooutput(
+            browser, sourcedamage, filtermargin=1,
+        )
+        mappedscreen = [
+            int(browser["x"]) + int(mappedoutput[0]),
+            int(browser["y"]) + int(mappedoutput[1]),
+            int(mappedoutput[2]),
+            int(mappedoutput[3]),
+        ]
 
         if (
-            browser.get("damage") != [[16, 12, 16, 12]]
-            or DAMAGERECTS != [expectedscreen]
+            browser.get("damage")
+            or DAMAGERECTS
+            or not replies
+            or replies[-1].get("code") != "cpu_rendering_disabled"
+            or mappedscreen != expectedscreen
         ):
             raise RuntimeError(
-                "Chromium source damage was not transformed to logical output "
+                "Chromium CPU damage was not rejected or its GPU mapping is invalid "
                 f"damage={browser.get('damage')} screen={DAMAGERECTS}"
             )
 
@@ -19763,6 +19811,17 @@ def windowcompositordiagnostic():
             )
 
         setwindowexternalbuffer(1, {"winid": 7}, attached=False)
+        clients[1]["identity"] = {
+            "domain": "expanse",
+            "pid": os.getpid(),
+            "uid": os.geteuid(),
+            "gid": os.getegid(),
+            "script": "/the one/build/expanse/expanse.py",
+            "executable": "/the one/software/python/bin/python3.13",
+        }
+        clients[1]["capabilities"] = {
+            "desktop_controller", "desktop_surfaces",
+        }
 
         if (
             browser.get("_external_buffer")
@@ -19779,7 +19838,7 @@ def windowcompositordiagnostic():
             "output": [96, 72],
             "damage_output": expectedscreen,
             "filter_footprint": True,
-            "scaled_cpu_frame": scaledmetrics,
+            "cpu_path_suppressed": scaledmetrics,
             "logical_resize_reused_texture": True,
             "detached": True,
         }
@@ -19792,16 +19851,34 @@ def windowcompositordiagnostic():
             "identity": processidentity(os.getpid()),
             "capabilities": {"guest_integration"},
         }
+        VBOXDNDBASE = diagnosticbase
+        # The read-only chroot diagnostic does not expose the live process
+        # handles used by the production peer-liveness check.  Keep capability
+        # and routing coverage deterministic while production retains that
+        # check on real socket clients.
+        globals()["processidentitycurrent"] = lambda identity: True
         replies.clear()
+        second["mapped"] = True
+        while 3 in zorder:
+            zorder.remove(3)
+        zorder.append(3)
+        dropx = int(second["x"]) + max(0, min(10, int(second["w"]) - 1))
+        dropy = int(second["y"]) + max(0, min(10, int(second["h"]) - 1))
         vboxdndhost(2, {"op": "VBOX_DND_HOST_ENTER", "format": "text/uri-list"})
-        vboxdndhost(2, {"op": "VBOX_DND_HOST_MOVE", "x": 700, "y": 550})
-        vboxdndhost(2, {"op": "VBOX_DND_HOST_DROP", "x": 700, "y": 550})
+        vboxdndhost(2, {"op": "VBOX_DND_HOST_MOVE", "x": dropx, "y": dropy})
+        vboxdndhost(2, {"op": "VBOX_DND_HOST_DROP", "x": dropx, "y": dropy})
         vboxdndhost(2, {"op": "VBOX_DND_HOST_DATA", "kind": "files", "paths": [second["buffer"]]})
         dropops = [value.get("op") for value in replies]
         for required in ("DND_ENTER", "DND_MOVE", "DND_DROP_PENDING", "DND_DROP", "DND_LEAVE"):
             if required not in dropops:
-                raise RuntimeError(f"VirtualBox host drag route omitted {required}")
+                raise RuntimeError(
+                    f"VirtualBox host drag route omitted {required} "
+                    f"ops={dropops} target={vboxdndtarget(dropx, dropy, 'files')} "
+                    f"geometry={[second.get('x'), second.get('y'), second.get('w'), second.get('h')]}"
+                )
         replies.clear()
+        FOCUSWID = 3
+        clients[1]["physical_gesture_until"] = time.monotonic() + 5.0
         vboxdndguest(1, {"op": "DND_GUEST_START", "winid": 3, "kind": "files", "paths": [second["buffer"]]})
         if not any(value.get("op") == "VBOX_DND_GUEST_START" for value in replies):
             raise RuntimeError("VirtualBox guest drag was not delivered to the integration subscriber")
@@ -19925,21 +20002,23 @@ def windowcompositordiagnostic():
         }
 
         first["damage"] = []
-        coalescesbefore = int(first.get("_telemetry_cpu_damage_coalesces", 0))
+        replies.clear()
 
-        for _ in range(1000):
+        for _ in range(10):
             markdamage(1, {"winid": 2, "rect": [50, 50, 40, 40]})
 
-        if len(first.get("damage", [])) != 1:
-            raise RuntimeError(f"repeated CPU damage was not coalesced {first.get('damage')}")
+        if (
+            first.get("damage")
+            or len(replies) != 10
+            or any(reply.get("code") != "cpu_rendering_disabled" for reply in replies)
+        ):
+            raise RuntimeError(
+                f"accelerated compositor accepted CPU damage {first.get('damage')}"
+            )
 
-        coalesced = int(first.get("_telemetry_cpu_damage_coalesces", 0)) - coalescesbefore
-
-        if coalesced != 999:
-            raise RuntimeError(f"CPU damage coalescing telemetry was incorrect {coalesced}/999")
-
-        result["checks"]["cpu_damage_coalescing"] = {"events": 1000, "coalesces": coalesced, "pending": 1}
+        result["checks"]["cpu_damage_rejection"] = {"attempts": 10, "accepted": 0}
         first["damage"] = []
+        replies.clear()
         DAMAGERECTS.clear()
 
         beforefullfallback = int(GPUFULLFRAMEFALLBACKS)
@@ -20532,6 +20611,7 @@ def windowcompositordiagnostic():
             "y": 100,
             "title": "lifecycle",
             "role": "window",
+            "restore_size": False,
         })
 
         if lifecyclewid not in windows:
@@ -20618,6 +20698,7 @@ def windowcompositordiagnostic():
             "y": 40,
             "title": "display reflow",
             "role": "window",
+            "restore_size": False,
         })
         createdpaths.append(windows[reflowwid]["buffer"])
         writecolor(windows[reflowwid]["buffer"], 800, 560, (255, 255, 255, 255))
@@ -20829,7 +20910,10 @@ def windowcompositordiagnostic():
         result["passed"] = True
 
     except Exception as e:
-        result["errors"].append(str(e))
+        result["errors"].append(
+            f"{type(e).__name__}: {e!r}\n"
+            + __import__("traceback").format_exc()
+        )
 
     finally:
 
@@ -20837,8 +20921,10 @@ def windowcompositordiagnostic():
         globals()["openoperationscentre"] = originalopenoperationscentre
         globals()["locksession"] = originallocksession
         globals()["takescreenshot"] = originaltakescreenshot
+        globals()["processidentitycurrent"] = originalprocessidentitycurrent
         BUFBASE = originalbufbase
         CHROMIUMXWDBUFFER = originalchromiumxwdbuffer
+        VBOXDNDBASE = originalvboxdndbase
         STATEBASE = originalstatebase
         TELEMETRYPATH = originaltelemetrypath
         LASTTELEMETRY = originallasttelemetry

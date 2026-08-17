@@ -28,7 +28,6 @@
 # Generated trust bundle and bundled helper executables
 /source/settings/network/cacerts.pem
 /source/drivers/tools/
-/source/build software/python/patchelf
 /source/build software/python/python-command
 /scripts/roothealth-repair/journal-integration-v2/ntfscp
 /scripts/roothealth-repair/.journal-integration-v2-work/

@@ -116,7 +116,10 @@ def configurecontrol(mode):
 
 def graphicsmanagedonly():
 
-    return bool(GRAPHICSSTATE.get("active") and GRAPHICSSTATE.get("managed_only"))
+    return bool(
+        GRAPHICSSTATE.get("available")
+        and managedstrict(GRAPHICSSTATE)
+    )
 
 
 def clear(color=0):
@@ -935,13 +938,16 @@ def graphicsrestorecpu():
 
 def graphicsdisable(reason, clearcommands=True):
 
-    manageddisable(GRAPHICSSTATE, reason)
+    if manageddisable(GRAPHICSSTATE, reason):
+        graphicssyncstate()
+        return True
 
     if clearcommands and WSSOCK and WSWINID:
         wssendoneway(WSSOCK, {"op": "GRAPHICS_CLEAR", "winid": int(WSWINID)})
 
     graphicssyncstate()
     graphicsrestorecpu()
+    return False
 
 
 def graphicsresponse(msg):
@@ -1758,6 +1764,7 @@ def graphicsdiagnostic():
             "count": len(title),
             "batch": True,
             "accelerated": True,
+            "managed_only": True,
         })
 
         if not state.get("active") or state.get("pending"):
@@ -1810,13 +1817,22 @@ def graphicsdiagnostic():
         timedout["pending_at"] = time.monotonic() - 3.0
         managedtick(timedout, timeout=0.1)
 
-        if fallback.get("available") or missing.get("available") or rejected.get("available") or timedout.get("available"):
-            raise RuntimeError("a boot-animation CPU fallback path remained managed")
+        if fallback.get("available") or missing.get("available"):
+            raise RuntimeError("a boot-animation non-GPU fallback path remained managed")
+
+        if not all(
+            item.get("available")
+            and item.get("active")
+            and item.get("managed_only")
+            and item.get("need_submit")
+            for item in (rejected, timedout)
+        ):
+            raise RuntimeError("boot-animation recovery escaped strict GPU rendering")
 
         result["checks"]["cpu_fallback"] = True
         result["checks"]["missing_capability_fallback"] = True
-        result["checks"]["error_fallback"] = True
-        result["checks"]["timeout_fallback"] = True
+        result["checks"]["error_gpu_retention"] = True
+        result["checks"]["timeout_gpu_retention"] = True
         result["checks"]["first_frame_before_map"] = True
         result["checks"]["final_commit_before_unmap"] = True
         result["checks"]["cursor_finally_restore"] = True
