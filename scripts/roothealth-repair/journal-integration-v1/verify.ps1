@@ -9,6 +9,11 @@ param(
     [switch]$RunFixtureSuite
 )
 
+$incrementalTestBootstrap = Join-Path $PSScriptRoot '..\..\incremental test.ps1'
+if (Test-Path -LiteralPath $incrementalTestBootstrap -PathType Leaf) {
+    . $incrementalTestBootstrap
+    if (Invoke-T1OSIncrementalTestGuard -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters -UnboundArguments $args) { return }
+}
 $ErrorActionPreference = 'Stop'
 if ([string]::IsNullOrWhiteSpace($ProjectRoot)) {
     $ProjectRoot = Join-Path $PSScriptRoot '..\..\..'

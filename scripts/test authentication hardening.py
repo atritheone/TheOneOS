@@ -1,6 +1,21 @@
 #!/usr/bin/env python3
 """Focused authentication, authorization, and credential-storage tests."""
 
+import sys as _t1os_incremental_sys
+from pathlib import Path as _T1OSIncrementalPath
+
+if __name__ == "__main__":
+    _t1os_incremental_scripts = next(
+        (parent for parent in _T1OSIncrementalPath(__file__).resolve().parents
+         if (parent / "incremental_test.py").is_file()),
+        None,
+    )
+    if _t1os_incremental_scripts is not None:
+        _t1os_incremental_sys.path.insert(0, str(_t1os_incremental_scripts))
+        from _incremental_test import guard as _t1os_incremental_guard
+        if _t1os_incremental_guard(__file__, _t1os_incremental_sys.argv[1:]):
+            raise SystemExit(0)
+
 import hashlib
 import importlib.util
 import os

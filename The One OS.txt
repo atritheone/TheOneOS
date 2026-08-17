@@ -1,6 +1,5 @@
 
 
-confirm gpu path is being used, player reports no gpu decode, opengltest2 reports cpu path.
 
 player does not load audio artwork.
 
@@ -29,8 +28,6 @@ add environment variables to settings.
 lock the identity folder.
 
 create brick executable language - bpr.
-
-full python with pip and venv.
 
 create t1os updater.
 

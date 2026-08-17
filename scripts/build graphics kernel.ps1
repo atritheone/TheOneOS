@@ -263,7 +263,8 @@ strings "$source/vmlinux" | grep -F '/the one/drivers/nodes/vboxuser' >/dev/null
 strings "$source/vmlinux" | grep -F '/the one/drivers/tools/modprobe' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/build/windows/windowserver.py' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/build/drivers/driverserver.py' >/dev/null
-strings "$source/vmlinux" | grep -Fx '/the one/build/brick/brick.py' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/build' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/software' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/drivers/nodes/pts/ptmx' >/dev/null
 nm "$source/vmlinux" | grep ' t vmw_vbox_video_notify' >/dev/null
 cp -- "$image" "$stage_kernel"

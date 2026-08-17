@@ -1,6 +1,11 @@
 [CmdletBinding()]
 param()
 
+$incrementalTestBootstrap = Join-Path $PSScriptRoot 'incremental test.ps1'
+if (Test-Path -LiteralPath $incrementalTestBootstrap -PathType Leaf) {
+    . $incrementalTestBootstrap
+    if (Invoke-T1OSIncrementalTestGuard -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters -UnboundArguments $args) { return }
+}
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Path $PSScriptRoot -Parent
 $compatibilityPath = Join-Path $projectRoot 'source\drivers\settings\desktop compatibility.json'

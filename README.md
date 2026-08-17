@@ -37,6 +37,13 @@ The Linux kernel provides the low-level foundation, while The One OS defines the
 
 The One OS is under active development. Interfaces, APIs, filesystem structures, and internal components may change as the operating system develops.
 
+## Testing
+
+Test, validation, and audit scripts use content-addressed incremental execution.
+Existing commands run only cases whose implementation, inputs, parameters,
+artifacts, or relevant environment have changed. See
+[scripts/INCREMENTAL TESTING.md](scripts/INCREMENTAL%20TESTING.md).
+
 ## Goal
 
 The goal of The One OS is to build a complete, coherent and independent operating environment in Python while retaining the hardware support and low-level capabilities of the Linux kernel.

@@ -658,11 +658,14 @@ depmod -b "$modules_work" "$kernel_release"
 nm "$source/vmlinux" | grep ' t t1os_lsm_init$' >/dev/null
 nm "$source/vmlinux" | grep ' t t1os_kernel_read_file$' >/dev/null
 strings "$source/vmlinux" | grep -F '/the one/drivers/nodes/dri/card' >/dev/null
-strings "$source/vmlinux" | grep -Fx '/the one/drivers/nodes/nvidia-uvm' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/drivers/nodes/nvidia-modeset' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/drivers/nodes/dri/renderD' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/drivers/processes/driver/nvidia' >/dev/null
 strings "$source/vmlinux" | grep -F '/the one/drivers/tools/modprobe' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/build/windows/windowserver.py' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/build/drivers/driverserver.py' >/dev/null
-strings "$source/vmlinux" | grep -Fx '/the one/build/brick/brick.py' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/build' >/dev/null
+strings "$source/vmlinux" | grep -Fx '/the one/software' >/dev/null
 strings "$source/vmlinux" | grep -Fx '/the one/drivers/nodes/pts/ptmx' >/dev/null
 test -f "$modules_work/lib/modules/$kernel_release/modules.dep"
 test -n "$(find "$modules_work/lib/modules/$kernel_release" -type f -name 'nvidia.ko*' -print -quit)"

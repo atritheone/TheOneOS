@@ -3,6 +3,21 @@
 
 from __future__ import annotations
 
+import sys as _t1os_incremental_sys
+from pathlib import Path as _T1OSIncrementalPath
+
+if __name__ == "__main__":
+    _t1os_incremental_scripts = next(
+        (parent for parent in _T1OSIncrementalPath(__file__).resolve().parents
+         if (parent / "incremental_test.py").is_file()),
+        None,
+    )
+    if _t1os_incremental_scripts is not None:
+        _t1os_incremental_sys.path.insert(0, str(_t1os_incremental_scripts))
+        from _incremental_test import guard as _t1os_incremental_guard
+        if _t1os_incremental_guard(__file__, _t1os_incremental_sys.argv[1:]):
+            raise SystemExit(0)
+
 import argparse
 import json
 import os
@@ -17,9 +32,12 @@ POLICY_KEYS = {"format", "owner", "group", "install_mode", "shebang", "entries"}
 ENTRY_KEYS = {"root", "path", "destination"}
 LSM_PROFILE_FUNCTIONS = (
     "t1os_service_launch",
-    "t1os_catalogue_launch",
-    "t1os_window_launch",
     "t1os_transition_allowed",
+)
+LSM_PACKAGED_FUNCTION = "t1os_packaged_application_path"
+LSM_PACKAGED_ROOTS = (
+    "/the one/build",
+    "/the one/software",
 )
 
 
@@ -79,6 +97,13 @@ def active_lsm_script_paths(lsm_path: Path) -> set[str]:
         symbols.update(re.findall(r"\bT1OS_[A-Z0-9_]+_SCRIPT\b", function_body(source, name)))
     if not symbols:
         raise ValidationFailure("active LSM exposes no profiled Python script symbols")
+    packaged_body = function_body(source, LSM_PACKAGED_FUNCTION)
+    packaged_roots = tuple(re.findall(r'"(/the one/(?:build|software))"', packaged_body))
+    if packaged_roots != LSM_PACKAGED_ROOTS:
+        raise ValidationFailure(
+            "active LSM packaged-application roots differ: "
+            f"expected={list(LSM_PACKAGED_ROOTS)}, actual={list(packaged_roots)}"
+        )
     return {resolve(symbol) for symbol in symbols}
 
 
@@ -153,11 +178,19 @@ def load_policy(repo: Path) -> tuple[dict, dict[str, dict], set[tuple[str, str]]
     lsm_paths = active_lsm_script_paths(
         repo / "source" / "entry" / "kernel" / "t1os_lsm.c"
     )
-    if destinations != lsm_paths:
-        missing = sorted(lsm_paths - destinations)
-        extra = sorted(destinations - lsm_paths)
+    missing = sorted(lsm_paths - destinations)
+    unexpected = sorted(
+        destination
+        for destination in destinations - lsm_paths
+        if not any(
+            destination.startswith(root + "/")
+            for root in LSM_PACKAGED_ROOTS
+        )
+    )
+    if missing or unexpected:
         raise ValidationFailure(
-            f"profiled Python inventory differs from the active LSM; missing={missing}, extra={extra}"
+            "profiled Python inventory differs from the active LSM; "
+            f"missing={missing}, unexpected={unexpected}"
         )
     return policy, roots, identities
 

@@ -4,6 +4,11 @@ param(
     [string]$ScriptsRoot
 )
 
+$incrementalTestBootstrap = Join-Path $PSScriptRoot '..\..\incremental test.ps1'
+if (Test-Path -LiteralPath $incrementalTestBootstrap -PathType Leaf) {
+    . $incrementalTestBootstrap
+    if (Invoke-T1OSIncrementalTestGuard -ScriptPath $PSCommandPath -BoundParameters $PSBoundParameters -UnboundArguments $args) { return }
+}
 $ErrorActionPreference = 'Stop'
 $ScriptsRoot = [System.IO.Path]::GetFullPath($ScriptsRoot)
 $flash = Join-Path $ScriptsRoot 'flash hardware usb.ps1'
