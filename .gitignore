@@ -8,8 +8,7 @@
 !/development/roothealth/engine/
 !/development/roothealth/engine/**
 
-# Applications that are outside this repository's scope
-/software/
+# Locally packaged application binaries
 /command_centre.exe
 /t1os_usb_flasher.exe
 /flash/
@@ -34,9 +33,6 @@
 /scripts/roothealth-repair/journal-integration-v2/ntfscp
 /scripts/roothealth-repair/.journal-integration-v2-work/
 
-# Command Centre application-only helper
-/scripts/run command centre.ps1
-
 # Local IDE, assistant, and machine state
 /.idea/
 /.junie/
@@ -53,7 +49,7 @@ desktop.ini
 # Generated Electron/Vite output
 **/dist/
 **/dist-electron/
-**/release/
+**/release*/
 *.tsbuildinfo
 
 # Python caches and test/tool caches

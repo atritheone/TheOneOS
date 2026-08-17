@@ -39,8 +39,8 @@ BUILD_ROOT = PROJECT_ROOT / "source" / "build software"
 BROKER_PATH = BUILD_ROOT / "broker" / "broker.py"
 ARCHITECT_PATH = BUILD_ROOT / "architect" / "architect.py"
 STARTUP_PATH = BUILD_ROOT / "startup" / "startup.py"
-RECOVERY_PATH = PROJECT_ROOT / "resource" / "entry" / "init" / "angel recovery.sh"
-INIT_PATH = PROJECT_ROOT / "resource" / "entry" / "init" / "init hardware.sh"
+RECOVERY_PATH = PROJECT_ROOT / "source" / "entry" / "init" / "angel recovery.sh"
+INIT_PATH = PROJECT_ROOT / "source" / "entry" / "init" / "init hardware.sh"
 DISK_USER_PATH = PROJECT_ROOT / "scripts" / "create disk user.ps1"
 
 
@@ -256,6 +256,69 @@ class BrokerTests(unittest.TestCase):
                 self.assertEqual(os.stat(path).st_gid, 1000)
                 self.assertEqual(stat.S_IMODE(os.stat(path).st_mode), 0o700)
 
+    @unittest.skipUnless(os.name == "posix", "account change test requires POSIX")
+    def test_change_user_renames_home_and_uses_current_password_policy(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            broker.provision_user(
+                temporary, "Alice", self.password,
+                owner_uid=os.getuid(), owner_gid=os.getgid(),
+            )
+            master = os.path.join(temporary, "the one", "master", "master.txt")
+            original_hash = broker.read_credentials(master)[1]
+
+            with self.assertRaises(broker.AuthenticationError):
+                broker.change_user(temporary, "wrong", "Bob")
+            self.assertTrue(os.path.isdir(os.path.join(temporary, "master", "Alice")))
+
+            result = broker.change_user(temporary, self.password, "Bob")
+            self.assertEqual(result["old_username"], "Alice")
+            self.assertEqual(result["username"], "Bob")
+            self.assertFalse(result["password_changed"])
+            self.assertFalse(os.path.lexists(os.path.join(temporary, "master", "Alice")))
+            self.assertTrue(os.path.isdir(os.path.join(temporary, "master", "Bob")))
+            self.assertEqual(broker.read_credentials(master), ("Bob", original_hash))
+
+            new_password = "the new secure password"
+            result = broker.change_user(
+                temporary, self.password, "Bob", new_password,
+            )
+            self.assertTrue(result["password_changed"])
+            username, replacement = broker.read_credentials(master)
+            self.assertEqual(username, "Bob")
+            self.assertTrue(replacement.startswith("t1auth$v=1$"))
+            self.assertTrue(broker.verify_password(new_password, replacement))
+            self.assertFalse(broker.verify_password(self.password, replacement))
+
+    @unittest.skipUnless(os.name == "posix", "account removal test requires POSIX")
+    def test_remove_user_requires_both_factors_and_deletes_private_home(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            broker.provision_user(
+                temporary, "Alice", self.password,
+                owner_uid=os.getuid(), owner_gid=os.getgid(),
+            )
+            master = os.path.join(temporary, "the one", "master", "master.txt")
+            home = os.path.join(temporary, "master", "Alice")
+            marker = os.path.join(home, "reference", "identity", "marker")
+            with open(marker, "w", encoding="utf-8") as stream:
+                stream.write("private\n")
+
+            with self.assertRaises(broker.AuthenticationError):
+                broker.remove_user(temporary, self.password, "NotAlice")
+            with self.assertRaises(broker.AuthenticationError):
+                broker.remove_user(temporary, "wrong", "Alice")
+            self.assertTrue(os.path.isfile(master))
+            self.assertTrue(os.path.isfile(marker))
+
+            self.assertEqual(
+                broker.remove_user(temporary, self.password, "Alice"), "Alice"
+            )
+            self.assertFalse(os.path.lexists(master))
+            self.assertFalse(os.path.lexists(home))
+            self.assertFalse(any(
+                name.startswith(".removed-")
+                for name in os.listdir(os.path.join(temporary, "master"))
+            ))
+
 
 @unittest.skipUnless(os.name == "posix", "Architect integration test requires POSIX")
 class ArchitectTests(unittest.TestCase):
@@ -292,6 +355,14 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertNotIn("between 12 and 256", disk_user)
         self.assertNotIn("Rfc2898DeriveBytes", disk_user)
         self.assertNotIn("chmod 0644", disk_user)
+        self.assertIn("$passwordInput = $password", disk_user)
+        self.assertIn("[switch]$UsbDrive", disk_user)
+        self.assertIn("change-user", (
+            PROJECT_ROOT / "scripts" / "change disk user.ps1"
+        ).read_text(encoding="utf-8"))
+        self.assertIn("remove-user", (
+            PROJECT_ROOT / "scripts" / "remove disk user.ps1"
+        ).read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

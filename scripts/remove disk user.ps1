@@ -12,34 +12,30 @@ foreach ($requiredScript in @($commonScript, $mountScript)) {
         throw "Required script not found: $requiredScript"
     }
 }
-
 . $commonScript
 
 $requestText = [Console]::In.ReadToEnd()
 if ([string]::IsNullOrWhiteSpace($requestText)) {
-    throw 'User details were not supplied by the command centre.'
+    throw 'User removal details were not supplied by the command centre.'
 }
-
 try {
     $request = $requestText | ConvertFrom-Json -ErrorAction Stop
 } catch {
-    throw 'The supplied user details were not valid.'
+    throw 'The supplied user removal details were not valid.'
 } finally {
     $requestText = $null
 }
 
 $username = ([string]$request.username).Trim()
 $password = [string]$request.password
-
 if ($username -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$') {
-    throw 'The username must contain 1-32 ASCII letters, numbers, dots, underscores, or hyphens and start with a letter or number.'
+    throw 'The active username confirmation is invalid.'
 }
-$passwordBytes = [Text.Encoding]::UTF8.GetByteCount($password)
-if ($password.Length -lt 4 -or $password.Length -gt 32 -or $passwordBytes -gt 128 -or
+if (-not $password -or $password.Length -gt 32 -or
+    [Text.Encoding]::UTF8.GetByteCount($password) -gt 128 -or
     $password.Contains([char]0) -or $password.Contains("`n") -or $password.Contains("`r")) {
-    throw 'The password must contain 4-32 characters, use at most 128 UTF-8 bytes, and contain no line breaks.'
+    throw 'The current password is invalid.'
 }
-$passwordBytes = 0
 
 if ($UsbDrive) {
     $usbTarget = Get-T1OSUsbDriveTarget
@@ -47,18 +43,13 @@ if ($UsbDrive) {
 } else {
     Write-Host 'Checking the mounted disk...'
     if (-not (Test-T1OSDiskMounted -MountPoint $mountPoint)) {
-        throw "The disk must be mounted at $mountPoint before creating a user."
+        throw "The disk must be mounted at $mountPoint before removing a user."
     }
-
-    # mount.ps1 also proves that the existing mount is backed by this project's
-    # storage.img rather than merely trusting the mount-point name.
     & pwsh -NoLogo -NoProfile -NonInteractive -File $mountScript
     if ($LASTEXITCODE -ne 0) {
         throw "The mounted disk could not be verified as storage.img (exit code $LASTEXITCODE)."
     }
 }
-
-Write-Host "Creating the active disk user '$username'..."
 
 $brokerPath = Join-Path $projectRoot 'source/build software/broker/broker.py'
 if (-not (Test-Path -LiteralPath $brokerPath -PathType Leaf)) {
@@ -70,36 +61,34 @@ if ($LASTEXITCODE -ne 0 -or -not $wslBrokerOutput) {
 }
 $wslBrokerPath = ([string]($wslBrokerOutput | Select-Object -First 1)).Trim()
 
-$createCommand = @'
+$removeCommand = @'
 set -eu
 mount_point=$1
 broker=$2
 username=$3
-
-mountpoint -q "$mount_point" || {
-    echo "$mount_point is not mounted." >&2
-    exit 1
-}
-
-umask 077
-python3 -I -B "$broker" provision-user \
+mountpoint -q "$mount_point"
+python3 -I -B "$broker" remove-user \
     --root "$mount_point" \
     --username "$username"
-test "$(stat -c '%a' "$mount_point/the one/master/master.txt")" = 600
-test "$(stat -c '%u:%g:%a' "$mount_point/master/$username")" = 1000:1000:700
+test ! -e "$mount_point/the one/master/master.txt"
+test ! -e "$mount_point/master/$username"
+profile="$mount_point/the one/settings/master/settings.json"
+if [ -e "$profile" ]; then
+    [ -f "$profile" ] && [ ! -L "$profile" ] || {
+        echo 'master profile settings are unsafe' >&2
+        exit 1
+    }
+    rm -f -- "$profile"
+fi
 sync
-echo "Active disk user '$username' was created successfully."
 '@
 
-# The PowerShell native-command pipeline writes its own final line terminator.
-# Adding one here produces a second blank password line, which the broker
-# intentionally rejects as malformed secret input.
-$passwordInput = $password
+$credentialInput = $password
 $password = $null
 $request = $null
 $wslArguments = if ($UsbDrive) {
     $usbMountPoint = "/mnt/t1usb-command-centre-$([guid]::NewGuid().ToString('N'))"
-    $usbCreateCommand = @'
+    $usbRemoveCommand = @'
 set -eu
 drive_source=$1
 mount_point=$2
@@ -111,26 +100,30 @@ trap cleanup EXIT HUP INT TERM
 mount -t drvfs "$drive_source" "$mount_point" -o metadata,uid=0,gid=0,umask=022
 test -d "$mount_point/the one/master"
 chmod 700 "$mount_point/the one/master"
-python3 -I -B "$broker" provision-user --root "$mount_point" --username "$username"
-test "$(stat -c '%a' "$mount_point/the one/master/master.txt")" = 600
-test "$(stat -c '%u:%g:%a' "$mount_point/master/$username")" = 1000:1000:700
-echo "Active USB user '$username' was created successfully."
+python3 -I -B "$broker" remove-user --root "$mount_point" --username "$username"
+test ! -e "$mount_point/the one/master/master.txt"
+test ! -e "$mount_point/master/$username"
 '@
-    @('-u', 'root', '--exec', 'sh', '-c', $usbCreateCommand, 'sh',
+    @('-u', 'root', '--exec', 'sh', '-c', $usbRemoveCommand, 'sh',
         $usbTarget.DriveSource, $usbMountPoint, $wslBrokerPath, $username)
 } else {
     @('-u', 'root', '--exec', 'nsenter', '-t', '1', '-m', '--',
-        'sh', '-c', $createCommand, 'sh', $mountPoint, $wslBrokerPath, $username)
+        'sh', '-c', $removeCommand, 'sh', $mountPoint, $wslBrokerPath, $username)
 }
-$passwordInput | & wsl.exe @wslArguments
-$createExitCode = $LASTEXITCODE
-$passwordInput = $null
+$removeOutput = $credentialInput | & wsl.exe @wslArguments
+$removeExitCode = $LASTEXITCODE
+$credentialInput = $null
 $wslArguments = $null
-
-if ($createExitCode -ne 0) {
-    throw "The disk user could not be created (exit code $createExitCode)."
+if ($removeExitCode -ne 0) {
+    throw "The disk user could not be removed (exit code $removeExitCode)."
 }
 
+if ($UsbDrive) {
+    $profilePath = Join-Path $usbTarget.Root 'the one\settings\master\settings.json'
+    if (Test-Path -LiteralPath $profilePath -PathType Leaf) {
+        Remove-Item -LiteralPath $profilePath -Force
+    }
+}
 $targetName = if ($UsbDrive) { 'USB' } else { 'disk image' }
-Write-Host "$targetName user '$username' is now the active master. Existing home files were kept."
+Write-Host "$targetName user '$username' and its private home were removed."
 exit 0

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shutil
 import stat
 import sys
 import time
@@ -797,6 +798,138 @@ def provision_user(root, username, password, *, owner_uid=1000, owner_gid=1000):
     return username
 
 
+def change_user(root, current_password, username, new_password=""):
+    """Authenticate and atomically change the active account identity.
+
+    An empty ``new_password`` keeps the current versioned credential hash.  A
+    supplied password is always passed through ``hash_password`` so account
+    management cannot drift from login/provisioning KDF policy.
+    """
+    root = os.path.abspath(root)
+    root_descriptor = _open_secure_directory(root)
+    os.close(root_descriptor)
+    master_file = os.path.join(root, "the one", "master", "master.txt")
+    old_username, old_hash = read_credentials(master_file)
+    if not verify_password(current_password, old_hash):
+        raise AuthenticationError("authentication failed")
+
+    username = canonicalize_username(username)
+    replacement = hash_password(new_password) if new_password else old_hash
+    home_base = os.path.join(root, "master")
+    moved = False
+    if username != old_username:
+        base = _open_secure_directory(home_base)
+        try:
+            old_home = _open_child_directory(base, old_username)
+            try:
+                if not stat.S_ISDIR(os.fstat(old_home).st_mode):
+                    raise AuthenticationError("active user home is unsafe")
+            finally:
+                os.close(old_home)
+            try:
+                os.stat(username, dir_fd=base, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise AuthenticationError("requested user home already exists")
+            os.rename(
+                old_username,
+                username,
+                src_dir_fd=base,
+                dst_dir_fd=base,
+            )
+            os.fsync(base)
+            moved = True
+        finally:
+            os.close(base)
+
+    try:
+        atomic_write_credentials(master_file, username, replacement)
+    except Exception:
+        if moved:
+            base = _open_secure_directory(home_base)
+            try:
+                os.rename(
+                    username,
+                    old_username,
+                    src_dir_fd=base,
+                    dst_dir_fd=base,
+                )
+                os.fsync(base)
+            finally:
+                os.close(base)
+        raise
+    return {
+        "old_username": old_username,
+        "username": username,
+        "password_changed": bool(new_password),
+    }
+
+
+def remove_user(root, current_password, username):
+    """Authenticate and remove the active credential and private home tree."""
+    root = os.path.abspath(root)
+    root_descriptor = _open_secure_directory(root)
+    os.close(root_descriptor)
+    master_file = os.path.join(root, "the one", "master", "master.txt")
+    active_username, stored = read_credentials(master_file)
+    username = canonicalize_username(username)
+    if username != active_username:
+        raise AuthenticationError("active username confirmation does not match")
+    if not verify_password(current_password, stored):
+        raise AuthenticationError("authentication failed")
+
+    home_base = os.path.join(root, "master")
+    quarantine = f".removed-{secrets.token_hex(12)}"
+    base = _open_secure_directory(home_base)
+    moved = False
+    try:
+        home = _open_child_directory(base, active_username)
+        try:
+            if not stat.S_ISDIR(os.fstat(home).st_mode):
+                raise AuthenticationError("active user home is unsafe")
+        finally:
+            os.close(home)
+        os.rename(
+            active_username,
+            quarantine,
+            src_dir_fd=base,
+            dst_dir_fd=base,
+        )
+        os.fsync(base)
+        moved = True
+
+        credential_parent, credential_name = os.path.split(master_file)
+        credentials = _open_secure_directory(credential_parent)
+        try:
+            os.unlink(credential_name, dir_fd=credentials)
+            os.fsync(credentials)
+        except Exception:
+            os.rename(
+                quarantine,
+                active_username,
+                src_dir_fd=base,
+                dst_dir_fd=base,
+            )
+            os.fsync(base)
+            moved = False
+            raise
+        finally:
+            os.close(credentials)
+    finally:
+        os.close(base)
+
+    if moved:
+        quarantine_path = os.path.join(home_base, quarantine)
+        try:
+            shutil.rmtree(quarantine_path)
+        except Exception as error:
+            raise AuthenticationError(
+                "account removed but quarantined home cleanup failed"
+            ) from error
+    return active_username
+
+
 class AttemptLimiter:
     """A process-safe, persistent exponential backoff state machine."""
 
@@ -1099,6 +1232,19 @@ def _read_password_stdin():
     return value
 
 
+def _read_password_lines(count):
+    if not isinstance(count, int) or count < 1 or count > 2:
+        raise ValueError("invalid password input count")
+    value = sys.stdin.read((MAX_PASSWORD_CHARS + 3) * count)
+    value = value.replace("\r\n", "\n")
+    if value.endswith("\n"):
+        value = value[:-1]
+    lines = value.split("\n")
+    if len(lines) != count or any("\r" in line for line in lines):
+        raise ValueError("password input did not contain the expected lines")
+    return lines
+
+
 def _cli(argv=None):
     parser = argparse.ArgumentParser(description="T1OS authentication broker")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1111,6 +1257,15 @@ def _cli(argv=None):
     provision = commands.add_parser("provision-user")
     provision.add_argument("--root", required=True)
     provision.add_argument("--username", required=True)
+
+    change = commands.add_parser("change-user")
+    change.add_argument("--root", required=True)
+    change.add_argument("--username", required=True)
+    change.add_argument("--change-password", action="store_true")
+
+    remove = commands.add_parser("remove-user")
+    remove.add_argument("--root", required=True)
+    remove.add_argument("--username", required=True)
 
     recovery = commands.add_parser("issue-recovery")
     recovery.add_argument("--master-file", default="/the one/master/master.txt")
@@ -1134,6 +1289,22 @@ def _cli(argv=None):
         elif arguments.command == "provision-user":
             print(provision_user(
                 arguments.root, arguments.username, _read_password_stdin()
+            ))
+        elif arguments.command == "change-user":
+            passwords = _read_password_lines(
+                2 if arguments.change_password else 1
+            )
+            print(json.dumps(change_user(
+                arguments.root,
+                passwords[0],
+                arguments.username,
+                passwords[1] if arguments.change_password else "",
+            ), sort_keys=True, separators=(",", ":")))
+        elif arguments.command == "remove-user":
+            print(remove_user(
+                arguments.root,
+                _read_password_lines(1)[0],
+                arguments.username,
             ))
         elif arguments.command == "issue-recovery":
             issued = issue_recovery_authorization(

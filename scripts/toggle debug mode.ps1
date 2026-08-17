@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param()
+param([switch]$UsbDrive)
 
 $ErrorActionPreference = 'Stop'
 $commonScript = Join-Path $PSScriptRoot 'common.ps1'
@@ -14,20 +14,34 @@ foreach ($requiredScript in @($commonScript, $mountScript)) {
 
 . $commonScript
 
-Write-Host 'Checking the mounted disk...'
-if (-not (Test-T1OSDiskMounted -MountPoint $mountPoint)) {
-    throw "The disk must be mounted at $mountPoint before changing debug mode."
-}
+if ($UsbDrive) {
+    $usbTarget = Get-T1OSUsbDriveTarget
+    $mountPoint = "/mnt/t1usb-command-centre-$([guid]::NewGuid().ToString('N'))"
+    Write-Host "T1OS USB target: $($usbTarget.DriveSource) '$($usbTarget.Label)' on USB disk $($usbTarget.DiskNumber)."
+} else {
+    Write-Host 'Checking the mounted disk...'
+    if (-not (Test-T1OSDiskMounted -MountPoint $mountPoint)) {
+        throw "The disk must be mounted at $mountPoint before changing debug mode."
+    }
 
-& pwsh -NoLogo -NoProfile -NonInteractive -File $mountScript
-if ($LASTEXITCODE -ne 0) {
-    throw "The mounted disk could not be verified as storage.img (exit code $LASTEXITCODE)."
+    & pwsh -NoLogo -NoProfile -NonInteractive -File $mountScript
+    if ($LASTEXITCODE -ne 0) {
+        throw "The mounted disk could not be verified as storage.img (exit code $LASTEXITCODE)."
+    }
 }
 
 $toggleCommand = @'
 set -eu
 mount_point=$1
-mountpoint -q "$mount_point"
+drive_source=${2:-}
+if [ -n "$drive_source" ]; then
+    mkdir -m 700 "$mount_point"
+    cleanup() { sync; umount "$mount_point" 2>/dev/null || true; rmdir "$mount_point" 2>/dev/null || true; }
+    trap cleanup EXIT HUP INT TERM
+    mount -t drvfs "$drive_source" "$mount_point" -o metadata,uid=0,gid=0,umask=022
+else
+    mountpoint -q "$mount_point"
+fi
 
 python3 - "$mount_point" <<'PY'
 import os
@@ -112,10 +126,16 @@ sync
 '@
 
 Write-Host 'Updating recognised T1OS debug flags...'
-& wsl.exe -u root --exec nsenter -t 1 -m -- sh -c $toggleCommand sh $mountPoint
+$wslArguments = if ($UsbDrive) {
+    @('-u', 'root', '--exec', 'sh', '-c', $toggleCommand, 'sh', $mountPoint, $usbTarget.DriveSource)
+} else {
+    @('-u', 'root', '--exec', 'nsenter', '-t', '1', '-m', '--', 'sh', '-c', $toggleCommand, 'sh', $mountPoint)
+}
+& wsl.exe @wslArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Debug mode could not be changed (exit code $LASTEXITCODE)."
 }
 
-Write-Host 'Debug mode update completed successfully.'
+$targetName = if ($UsbDrive) { 'USB' } else { 'disk image' }
+Write-Host "$targetName debug mode update completed successfully."
 exit 0

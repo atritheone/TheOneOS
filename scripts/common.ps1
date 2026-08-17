@@ -49,6 +49,66 @@ function Test-T1OSDiskMounted {
     throw "Could not verify the WSL host mount status for $MountPoint (exit code $mountExitCode)."
 }
 
+function Get-T1OSUsbDriveTarget {
+    [CmdletBinding()]
+    param()
+
+    $requiredRelativePaths = @(
+        'boot',
+        'the one',
+        'the one\build',
+        'the one\master',
+        'the one\settings\runtime paths.json',
+        'the one\resources\t1os-drive.ico',
+        'autorun.inf'
+    )
+    $candidates = @(
+        Get-Volume -ErrorAction Stop |
+            Where-Object {
+                $_.DriveLetter -and (
+                    [string]$_.DriveLetter -ceq 'D' -or
+                    ([string]$_.FileSystemLabel).StartsWith('T1OS', [StringComparison]::OrdinalIgnoreCase)
+                )
+            } |
+            ForEach-Object {
+                $volume = $_
+                $letter = ([string]$volume.DriveLetter).ToUpperInvariant()
+                $root = "$letter`:\"
+                $partition = Get-Partition -DriveLetter $letter -ErrorAction Stop
+                $disk = $partition | Get-Disk -ErrorAction Stop
+                if (
+                    [string]$disk.BusType -cne 'USB' -or $disk.IsBoot -or $disk.IsSystem -or
+                    $disk.IsReadOnly -or [string]$volume.FileSystemType -cne 'NTFS' -or
+                    [string]$volume.HealthStatus -cne 'Healthy'
+                ) { return }
+                foreach ($relativePath in $requiredRelativePaths) {
+                    if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath))) { return }
+                }
+                $autorun = Get-Content -LiteralPath (Join-Path $root 'autorun.inf') -Raw
+                if (
+                    $autorun -notmatch '(?im)^\s*Label=T1OS(?:\s|$)' -or
+                    $autorun -notmatch '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+                ) { return }
+                [pscustomobject]@{
+                    DriveLetter = $letter
+                    Root = $root
+                    DriveSource = "$letter`:"
+                    Label = ([string]$volume.FileSystemLabel).Trim()
+                    DiskNumber = [int]$disk.Number
+                    SerialNumber = ([string]$disk.SerialNumber).Trim()
+                    Model = ([string]$disk.FriendlyName).Trim()
+                }
+            }
+    )
+    $preferred = @($candidates | Where-Object DriveLetter -CEQ 'D')
+    if ($preferred.Count -eq 1) { return $preferred[0] }
+    if ($candidates.Count -eq 1) { return $candidates[0] }
+    if ($candidates.Count -eq 0) {
+        throw 'No unambiguous healthy NTFS T1OS USB drive was found.'
+    }
+    throw 'More than one T1OS USB drive was found. Keep only the intended target connected.'
+}
+
 function Assert-T1OSFilesystemHealthy {
     [CmdletBinding()]
     param(
