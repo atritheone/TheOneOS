@@ -10625,7 +10625,10 @@ def paintstartmenu(sock):
 
                 label = str(item.get("label", ""))
 
-                tx = bx + STARTPAD
+                # Align application names with the software heading.  The
+                # row rectangle already begins at the heading inset; applying
+                # STARTPAD a second time made every name look indented.
+                tx = bx
 
                 ty = y + (bh - STARTITEMSIZE) // 2
 
@@ -13268,6 +13271,36 @@ def graphicsdiagnostic():
 
         if not any(command.get("kind") == "text" and command.get("text") == "software" for command in scenes["startmenu"]):
             raise RuntimeError("start menu scene did not preserve its headings")
+
+        softwareheading = next(
+            command for command in scenes["startmenu"]
+            if command.get("kind") == "text"
+            and command.get("text") == "software"
+            and int(command.get("x", -1)) == int(STARTLEFTW + STARTPAD)
+        )
+        softwarelabels = {
+            str(item.get("label", "")) for item in STARTSOFTITEMS
+        }
+        softwarecommands = [
+            command for command in scenes["startmenu"]
+            if command.get("kind") == "text"
+            and command.get("text") in softwarelabels
+            and int(command.get("x", -1)) == int(softwareheading.get("x", -2))
+        ]
+        if any(
+            not any(
+                command.get("text") == str(item.get("label", ""))
+                for command in softwarecommands
+            )
+            for item in STARTSOFTITEMS
+        ):
+            raise RuntimeError(
+                "start menu software names do not align with their heading "
+                f"heading={softwareheading.get('x')}"
+            )
+        result["checks"]["startmenu_software_alignment"] = int(
+            softwareheading["x"]
+        )
 
         if not any(command.get("kind") == "text" for command in scenes["tooltip"]):
             raise RuntimeError("tooltip scene did not preserve its text")

@@ -1,21 +1,24 @@
 #!/usr/bin/env python3
 """Security-contract tests for the native T1OS system package manager.
 
-Path-based wheel and lock installation is intentionally unavailable until the
-manager has SCM_RIGHTS descriptor transport.  These tests exercise the public
-dispatcher boundary without weakening that policy or importing T1OS runtime
-code under the Windows host interpreter.
+Wheel imports use authenticated SCM_RIGHTS descriptors. Lock imports use a
+bounded stream after the manager-ready handshake; caller path strings never
+cross the privileged manager boundary. These tests exercise that public
+dispatcher contract without importing T1OS code on the host.
 """
 
 from __future__ import annotations
 
 import ast
+import array
 import base64
 import hashlib
 import importlib
 import importlib.util
 import os
 from pathlib import Path
+import json
+import socket
 import sys
 import tempfile
 
@@ -87,21 +90,135 @@ def main(argv):
         expected_mutations = {
             "install_module", "remove_module", "pin_module", "unpin_module",
             "update_module", "update_modules", "repair_modules",
-            "restore_modules", "clear_cache",
+            "restore_modules", "clear_cache", "install_wheel", "apply_lock",
         }
-        expected_disabled = {"install_wheel", "apply_lock"}
         assert set(manager.READ_OPERATIONS) == expected_reads
         assert set(manager.MUTATION_OPERATIONS) == expected_mutations
-        assert set(manager.DISABLED_DESCRIPTOR_OPERATIONS) == expected_disabled
-        assert set(manager.OPERATIONS) == expected_reads | expected_mutations | expected_disabled
+        assert set(manager.DESCRIPTOR_OPERATIONS) == {"install_wheel", "apply_lock"}
+        assert set(manager.OPERATIONS) == expected_reads | expected_mutations
         assert not any(name.startswith("pip_") for name in manager.OPERATIONS)
         assert manager.manager_python_command() == [os.path.realpath(sys.executable)]
+
+        class FakeDistribution:
+            def __init__(self, top_level, files):
+                self.top_level = top_level
+                self.files = files
+
+            def read_text(self, name):
+                return self.top_level if name == "top_level.txt" else None
+
+        assert manager.distribution_imports(FakeDistribution(
+            "_sodium\nnacl\n",
+            ["nacl/__init__.py", "nacl/_sodium.abi3.so"],
+        )) == ["nacl"]
+        assert manager.distribution_imports(FakeDistribution(
+            "_cffi_backend\ncffi\n",
+            ["_cffi_backend.cpython-314-x86_64-linux-gnu.so", "cffi/__init__.py"],
+        )) == ["_cffi_backend", "cffi"]
+
+        # Keep recvmsg's control buffer below the VM kernel's ancillary-memory
+        # ceiling while leaving room for credentials/security metadata plus a
+        # descriptor.  An oversized request can be clipped to MSG_CTRUNC.
+        receive_source = function_source(manager_path, "receive_request")
+        assert "socket.CMSG_SPACE(4 * 1024)" in receive_source
+        assert "socket.CMSG_SPACE(64 * 1024)" not in receive_source
+        assert "tempfile.TemporaryFile" in receive_source
+        assert "descriptors.append(os.dup(stream.fileno()))" in receive_source
+        apply_source = function_source(manager_path, "op_apply_lock")
+        assert "allow_anonymous=True" in apply_source
+        request_source = function_source(manager_path, "request")
+        serve_source = function_source(manager_path, "serve")
+        assert "ready = channel.recv(1)" in request_source
+        assert "channel.sendall(PROTOCOL_READY)" in serve_source
+        assert serve_source.index("channel.setsockopt") < serve_source.index(
+            "channel.sendall(PROTOCOL_READY)"
+        )
+
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        received_descriptors = []
+        try:
+            left.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+            with tempfile.TemporaryFile() as stream:
+                stream.write(b"x")
+                stream.flush()
+                stream.seek(0)
+                payload = (
+                    json.dumps(request(manager, "apply_lock", {
+                        "size": 1, "sha256": "a" * 64,
+                    }), separators=(",", ":")) + "\n"
+                ).encode("utf-8")
+                rights = array.array("i", [stream.fileno()])
+                right.sendmsg([payload], [(
+                    socket.SOL_SOCKET, socket.SCM_RIGHTS, rights,
+                )])
+                received_request, received_descriptors = manager.receive_request(left)
+                assert received_request["operation"] == "apply_lock"
+                assert len(received_descriptors) == 1
+        finally:
+            for descriptor in received_descriptors:
+                os.close(descriptor)
+            left.close()
+            right.close()
+
+        left, right = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        received_descriptors = []
+        lock_content = b'[t1os]\nformat = 1\n'
+        try:
+            payload = (
+                json.dumps(request(manager, "apply_lock", {
+                    "size": len(lock_content),
+                    "sha256": hashlib.sha256(lock_content).hexdigest(),
+                }), separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+            right.sendall(payload + lock_content)
+            received_request, received_descriptors = manager.receive_request(left)
+            assert received_request["operation"] == "apply_lock"
+            assert len(received_descriptors) == 1
+            assert os.read(received_descriptors[0], len(lock_content) + 1) == lock_content
+        finally:
+            for descriptor in received_descriptors:
+                os.close(descriptor)
+            left.close()
+            right.close()
 
         manager_source = Path(manager_path).read_text(encoding="utf-8")
         for retired_authority in (
             "role=architect", "currentrole", "T1OS_ARCHITECT_TOKEN", "master.txt",
         ):
             assert retired_authority not in manager_source
+
+        operations_server_path = (
+            Path(manager_path).parent.parent / "operations" / "operationsserver.py"
+        )
+        brick_path = Path(manager_path).parent.parent / "brick" / "brick.py"
+        missing_source = function_source(brick_path, "missingpythonmodules")
+        prepare_source = function_source(brick_path, "preparepythonmodules")
+        detector_namespace = {
+            "os": os, "stat": __import__("stat"), "ast": ast,
+            "importlib": importlib, "sys": sys,
+        }
+        exec(missing_source, detector_namespace)
+        missing_script = Path(temporary) / "missing_import_test.py"
+        missing_script.write_text(
+            "import json\nimport t1os_module_that_is_not_installed\n",
+            encoding="utf-8",
+        )
+        assert detector_namespace["missingpythonmodules"](
+            os.fspath(missing_script)
+        ) == ["t1os_module_that_is_not_installed"]
+        assert "importlib.invalidate_caches()" in missing_source
+        assert "install them? (yes/no)" in prepare_source
+        assert "answer yes or no in lowercase" in prepare_source
+        assert "if answer in ('yes', 'no')" in prepare_source
+        assert "authorisedpythoncall" in prepare_source
+        server_policy = function_source(
+            operations_server_path, "pythoncapabilitypolicy"
+        )
+        for required_policy in (
+            "'install_wheel': 'python:install-wheel'",
+            "'apply_lock': 'python:apply-lock'",
+        ):
+            assert required_policy in server_policy
 
         invalid_requests = (
             ("install_module", {"name": "safe-name", "path": "/tmp/hostile.whl"}),
@@ -125,26 +242,25 @@ def main(argv):
                     request(manager, operation, arguments), None),
             )
 
-        for operation in sorted(expected_disabled):
+        for operation in sorted(manager.DESCRIPTOR_OPERATIONS):
             expect_manager_error(
-                manager, "descriptor_transport_required",
+                manager, "invalid_arguments",
                 lambda operation=operation: manager.dispatch(
                     request(manager, operation), None),
             )
-        expect_manager_error(
-            manager, "descriptor_transport_required",
-            lambda: manager.op_install_wheel({"path": "/tmp/hostile.whl"}),
-        )
-        expect_manager_error(
-            manager, "descriptor_transport_required",
-            lambda: manager.op_apply_lock({"path": "/tmp/hostile.toml"}),
-        )
 
         policy_cases = {
             ("install_module", (("name", "Safe.Name"),)): (
                 "python:install", "safe-name@latest"),
             ("install_module", (("name", "Safe.Name"), ("version", "1.2"))): (
                 "python:install", "safe-name@1.2"),
+            ("install_wheel", (
+                ("filename", "safe_name-1.0-py3-none-any.whl"),
+                ("size", 1234), ("sha256", "a" * 64),
+            )): (
+                "python:install-wheel",
+                "safe_name-1.0-py3-none-any.whl@" + "a" * 64,
+            ),
             ("remove_module", (("name", "Safe.Name"),)): (
                 "python:remove", "safe-name"),
             ("pin_module", (("name", "Safe.Name"),)): (
@@ -157,6 +273,8 @@ def main(argv):
             ("repair_modules", ()): ("python:repair", "current-lock"),
             ("restore_modules", ()): ("python:restore", "previous-generation"),
             ("clear_cache", ()): ("python:clear-cache", "unused"),
+            ("apply_lock", (("size", 1234), ("sha256", "b" * 64))): (
+                "python:apply-lock", "b" * 64),
         }
         valid_arguments = {}
         for (operation, pairs), expected in policy_cases.items():
@@ -187,16 +305,29 @@ def main(argv):
         original_operations = dict(manager.OPERATIONS)
         try:
             for operation in expected_mutations:
-                manager.OPERATIONS[operation] = (
-                    lambda arguments, operation=operation: {
-                        "message": operation + " accepted by test boundary",
-                    }
-                )
+                if operation in manager.DESCRIPTOR_OPERATIONS:
+                    manager.OPERATIONS[operation] = (
+                        lambda arguments, descriptor, operation=operation: {
+                            "message": operation + " accepted by test boundary",
+                            "descriptor": descriptor,
+                        }
+                    )
+                else:
+                    manager.OPERATIONS[operation] = (
+                        lambda arguments, operation=operation: {
+                            "message": operation + " accepted by test boundary",
+                        }
+                    )
             for operation in sorted(expected_mutations):
                 authorizations.clear()
+                descriptors = [7] if operation in manager.DESCRIPTOR_OPERATIONS else None
+                manager.set_progress(operation, "testing", "test-transaction")
                 response = manager.dispatch(
-                    request(manager, operation, valid_arguments[operation]), peer)
+                    request(manager, operation, valid_arguments[operation]),
+                    peer, descriptors,
+                )
                 assert response["ok"] is True
+                assert manager.progress()["running"] is False
                 assert len(authorizations) == 1
                 authorised_operation, authorised_arguments, identity = authorizations[0]
                 assert authorised_operation == operation

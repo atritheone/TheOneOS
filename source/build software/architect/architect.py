@@ -375,7 +375,7 @@ def guiline(prompt):
             pass
 
 
-def guipass(prompt):
+def guipass(prompt, ready=None):
 
     try:
 
@@ -407,6 +407,12 @@ def guipass(prompt):
         __main__.INPUTBUF = ''
 
         __main__.CURSORPOS = 0
+
+        # The GUI input modal is now active and its secret buffer is ready.
+        # Callers which drive a trusted test session can synchronize here
+        # instead of guessing how long prompt construction will take.
+        if callable(ready):
+            ready()
 
         last = time.monotonic()
 
@@ -489,9 +495,9 @@ def guipass(prompt):
             pass
 
 
-def readpass(prompt: str):
+def readpass(prompt: str, ready=None):
 
-    pw = guipass(prompt)
+    pw = guipass(prompt, ready=ready)
 
     if pw != '':
         return pw

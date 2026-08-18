@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Smoke', 'Brick', 'Gui', 'Features', 'Issues', 'Full')]
+    [ValidateSet('Smoke', 'Brick', 'Gui', 'Features', 'Issues', 'Python', 'Full')]
     [string]$Suite = 'Brick',
 
     [string[]]$Directive,
@@ -67,6 +67,10 @@ $featureLaunches = [ordered]@{}
 $featureStatus = $null
 $issueChecks = [ordered]@{}
 $issueLaunches = [ordered]@{}
+$pythonChecks = [ordered]@{}
+$pythonLaunches = [ordered]@{}
+$pythonSettingsLaunch = $null
+$pythonBrickMutationLaunch = $null
 $serviceStatus = $null
 $failure = $null
 $startedAt = [DateTime]::UtcNow
@@ -219,7 +223,8 @@ function Invoke-T1OSAgentRequest {
             'brick', 'brick-gui', 'settings-gui', 'settings-display-gui',
             'player-gui', 'player-audio-gui', 'viewer-gui', 'write-gui',
             'chromium-gui', 'array-opengl-gui', 'session-status',
-            'feature-status', 'service-status', 'network-probe', 'close-fixed-guis'
+            'feature-status', 'service-status', 'network-probe', 'close-fixed-guis',
+            'creep-self-test'
         )]
         [string]$Action = 'brick',
         [AllowEmptyString()][string]$Command = '',
@@ -466,13 +471,23 @@ function Send-T1OSAsciiScanText {
         'h'='23'; 'i'='17'; 'j'='24'; 'k'='25'; 'l'='26'; 'm'='32'; 'n'='31'
         'o'='18'; 'p'='19'; 'q'='10'; 'r'='13'; 's'='1f'; 't'='14'; 'u'='16'
         'v'='2f'; 'w'='11'; 'x'='2d'; 'y'='15'; 'z'='2c'; ' '='39'
+        '1'='02'; '2'='03'; '3'='04'; '4'='05'; '5'='06'; '6'='07'; '7'='08'
+        '8'='09'; '9'='0a'; '0'='0b'; '-'='0c'; ','='33'; '.'='34'; '/'='35'
     }
+    $shiftedScanCodes = @{ ':'='27' }
     foreach ($character in $Text.ToCharArray()) {
         $key = [string]$character
-        if (-not $scanCodes.ContainsKey($key)) {
+        if ($scanCodes.ContainsKey($key)) {
+            Send-T1OSKey -ScanCode $scanCodes[$key]
+        }
+        elseif ($shiftedScanCodes.ContainsKey($key)) {
+            $scanCode = $shiftedScanCodes[$key]
+            $released = '{0:x2}' -f (([Convert]::ToInt32($scanCode, 16) + 0x80) -band 0xff)
+            Send-T1OSScanCodes -Codes @('2a', $scanCode, $released, 'aa')
+        }
+        else {
             throw "ASCII scan-code injection does not support '$key'."
         }
-        Send-T1OSKey -ScanCode $scanCodes[$key]
         Start-Sleep -Milliseconds $DelayMilliseconds
     }
 }
@@ -527,6 +542,7 @@ function Save-T1OSGuiStage {
         [string]$DifferentFrom,
         [int]$MinNonBlackSamples = 1,
         [int]$MinUniqueColors = 8,
+        [int]$MinRedSamples = 0,
         [int]$TimeoutSeconds = 30
     )
 
@@ -543,6 +559,7 @@ function Save-T1OSGuiStage {
                 $stats.height -eq $Height -and
                 $stats.non_black_samples -ge $MinNonBlackSamples -and
                 $stats.unique_sampled_colors -ge $MinUniqueColors -and
+                $stats.red_samples -ge $MinRedSamples -and
                 (-not $DifferentFrom -or $stats.sha256 -ne $DifferentFrom)
             ) {
                 $guiStages[$Name] = $stats
@@ -650,6 +667,488 @@ function Get-T1OSServiceStatus {
         throw 'the VM test agent could not read fixed service diagnostics.'
     }
     return $status.response
+}
+
+function Wait-T1OSPythonIdle {
+    param([int]$TimeoutSeconds = 300)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $status = Invoke-T1OSAgentRequest -Action 'brick' -Command 'python status' -Order 0
+        if ($status.passed) {
+            $data = $status.response.result.results[0].data
+            if (-not [bool]$data.transaction.running) {
+                return $status
+            }
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'the managed Python transaction did not become idle.'
+}
+
+function Wait-T1OSPythonModule {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [bool]$Present = $true,
+        [int]$TimeoutSeconds = 300
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $result = Invoke-T1OSAgentRequest -Action 'brick' `
+            -Command "show python module $Name" -Order 0
+        if ($Present -and $result.passed) {
+            return $result
+        }
+        if (-not $Present -and -not $result.passed -and
+            [string]$result.response.result.results[0].code -eq 'module_missing') {
+            return $result
+        }
+        $feature = Get-T1OSFeatureStatus
+        if ([string]$feature.settings_status.python_stage -eq 'python-error') {
+            throw "Settings Python change failed: $([string]$feature.settings_status.python_code): $([string]$feature.settings_status.python_error)"
+        }
+        Start-Sleep -Seconds 2
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Python module state did not settle: name=$Name present=$Present"
+}
+
+function Wait-T1OSSettingsPythonOperation {
+    param(
+        [Parameter(Mandatory)][string]$Operation,
+        [int]$TimeoutSeconds = 300
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $feature = Get-T1OSFeatureStatus
+        $stage = [string]$feature.settings_status.python_stage
+        if ($stage -eq 'python-error') {
+            throw "Settings Python change failed: $([string]$feature.settings_status.python_code): $([string]$feature.settings_status.python_error)"
+        }
+        if ($stage -eq 'python-complete' -and
+            [string]$feature.settings_status.python_operation -eq $Operation) {
+            return $feature
+        }
+        Start-Sleep -Seconds 1
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Settings Python operation did not complete: $Operation"
+}
+
+function Wait-T1OSSettingsPythonReady {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $feature = Get-T1OSFeatureStatus
+        $status = $feature.settings_status
+        if ([int]$status.pid -eq $ProcessId -and
+            [string]$status.section -eq 'python' -and
+            [bool]$status.graphics_active -and
+            -not [bool]$status.python_busy) {
+            return $feature
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Settings Python page did not become idle: pid=$ProcessId"
+}
+
+function Wait-T1OSBrickPythonStage {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [Parameter(Mandatory)][string]$Operation,
+        [Parameter(Mandatory)][string]$Stage,
+        [string]$PythonName = '',
+        [int]$TimeoutSeconds = 300
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $feature = Get-T1OSFeatureStatus
+        $status = $feature.brick_status
+        if ([int]$status.pid -eq $ProcessId -and
+            [string]$status.python_operation -eq $Operation -and
+            ([string]::IsNullOrEmpty($PythonName) -or
+             [string]$status.python_name -eq $PythonName)) {
+            $actual = [string]$status.stage
+            if ($actual -in @('python-auth-error', 'python-cancelled')) {
+                throw "Brick Python authorisation failed: $actual $([string]$status.python_error)"
+            }
+            if ($actual -eq $Stage) {
+                if ($Stage -eq 'python-complete' -and -not [bool]$status.python_ok) {
+                    $detail = if ($null -ne $status.python_data) {
+                        $status.python_data | ConvertTo-Json -Compress -Depth 8
+                    } else { '{}' }
+                    throw "Brick Python operation failed: $([string]$status.python_code): $([string]$status.python_error) data=$detail"
+                }
+                return $feature
+            }
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Brick Python stage did not arrive: operation=$Operation stage=$Stage pid=$ProcessId"
+}
+
+function Wait-T1OSBrickStage {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [Parameter(Mandatory)][string]$Stage,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $feature = Get-T1OSFeatureStatus
+        $status = $feature.brick_status
+        if ([int]$status.pid -eq $ProcessId -and
+            [string]$status.stage -eq $Stage) {
+            return $feature
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Brick stage did not arrive: stage=$Stage pid=$ProcessId"
+}
+
+function Wait-T1OSCreepInteractiveStage {
+    param(
+        [Parameter(Mandatory)][string]$Stage,
+        [Parameter(Mandatory)][int]$Sequence,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    do {
+        $feature = Get-T1OSFeatureStatus
+        $status = $feature.creep_interactive
+        if ([string]$status.stage -eq 'failed') {
+            $detail = $status | ConvertTo-Json -Compress -Depth 8
+            throw "Creep failed before becoming interactive: $detail"
+        }
+        if ([string]$status.stage -eq $Stage -and
+            [int]$status.sequence -eq $Sequence) {
+            return $feature
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Creep interactive stage did not arrive: stage=$Stage sequence=$Sequence"
+}
+
+function Invoke-T1OSCreepFrontTest {
+    Write-Host 'PYTHON: running and interacting with Creep in Brick front mode...'
+    Start-Sleep -Seconds 2
+    [void](Save-T1OSGuiStage -Name 'python-creep-launch' -TimeoutSeconds 30)
+    [void](Wait-T1OSCreepInteractiveStage -Stage 'ready' -Sequence 0)
+    $interactiveCommands = @(
+        'set target 127.0.0.1:65535',
+        'add endpoints api/v1,login',
+        'set debug true',
+        'show options',
+        'help'
+    )
+    $sequence = 0
+    foreach ($command in $interactiveCommands) {
+        Send-T1OSAsciiScanText -Text $command -DelayMilliseconds 35
+        Send-T1OSKey -ScanCode '1c'
+        $sequence++
+        $interactive = Wait-T1OSCreepInteractiveStage `
+            -Stage 'running' -Sequence $sequence
+    }
+    $interactiveStatus = $interactive.creep_interactive
+    if ([string]$interactiveStatus.target -ne '127.0.0.1:65535' -or
+        -not [bool]$interactiveStatus.debug -or
+        @($interactiveStatus.endpoints) -notcontains '/api' -or
+        @($interactiveStatus.endpoints) -notcontains '/api/v1' -or
+        @($interactiveStatus.endpoints) -notcontains '/login') {
+        $detail = $interactiveStatus | ConvertTo-Json -Compress -Depth 8
+        throw "Creep front-mode state did not match the entered commands: $detail"
+    }
+    [void](Save-T1OSGuiStage -Name 'python-creep-front' -TimeoutSeconds 30)
+    Send-T1OSAsciiScanText -Text 'exit' -DelayMilliseconds 60
+    Send-T1OSKey -ScanCode '1c'
+    [void](Wait-T1OSCreepInteractiveStage -Stage 'exited' -Sequence $sequence)
+    $pythonChecks.creep_front_interactive = $true
+}
+
+function Invoke-T1OSSettingsPythonInstall {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [switch]$Reuse,
+        [switch]$CloseAfter
+    )
+
+    if ($Reuse) {
+        $launch = $script:pythonSettingsLaunch
+        if ($null -eq $launch) {
+            throw 'Settings reuse was requested before the Python page was launched.'
+        }
+    }
+    else {
+        $launch = Invoke-T1OSAgentRequest -Action 'settings-gui' -Order 0
+        $script:pythonSettingsLaunch = $launch
+    }
+    $pythonLaunches["settings-$Name"] = $launch
+    if (-not $launch.passed) {
+        throw "Settings could not be launched to install $Name."
+    }
+    if (-not $Reuse) {
+        Start-Sleep -Seconds 3
+        Send-T1OSWinShortcut -ScanCode '39'
+        Start-Sleep -Seconds 1
+    }
+    [void](Wait-T1OSSettingsPythonReady `
+        -ProcessId ([int]$launch.response.pid) -TimeoutSeconds 60)
+
+    $scale = [Math]::Max(0.5, [Math]::Min($Width / 1920.0, $Height / 1080.0))
+    $queryX = [int][Math]::Round(1000 * $scale)
+    $queryY = 28 + [int][Math]::Round(162 * $scale)
+    $actionX = $Width - [int][Math]::Round(81 * $scale)
+    $confirmY = 28 + [int][Math]::Round(248 * $scale)
+
+    Send-T1OSClick -X $queryX -Y $queryY
+    Start-Sleep -Milliseconds 500
+    Send-T1OSAsciiScanText -Text $Name -DelayMilliseconds 75
+    Start-Sleep -Seconds 1
+    Send-T1OSClick -X $actionX -Y $queryY
+    Start-Sleep -Seconds 1
+    Send-T1OSClick -X $actionX -Y $confirmY
+    Start-Sleep -Seconds 1
+    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 75
+    Send-T1OSKey -ScanCode '1c'
+
+    [void](Wait-T1OSPythonModule -Name $Name -Present $true -TimeoutSeconds 300)
+    [void](Wait-T1OSSettingsPythonOperation -Operation 'install_module' -TimeoutSeconds 300)
+    $pythonChecks["settings_installed_$Name"] = $true
+    if ($CloseAfter) {
+        Start-Sleep -Seconds 1
+        $closed = Invoke-T1OSAgentRequest -Action 'close-fixed-guis' -Order 0
+        if (-not $closed.passed) {
+            throw "Settings did not close cleanly after installing $Name."
+        }
+        $script:pythonSettingsLaunch = $null
+    }
+}
+
+function Invoke-T1OSBrickPythonMutation {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Command
+    )
+
+    $launch = $script:pythonBrickMutationLaunch
+    if ($null -eq $launch) {
+        $launch = Invoke-T1OSAgentRequest -Action 'brick-gui' -Order 0
+        $script:pythonBrickMutationLaunch = $launch
+    }
+    $pythonLaunches["brick-$Name"] = $launch
+    if (-not $launch.passed) {
+        throw "Brick could not be launched for Python directive: $Command"
+    }
+    if ($pythonLaunches.Count -eq 3) {
+        # The two Settings launch records precede the first mutation record.
+        Start-Sleep -Seconds 3
+        Send-T1OSWinShortcut -ScanCode '39'
+        Start-Sleep -Seconds 2
+    }
+    Send-T1OSText -Text $Command
+    Send-T1OSKey -ScanCode '1c'
+    $operation = switch -Regex ($Command) {
+        '^install python wheel ' { 'install_wheel'; break }
+        '^apply python lock ' { 'apply_lock'; break }
+        '^install python module ' { 'install_module'; break }
+        '^remove python module ' { 'remove_module'; break }
+        '^pin python module ' { 'pin_module'; break }
+        '^unpin python module ' { 'unpin_module'; break }
+        '^update python module ' { 'update_module'; break }
+        '^update python modules$' { 'update_modules'; break }
+        '^repair python modules$' { 'repair_modules'; break }
+        '^restore python modules$' { 'restore_modules'; break }
+        '^clear python cache$' { 'clear_cache'; break }
+        default { throw "No Python manager operation mapping for Brick directive: $Command" }
+    }
+    $brickPid = [int]$launch.response.pid
+    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid -Operation $operation `
+        -Stage 'python-password-ready' -TimeoutSeconds 30)
+    # Brick's modal password reader consumes the keyboard stream.  Use actual
+    # press/release scan codes so the test follows the same path as a physical
+    # keyboard instead of VirtualBox's separate text-injection path.
+    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
+    Send-T1OSKey -ScanCode '1c'
+    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid -Operation $operation `
+        -Stage 'python-complete' -TimeoutSeconds 300)
+    [void](Wait-T1OSPythonIdle -TimeoutSeconds 300)
+    $pythonChecks[$Name] = $true
+}
+
+function Assert-T1OSPythonDirectiveCode {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][string]$Command,
+        [Parameter(Mandatory)][string]$ExpectedCode
+    )
+
+    $result = Invoke-T1OSAgentRequest -Action 'brick' -Command $Command -Order 0
+    $code = [string]$result.response.result.results[0].code
+    if ($result.passed -or $code -ne $ExpectedCode) {
+        throw "Python directive '$Command' returned '$code', expected '$ExpectedCode'."
+    }
+    $pythonChecks[$Name] = $true
+}
+
+function Invoke-T1OSPythonDirectiveTest {
+    Write-Host 'PYTHON: verifying the lowercase missing-module question...'
+    # Reuse the already-focused, maximised Brick from the GUI smoke test. A
+    # second fixed launch is intentionally not used because it would exercise
+    # window-stack focus selection rather than the Python prompt itself.
+    $promptLaunch = $script:guiLaunch
+    if ($null -eq $promptLaunch -or -not $promptLaunch.passed) {
+        throw 'The focused Brick window is unavailable for prompt testing.'
+    }
+    Send-T1OSAsciiScanText -Text 'run /software/creep.py' -DelayMilliseconds 35
+    Send-T1OSKey -ScanCode '1c'
+    $prompt = Wait-T1OSBrickStage `
+        -ProcessId ([int]$promptLaunch.response.pid) `
+        -Stage 'python-missing-prompt'
+    $missing = @($prompt.brick_status.python_missing)
+    if ($missing -notcontains 'requests' -or $missing -notcontains 'paramiko') {
+        $detail = $prompt.brick_status | ConvertTo-Json -Compress -Depth 8
+        throw "Brick did not identify Creep's missing modules: $detail"
+    }
+    [void](Save-T1OSGuiStage -Name 'python-missing-modules-question' -TimeoutSeconds 30)
+    Send-T1OSAsciiScanText -Text 'no' -DelayMilliseconds 75
+    Send-T1OSKey -ScanCode '1c'
+    $answer = Wait-T1OSBrickStage `
+        -ProcessId ([int]$promptLaunch.response.pid) `
+        -Stage 'python-missing-answer'
+    if ([string]$answer.brick_status.python_answer -cne 'no') {
+        throw 'Brick did not accept the lowercase no answer.'
+    }
+    $pythonChecks.missing_module_prompt_lowercase_no = $true
+
+    # Run the command again in the same focused Brick and take the affirmative
+    # path. The detected order is stable because missingpythonmodules sorts it.
+    Send-T1OSAsciiScanText -Text 'run /software/creep.py' -DelayMilliseconds 35
+    Send-T1OSKey -ScanCode '1c'
+    Start-Sleep -Seconds 1
+    Send-T1OSAsciiScanText -Text 'yes' -DelayMilliseconds 75
+    Send-T1OSKey -ScanCode '1c'
+    $brickPid = [int]$promptLaunch.response.pid
+    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid `
+        -Operation 'install_module' -Stage 'python-password-ready' `
+        -PythonName 'paramiko' -TimeoutSeconds 30)
+    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
+    Send-T1OSKey -ScanCode '1c'
+    [void](Wait-T1OSPythonModule -Name 'paramiko' -Present $true -TimeoutSeconds 300)
+    Start-Sleep -Seconds 2
+    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid `
+        -Operation 'install_module' -Stage 'python-password-ready' `
+        -PythonName 'requests' -TimeoutSeconds 30)
+    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
+    Send-T1OSKey -ScanCode '1c'
+    [void](Wait-T1OSPythonModule -Name 'requests' -Present $true -TimeoutSeconds 300)
+    $pythonChecks.missing_module_prompt_lowercase_yes = $true
+    $pythonChecks.missing_modules_installed = $true
+    Invoke-T1OSCreepFrontTest
+
+    Write-Host 'PYTHON: installing requests and paramiko through Settings...'
+    Invoke-T1OSSettingsPythonInstall -Name 'requests'
+    Invoke-T1OSSettingsPythonInstall -Name 'paramiko' -Reuse -CloseAfter
+
+    Write-Host 'PYTHON: exercising every read-only Brick Python directive...'
+    $queries = [ordered]@{
+        python_status = 'python status'
+        check_python = 'check python'
+        check_python_modules = 'check python modules'
+        python_history = 'python history'
+        list_python_modules = 'list python modules'
+        show_python_module = 'show python module requests'
+        find_python_module = 'find python module requests'
+        list_python_updates = 'list python updates'
+    }
+    foreach ($entry in $queries.GetEnumerator()) {
+        $result = Invoke-T1OSAgentRequest -Action 'brick' -Command $entry.Value -Order 0
+        if (-not $result.passed) {
+            throw "Brick Python directive failed: $($entry.Value)"
+        }
+        $pythonChecks[$entry.Key] = $true
+    }
+
+    Write-Host 'PYTHON: exercising every Brick Python mutation directive...'
+    Invoke-T1OSBrickPythonMutation -Name install_python_wheel `
+        -Command 'install python wheel /software/t1os-python-index/packages/humanize-4.16.0-py3-none-any.whl'
+    [void](Wait-T1OSPythonModule -Name 'humanize' -Present $true)
+
+    $export = Invoke-T1OSAgentRequest -Action 'brick' `
+        -Command 'export python lock /master/development/creep-lock.toml' `
+        -Order 0
+    if (-not $export.passed) {
+        throw 'export python lock did not write the lock through Brick.'
+    }
+    $exportedFile = Invoke-T1OSAgentRequest -Action 'brick' `
+        -Command 'show details /master/development/creep-lock.toml' -Order 0
+    if (-not $exportedFile.passed) {
+        throw 'the exported Python lock is not visible in the user filesystem.'
+    }
+    $pythonChecks.export_python_lock = $true
+
+    Invoke-T1OSBrickPythonMutation -Name remove_wheel_before_apply `
+        -Command 'remove python module humanize'
+    [void](Wait-T1OSPythonModule -Name 'humanize' -Present $false)
+    Invoke-T1OSBrickPythonMutation -Name apply_python_lock `
+        -Command 'apply python lock /master/development/creep-lock.toml'
+    $lockedModule = Wait-T1OSPythonModule -Name 'humanize' -Present $true
+    if (-not [bool]$lockedModule.response.result.results[0].data.modules[0].pinned) {
+        throw 'apply python lock did not restore the wheel-pinned humanize module.'
+    }
+
+    Invoke-T1OSBrickPythonMutation -Name install_python_module `
+        -Command 'install python module humanize'
+    [void](Wait-T1OSPythonModule -Name 'humanize' -Present $true)
+
+    Invoke-T1OSBrickPythonMutation -Name pin_python_module `
+        -Command 'pin python module humanize'
+    $module = Wait-T1OSPythonModule -Name 'humanize' -Present $true
+    if (-not [bool]$module.response.result.results[0].data.modules[0].pinned) {
+        throw 'pin python module did not pin humanize.'
+    }
+
+    Invoke-T1OSBrickPythonMutation -Name unpin_python_module `
+        -Command 'unpin python module humanize'
+    $module = Wait-T1OSPythonModule -Name 'humanize' -Present $true
+    if ([bool]$module.response.result.results[0].data.modules[0].pinned) {
+        throw 'unpin python module left humanize pinned.'
+    }
+
+    Invoke-T1OSBrickPythonMutation -Name update_python_module `
+        -Command 'update python module humanize'
+    Invoke-T1OSBrickPythonMutation -Name update_python_modules `
+        -Command 'update python modules'
+    Invoke-T1OSBrickPythonMutation -Name repair_python_modules `
+        -Command 'repair python modules'
+    Invoke-T1OSBrickPythonMutation -Name clear_python_cache `
+        -Command 'clear python cache'
+    Invoke-T1OSBrickPythonMutation -Name remove_python_module `
+        -Command 'remove python module humanize'
+    [void](Wait-T1OSPythonModule -Name 'humanize' -Present $false)
+    Invoke-T1OSBrickPythonMutation -Name restore_python_modules `
+        -Command 'restore python modules'
+    [void](Wait-T1OSPythonModule -Name 'humanize' -Present $true)
+
+    $status = Get-T1OSFeatureStatus
+    foreach ($moduleName in @('requests', 'paramiko')) {
+        if (-not [bool]$status.python_module_availability.$moduleName) {
+            throw "the adapted creep dependency is unavailable: $moduleName"
+        }
+    }
+    $pythonChecks.creep_dependencies_importable = $true
+
+    $closed = Invoke-T1OSAgentRequest -Action 'close-fixed-guis' -Order 0
+    if (-not $closed.passed) {
+        throw 'Brick did not close cleanly after the Python directive suite.'
+    }
+    $script:pythonBrickMutationLaunch = $null
 }
 
 function Invoke-T1OSFeatureTest {
@@ -937,10 +1436,54 @@ function Invoke-T1OSIssueTest {
             $offlineStage = Save-T1OSGuiStage `
                 -Name 'issues-chromium-offline' `
                 -DifferentFrom $chromiumNavigationBaseline.sha256 `
+                -MinRedSamples 5000 `
                 -TimeoutSeconds 20
-            if ([int]$offlineStage.red_samples -lt 5000) {
-                throw "Chromium loaded the offline title but did not present its full red document ($($offlineStage.red_samples) red samples)."
+
+            # Exercise cursor semantics through the real Chromium renderer,
+            # XFixes bridge, Chromium wrapper, and WindowServer.  Each third of
+            # this deterministic page requests a distinct CSS cursor.
+            Send-T1OSClick -X 500 -Y 149
+            Start-Sleep -Milliseconds 250
+            Send-T1OSCtrlShortcut -ScanCode '1e'
+            Start-Sleep -Milliseconds 250
+            Send-T1OSText -Text 'data:text/html,%3Ctitle%3ET1OSCURSOR%3C%2Ftitle%3E%3Cstyle%3Ehtml%2Cbody%7Bmargin%3A0%3Bheight%3A100%25%7Ddiv%7Bposition%3Afixed%3Btop%3A0%3Bbottom%3A0%3Bwidth%3A33.34%25%7D%23t%7Bleft%3A0%3Bcursor%3Atext%7D%23l%7Bleft%3A33.33%25%3Bcursor%3Apointer%7D%23b%7Bleft%3A66.66%25%3Bcursor%3Await%7D%3C%2Fstyle%3E%3Cdiv%20id%3Dt%3E%3C%2Fdiv%3E%3Cdiv%20id%3Dl%3E%3C%2Fdiv%3E%3Cdiv%20id%3Db%3E%3C%2Fdiv%3E'
+            Send-T1OSKey -ScanCode '1c'
+            $cursorPageDeadline = [DateTime]::UtcNow.AddSeconds(20)
+            do {
+                Start-Sleep -Milliseconds 500
+                $cursorPageStatus = Get-T1OSServiceStatus
+                $cursorPageLog = [string]$cursorPageStatus.logs.'chromium.py'
+            } while (
+                $cursorPageLog -notmatch 'chromium document title changed title="T1OSCURSOR"' -and
+                [DateTime]::UtcNow -lt $cursorPageDeadline
+            )
+            if ($cursorPageLog -notmatch 'chromium document title changed title="T1OSCURSOR"') {
+                throw 'Chromium did not load the deterministic cursor test document.'
             }
+            $missingCursorModes = [System.Collections.Generic.List[string]]::new()
+            foreach ($cursorProbe in @(
+                @{ x = 250; mode = 'text' },
+                @{ x = 650; mode = 'link' },
+                @{ x = 1050; mode = 'busy' }
+            )) {
+                Send-T1OSMouseAbsolute -X $cursorProbe.x -Y 500
+                $cursorDeadline = [DateTime]::UtcNow.AddSeconds(5)
+                do {
+                    Start-Sleep -Milliseconds 200
+                    $cursorStatus = Get-T1OSServiceStatus
+                    $cursorLog = [string]$cursorStatus.logs.'chromium.py'
+                } while (
+                    $cursorLog -notmatch "chromium cursor mode changed mode=$($cursorProbe.mode)" -and
+                    [DateTime]::UtcNow -lt $cursorDeadline
+                )
+                if ($cursorLog -notmatch "chromium cursor mode changed mode=$($cursorProbe.mode)") {
+                    $missingCursorModes.Add([string]$cursorProbe.mode)
+                }
+            }
+            if ($missingCursorModes.Count -gt 0) {
+                throw "Chromium did not translate these CSS cursors into native T1OS cursors: $($missingCursorModes -join ', ')."
+            }
+            $script:issueChecks.chromium_cursor_modes = $true
 
             # A document title is semantic renderer evidence. Do not accept a
             # changed hash, spinner, error page, or partially repainted frame
@@ -1067,12 +1610,14 @@ if (-not $Directive -or $Directive.Count -eq 0) {
         'Gui' { @('version') }
         'Features' { @('version') }
         'Issues' { @('version') }
+        'Python' { @('version') }
         'Full' { @('test brick', 'test directives') }
     }
 }
-$runGui = $Suite -in @('Gui', 'Features', 'Issues', 'Full')
+$runGui = $Suite -in @('Gui', 'Features', 'Issues', 'Python', 'Full')
 $runFeatures = $Suite -in @('Features', 'Full')
 $runIssues = $Suite -eq 'Issues'
+$runPython = $Suite -in @('Python', 'Full')
 $deferredDirectives = @()
 
 $script:vbox = Get-T1OSVBoxManage
@@ -1188,6 +1733,9 @@ try {
     if ($runFeatures) {
         Invoke-T1OSFeatureTest
     }
+    if ($runPython) {
+        Invoke-T1OSPythonDirectiveTest
+    }
     if ($runIssues) {
         Invoke-T1OSIssueTest
     }
@@ -1285,6 +1833,16 @@ finally {
                 passed = -not $failure -and $issueChecks.Count -ge 7 -and -not ($issueChecks.Values -contains $false)
                 checks = $issueChecks
                 launches = $issueLaunches
+            }
+        }
+        else {
+            $null
+        }
+        python = if ($runPython) {
+            [ordered]@{
+                passed = -not $failure -and $pythonChecks.Count -ge 24 -and -not ($pythonChecks.Values -contains $false)
+                checks = $pythonChecks
+                launches = $pythonLaunches
             }
         }
         else {

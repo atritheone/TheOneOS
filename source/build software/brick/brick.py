@@ -11,6 +11,9 @@ brick is the shell of The One OS.
 import os
 import io
 import sys
+import ast
+import importlib.util
+import importlib.machinery
 import time
 import math
 import json
@@ -20,6 +23,7 @@ import stat
 import shlex
 import shutil
 import hashlib
+import base64
 import difflib
 import ctypes
 import socket
@@ -80,6 +84,31 @@ from operations.operations import (
 )
 _prefer_source_build()
 from python.python import PythonManagerError, request as pythonrequest
+
+BRICKVMTESTSTATUSPATH = '/.ephemeral/brick-vm-test.json'
+
+
+def writebrickvmteststatus(stage, **detail):
+    if os.environ.get('T1OS_VM_TEST') != '1':
+        return
+    temporary = '{}.{}.tmp'.format(BRICKVMTESTSTATUSPATH, os.getpid())
+    try:
+        payload = {
+            'format': 1,
+            'pid': os.getpid(),
+            'stage': str(stage),
+        }
+        payload.update(detail)
+        with open(temporary, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
+            stream.write('\n')
+        os.chmod(temporary, 0o604)
+        os.replace(temporary, BRICKVMTESTSTATUSPATH)
+    except Exception:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
 
 try:
     _prefer_source_build()
@@ -6006,6 +6035,87 @@ def opsrequeststream(payload):
         return None, None
 
     return sock, fileobj
+
+
+def missingpythonmodules(path):
+
+    # Settings may install packages while this Brick process remains open.
+    # Refresh import directory caches so a just-installed module is visible
+    # immediately instead of prompting for it a second time.
+    importlib.invalidate_caches()
+    try:
+        status = os.stat(path, follow_symlinks=True)
+        if not stat.S_ISREG(status.st_mode) or status.st_size > 4 * 1024 * 1024:
+            return []
+        with open(path, 'r', encoding='utf-8') as stream:
+            tree = ast.parse(stream.read(), filename=path)
+    except (OSError, UnicodeError, SyntaxError):
+        return []
+
+    imports = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.update(
+                alias.name.partition('.')[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imports.add(node.module.partition('.')[0])
+
+    scriptdirectory = os.path.dirname(os.path.abspath(path))
+    missing = []
+    for name in sorted(imports):
+        if name in getattr(sys, 'stdlib_module_names', frozenset()):
+            continue
+        try:
+            available = importlib.util.find_spec(name) is not None
+        except (ImportError, AttributeError, ValueError):
+            available = False
+        if not available:
+            try:
+                available = importlib.machinery.PathFinder.find_spec(
+                    name, [scriptdirectory]) is not None
+            except (ImportError, AttributeError, ValueError):
+                available = False
+        if not available:
+            missing.append(name)
+    return missing
+
+
+def preparepythonmodules(path):
+
+    missing = missingpythonmodules(path)
+    if not missing:
+        return True
+    # Keep the user-facing question entirely lowercase. Import identifiers are
+    # retained separately for package-manager requests.
+    names = ', '.join(missing).lower()
+    writebrickvmteststatus(
+        'python-missing-prompt', python_missing=missing,
+        python_script=os.path.abspath(path))
+    if HEADLESS:
+        guiprint(f'> missing python modules: {names}', colour=ERRORCOLOUR)
+        return False
+    while True:
+        answer = arch.guiline(
+            f'> missing python modules: {names}. install them? (yes/no) ')
+        if answer in ('yes', 'no'):
+            break
+        guiprint('> answer yes or no in lowercase', colour=ERRORCOLOUR)
+    writebrickvmteststatus(
+        'python-missing-answer', python_missing=missing,
+        python_answer=answer, python_script=os.path.abspath(path))
+    if answer == 'no':
+        guiprint('> python software launch cancelled', colour=TEXTCOLOUR)
+        return False
+    for name in missing:
+        result = authorisedpythoncall(
+            'install_module', {'name': name}, timeout=900.0)
+        if not result.get('ok'):
+            guiprint(
+                f'> could not install python module {name}',
+                colour=ERRORCOLOUR)
+            return False
+    guiprint('> missing python modules installed', colour=TEXTCOLOUR)
+    return True
 
 
 def opsrun(path, args, name, log, user, mode):
@@ -16629,6 +16739,9 @@ def run(args):
         guiprint(f'> could not run link: {error}', colour=ERRORCOLOUR)
         return
 
+    if str(prog).lower().endswith('.py') and not preparepythonmodules(prog):
+        return 1
+
     try:
 
         # define user
@@ -18417,7 +18530,8 @@ def test(args):
 
 
 # Python directives
-def pythoncall(operation, arguments=None, timeout=10.0, quiet=False):
+def pythoncall(operation, arguments=None, timeout=10.0, quiet=False,
+               descriptor=None):
 
     try:
 
@@ -18425,6 +18539,7 @@ def pythoncall(operation, arguments=None, timeout=10.0, quiet=False):
             operation,
             arguments=dict(arguments or {}),
             timeout=float(timeout),
+            descriptor=descriptor,
         )
 
         if not quiet and result.get('message'):
@@ -18454,16 +18569,30 @@ def pythoncall(operation, arguments=None, timeout=10.0, quiet=False):
         }
 
 
-def authorisedpythoncall(operation, arguments=None, timeout=900.0):
+def authorisedpythoncall(operation, arguments=None, timeout=900.0,
+                         descriptor=None):
+    password = ''
     try:
-        password = arch.readpass('> enter master password to authorise this Python change ')
+        password = arch.readpass(
+            '> enter master password to authorise this Python change ',
+            ready=lambda: writebrickvmteststatus(
+                'python-password-ready', python_operation=str(operation),
+                python_name=str((arguments or {}).get('name') or '')),
+        )
         if not password:
+            writebrickvmteststatus(
+                'python-cancelled', python_operation=str(operation))
             return {
                 'ok': False, 'code': 'cancelled', 'message': 'cancelled',
                 'items': [], 'data': {},
             }
         architect_authorize(password, operation, arguments, timeout=10.0)
+        writebrickvmteststatus(
+            'python-authorised', python_operation=str(operation))
     except Exception as error:
+        writebrickvmteststatus(
+            'python-auth-error', python_operation=str(operation),
+            python_error=str(error))
         guiprint(f'> Python change authorisation failed: {error}', colour=ERRORCOLOUR)
         return {
             'ok': False, 'code': 'architect_required', 'message': str(error),
@@ -18472,7 +18601,15 @@ def authorisedpythoncall(operation, arguments=None, timeout=900.0):
     finally:
         password = ''
     try:
-        return pythoncall(operation, arguments, timeout=timeout)
+        result = pythoncall(
+            operation, arguments, timeout=timeout, descriptor=descriptor)
+        writebrickvmteststatus(
+            'python-complete', python_operation=str(operation),
+            python_ok=bool(result.get('ok')),
+            python_code=str(result.get('code') or ''),
+            python_error=str(result.get('message') or ''),
+            python_data=dict(result.get('data') or {}))
+        return result
     finally:
         try:
             architect_revoke(timeout=3.0)
@@ -18716,12 +18853,61 @@ def installpythonmodule(args=None):
     return authorisedpythoncall('install_module', arguments, timeout=900.0)
 
 
+def openpythoninput(value, suffix, maximum, label):
+    try:
+        path = followarraylink(os.path.abspath(resolvepath(value)))
+        if not path.lower().endswith(suffix):
+            raise ValueError(f'choose a {suffix} file')
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0)
+            | getattr(os, 'O_NOFOLLOW', 0),
+        )
+        status = os.fstat(descriptor)
+        if (not stat.S_ISREG(status.st_mode) or status.st_nlink != 1
+                or status.st_size <= 0 or status.st_size > maximum):
+            raise ValueError(f'{label} is not a safe regular file')
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor, path, status.st_size, digest.hexdigest()
+    except Exception:
+        if 'descriptor' in locals():
+            os.close(descriptor)
+        raise
+
+
 def installpythonwheel(args=None):
-    guiprint(
-        '> local wheel installation is unavailable until secure descriptor transport is enabled',
-        colour=ERRORCOLOUR)
-    return {'ok': False, 'code': 'descriptor_transport_required',
-            'message': 'secure descriptor transport is required'}
+    value = ' '.join(str(item) for item in (args or [])).strip()
+    if not value:
+        guiprint('> use install python wheel <file>', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'invalid_arguments',
+                'message': 'enter a wheel file'}
+    descriptor = None
+    try:
+        descriptor, path, size, digest = openpythoninput(
+            value, '.whl', 512 * 1024 * 1024, 'Python wheel')
+        arguments = {
+            'filename': os.path.basename(path),
+            'size': size,
+            'sha256': digest,
+        }
+        guiprint('> checking and installing a local Python wheel',
+                 colour=TEXTCOLOUR)
+        return authorisedpythoncall(
+            'install_wheel', arguments, timeout=900.0,
+            descriptor=descriptor)
+    except Exception as error:
+        guiprint(f'> could not open Python wheel {error}', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'invalid_file',
+                'message': str(error), 'items': [], 'data': {}}
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 def pythonmodulechange(operation, usage, args=None):
@@ -18792,20 +18978,114 @@ def pythonlockchange(operation, usage, args=None, timeout=900.0):
     return pythoncall(operation, {'path': path}, timeout=timeout)
 
 
+def writepythonlock(path, content):
+    target = followarraylink(os.path.abspath(resolvepath(path)))
+    if not allowpaths([target]):
+        raise PermissionError('permission denied')
+    parent = os.path.dirname(target)
+    name = os.path.basename(target)
+    if not name or not os.path.isdir(parent):
+        raise FileNotFoundError('destination tier does not exist')
+    flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+    parent_descriptor = os.open(
+        parent, flags | getattr(os, 'O_NOFOLLOW', 0))
+    temporary = f'.{name}.brick-{os.getpid()}-{time.time_ns()}.tmp'
+    output = None
+    try:
+        try:
+            current = os.stat(
+                name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
+                raise OSError('destination is not a safe regular file')
+            mode = stat.S_IMODE(current.st_mode)
+        except FileNotFoundError:
+            mode = 0o644
+        output = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            | getattr(os, 'O_NOFOLLOW', 0),
+            mode,
+            dir_fd=parent_descriptor,
+        )
+        offset = 0
+        while offset < len(content):
+            written = os.write(output, content[offset:])
+            if written <= 0:
+                raise OSError('short write')
+            offset += written
+        os.fsync(output)
+        os.close(output)
+        output = None
+        os.replace(
+            temporary, name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        os.fsync(parent_descriptor)
+    finally:
+        if output is not None:
+            os.close(output)
+        try:
+            os.unlink(temporary, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        os.close(parent_descriptor)
+    return target
+
+
 def exportpythonlock(args=None):
-    guiprint(
-        '> lock export through Brick is disabled until client-side safe writing is implemented',
-        colour=ERRORCOLOUR)
-    return {'ok': False, 'code': 'client_write_required',
-            'message': 'client-side lock writing is required'}
+    value = ' '.join(str(item) for item in (args or [])).strip()
+    if not value:
+        guiprint('> use export python lock <file>', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'invalid_arguments',
+                'message': 'enter a lock file'}
+    result = pythoncall('export_lock', timeout=30.0, quiet=True)
+    if not result.get('ok'):
+        return result
+    try:
+        data = dict(result.get('data') or {})
+        content = base64.b64decode(str(data.get('content') or ''), validate=True)
+        if (not content or len(content) > 1024 * 1024
+                or hashlib.sha256(content).hexdigest()
+                != str(data.get('sha256') or '').lower()):
+            raise ValueError('manager returned an invalid Python lock')
+        target = writepythonlock(value, content)
+        result['data'] = {
+            'path': target,
+            'sha256': hashlib.sha256(content).hexdigest(),
+            'size': len(content),
+        }
+        result['message'] = 'Python lock exported.'
+        guiprint('> Python lock exported', colour=TEXTCOLOUR)
+        return result
+    except Exception as error:
+        guiprint(f'> could not export Python lock {error}', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'write_failed',
+                'message': str(error), 'items': [], 'data': {}}
 
 
 def applypythonlock(args=None):
-    guiprint(
-        '> lock import is unavailable until secure descriptor transport is enabled',
-        colour=ERRORCOLOUR)
-    return {'ok': False, 'code': 'descriptor_transport_required',
-            'message': 'secure descriptor transport is required'}
+    value = ' '.join(str(item) for item in (args or [])).strip()
+    if not value:
+        guiprint('> use apply python lock <file>', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'invalid_arguments',
+                'message': 'enter a lock file'}
+    descriptor = None
+    try:
+        descriptor, _, size, digest = openpythoninput(
+            value, '.toml', 1024 * 1024, 'Python lock')
+        arguments = {'size': size, 'sha256': digest}
+        guiprint('> checking and applying the Python lock', colour=TEXTCOLOUR)
+        return authorisedpythoncall(
+            'apply_lock', arguments, timeout=900.0,
+            descriptor=descriptor)
+    except Exception as error:
+        guiprint(f'> could not open Python lock {error}', colour=ERRORCOLOUR)
+        return {'ok': False, 'code': 'invalid_file',
+                'message': str(error), 'items': [], 'data': {}}
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
 
 
 # directives

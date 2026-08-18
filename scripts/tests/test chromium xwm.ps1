@@ -102,6 +102,8 @@ env \
     LD_PRELOAD=/.ephemeral/chromium/path-provider.so \
     TMPDIR=/.ephemeral/chromium/temporary \
     T1OS_XWM_READY=/.ephemeral/chromium/xwm.ready \
+    T1OS_XWM_ROOT_WIDTH=2560 \
+    T1OS_XWM_ROOT_HEIGHT=1440 \
     "/the one/software/chromium/tools/t1os-xwm" \
     >/tmp/t1os-xwm-damage.log 2>>/tmp/t1os-xwm-error.log &
 xwm_pid=$!
@@ -167,6 +169,13 @@ diagnostic_complete() {
     grep -q '^DAMAGE 137 129 ' /tmp/t1os-xwm-damage.log || return 1
     cursor_count=$(grep -Ec '^CURSOR(_IMAGE)? ' /tmp/t1os-xwm-damage.log || true)
     [ "$cursor_count" -ge 3 ] || return 1
+    cursor_image_count=$(grep -c '^CURSOR_IMAGE ' /tmp/t1os-xwm-damage.log || true)
+    [ "$cursor_image_count" -ge 3 ] || return 1
+    distinct_cursor_images=$(
+        sed -n 's/^CURSOR_IMAGE [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* //p' \
+            /tmp/t1os-xwm-damage.log | sort -u | wc -l
+    )
+    [ "$distinct_cursor_images" -ge 3 ] || return 1
     mapfile -t fullscreen_events < <(
         sed -n 's/^FULLSCREEN //p' /tmp/t1os-xwm-damage.log
     )
@@ -200,6 +209,13 @@ grep -q '^DAMAGE 297 289 ' /tmp/t1os-xwm-damage.log
 grep -q '^DAMAGE 137 129 ' /tmp/t1os-xwm-damage.log
 cursor_count=$(grep -Ec '^CURSOR(_IMAGE)? ' /tmp/t1os-xwm-damage.log)
 [ "$cursor_count" -ge 3 ]
+cursor_image_count=$(grep -c '^CURSOR_IMAGE ' /tmp/t1os-xwm-damage.log)
+[ "$cursor_image_count" -ge 3 ]
+distinct_cursor_images=$(
+    sed -n 's/^CURSOR_IMAGE [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* [0-9][0-9]* //p' \
+        /tmp/t1os-xwm-damage.log | sort -u | wc -l
+)
+[ "$distinct_cursor_images" -ge 3 ]
 mapfile -t fullscreen_events < <(
     sed -n 's/^FULLSCREEN //p' /tmp/t1os-xwm-damage.log
 )
@@ -213,6 +229,7 @@ count=$(grep -c '^DAMAGE ' /tmp/t1os-xwm-damage.log)
 echo "Window announcements: $(grep -c '^WINDOW ' /tmp/t1os-xwm-damage.log)"
 echo "Fullscreen state events: ${fullscreen_events[*]}"
 echo "Cursor state events: $cursor_count"
+echo "Distinct cursor images: $distinct_cursor_images"
 echo "XDamage events: $count"
 '@
 

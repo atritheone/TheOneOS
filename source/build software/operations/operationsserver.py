@@ -76,6 +76,7 @@ VMTESTAUDIO = '/software/hey_now.flac'
 VMTESTIMAGE = '/software/if_you_wait.jpg'
 VMTESTTEXT = '/software/opengltest1.py'
 VMTESTOPENGL = '/software/opengltest2.py'
+VMTESTCREEP = '/software/creep.py'
 VMTESTTERMINALRESULT = '/master/development/terminal_test.result'
 VMTESTPLAYERSTATUS = '/.ephemeral/media/vm-player-status-{}.json'
 SESSIONIDENTITYFILE = '/the one/settings/session/identity.json'
@@ -1270,6 +1271,10 @@ def handlevmtestlaunch(request):
             'array-opengl': (
                 '/the one/build/array/array.py',
                 ['--open-item', VMTESTOPENGL], {}),
+            'creep-self-test': (
+                '/the one/build/brick/brick.py',
+                ['--run-file', VMTESTCREEP, '--self-test'],
+                {'BRICK_WINDOW': '0'}),
         }
         if application not in applications:
             raise ValueError('VM test application denied')
@@ -1280,6 +1285,7 @@ def handlevmtestlaunch(request):
             'viewer': VMTESTIMAGE,
             'write': VMTESTTEXT,
             'array-opengl': VMTESTOPENGL,
+            'creep-self-test': VMTESTCREEP,
         }
         fixture = fixtures.get(application)
         if fixture and not os.path.isfile(fixture):
@@ -2027,13 +2033,16 @@ def handlesettingsmasterupdate(request):
             authbroker.validate_new_password(newpassword)
         useimage = request.get('use_master_image') is True
         oldname, oldhash = authbroker.read_credentials(MASTERFILE)
-        result = authbroker.authenticate_master(
-            MASTERFILE, current, scope='settings:master-update', migrate=False)
-        if not result.ok:
-            return {
-                'status': 'error', 'message': 'authentication failed',
-                'retry_after': float(result.retry_after or 0.0),
-            }
+        accountchanged = requested != oldname or bool(newpassword)
+        if accountchanged:
+            result = authbroker.authenticate_master(
+                MASTERFILE, current,
+                scope='settings:master-update', migrate=False)
+            if not result.ok:
+                return {
+                    'status': 'error', 'message': 'authentication failed',
+                    'retry_after': float(result.retry_after or 0.0),
+                }
         replacement = authbroker.hash_password(newpassword) if newpassword else oldhash
         homebase = '/master'
         oldhome = os.path.join(homebase, oldname)
@@ -2487,6 +2496,8 @@ def pythoncapabilitypolicy(request):
         'restore_modules': 'python:restore',
         'clear_cache': 'python:clear-cache',
         'install_module': 'python:install',
+        'install_wheel': 'python:install-wheel',
+        'apply_lock': 'python:apply-lock',
     }.get(operation)
     if expected is None or scope != expected:
         raise ValueError('Python capability operation denied')
@@ -2495,6 +2506,12 @@ def pythoncapabilitypolicy(request):
             r'[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?@'
             r'[A-Za-z0-9](?:[A-Za-z0-9.!+_-]{0,126}[A-Za-z0-9])?',
             resource)
+    elif operation == 'install_wheel':
+        valid = re.fullmatch(
+            r'[A-Za-z0-9][A-Za-z0-9._+-]{0,254}\.whl@[0-9a-f]{64}',
+            resource)
+    elif operation == 'apply_lock':
+        valid = re.fullmatch(r'[0-9a-f]{64}', resource)
     elif operation in ('remove_module', 'pin_module', 'unpin_module', 'update_module'):
         valid = re.fullmatch(
             r'[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?', resource)

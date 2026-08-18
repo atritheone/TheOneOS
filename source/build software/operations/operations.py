@@ -312,6 +312,7 @@ def python_authorization_policy(operation, arguments=None):
     arguments = dict(arguments or {})
     allowed = {
         'install_module': (frozenset(('name',)), frozenset(('name', 'version'))),
+        'install_wheel': (frozenset(('filename', 'size', 'sha256')),),
         'remove_module': (frozenset(('name',)),),
         'pin_module': (frozenset(('name',)),),
         'unpin_module': (frozenset(('name',)),),
@@ -320,6 +321,7 @@ def python_authorization_policy(operation, arguments=None):
         'repair_modules': (frozenset(),),
         'restore_modules': (frozenset(),),
         'clear_cache': (frozenset(),),
+        'apply_lock': (frozenset(('size', 'sha256')),),
     }.get(operation)
     if allowed is None or frozenset(arguments) not in allowed:
         raise ValueError('Python mutation arguments are not authorizable')
@@ -334,6 +336,29 @@ def python_authorization_policy(operation, arguments=None):
         if not re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9.!+_-]{0,126}[A-Za-z0-9])?', version):
             raise ValueError('invalid Python package version')
         return 'python:install', f'{name}@{version}'
+    if operation == 'install_wheel':
+        filename = os.path.basename(str(arguments.get('filename') or ''))
+        digest = str(arguments.get('sha256') or '').lower()
+        try:
+            size = int(arguments.get('size', -1))
+        except (TypeError, ValueError) as error:
+            raise ValueError('invalid Python wheel size') from error
+        if (not filename or filename != str(arguments.get('filename') or '')
+                or not filename.lower().endswith('.whl')
+                or size <= 0 or size > 512 * 1024 * 1024
+                or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+            raise ValueError('invalid Python wheel identity')
+        return 'python:install-wheel', f'{filename}@{digest}'
+    if operation == 'apply_lock':
+        digest = str(arguments.get('sha256') or '').lower()
+        try:
+            size = int(arguments.get('size', -1))
+        except (TypeError, ValueError) as error:
+            raise ValueError('invalid Python lock size') from error
+        if (size <= 0 or size > 1024 * 1024
+                or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+            raise ValueError('invalid Python lock identity')
+        return 'python:apply-lock', digest
     if operation in ('remove_module', 'pin_module', 'unpin_module', 'update_module'):
         if not name:
             raise ValueError('Python package name is required')

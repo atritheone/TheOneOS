@@ -972,6 +972,7 @@ mkdir -p \
 
 cp -a -- "$resource_source/tests/opengl test.py" "$stage/resources/tests/opengl test.py"
 cp -a -- "$resource_source/tests/opengl 3d test.py" "$stage/resources/tests/opengl 3d test.py"
+cp -a -- "$resource_source/tests/creep.py" "$stage/resources/tests/creep.py"
 
 cp -a -- "$resource_source/fonts/atkinsonhyperlegiblenext.ttf" "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf"
 cp -a -- "$resource_source/fonts/cambria.ttf" "$stage/resources/fonts/cambria.ttf"
@@ -2794,6 +2795,7 @@ if root_selected resources; then
     sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
     sync_file 'OpenGL test compatibility name' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
+    sync_file 'Creep test utility' "$stage/resources/tests/creep.py" "$mount_point/software/creep.py"
     chmod 0555 "$system_software_destination/patchelf"
     if [ "$target_mode" = image ]; then
         chown 0:0 "$system_software_destination" "$system_software_destination/patchelf"
@@ -2802,12 +2804,14 @@ if root_selected resources; then
             "$mount_point/software/opengltest1.py" \
             "$mount_point/software/opengltest2.py" \
             "$mount_point/software/opengl 3d test.py" \
-            "$mount_point/software/opengl test.py"
+            "$mount_point/software/opengl test.py" \
+            "$mount_point/software/creep.py"
         chmod 0555 \
             "$mount_point/software/opengltest1.py" \
             "$mount_point/software/opengltest2.py" \
             "$mount_point/software/opengl 3d test.py" \
-            "$mount_point/software/opengl test.py"
+            "$mount_point/software/opengl test.py" \
+            "$mount_point/software/creep.py"
     fi
 fi
 # Fonts are immutable shared display resources.  WindowServer renders managed
@@ -2888,6 +2892,7 @@ if [ "$exhaustive_verify" = True ]; then
     cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
     cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
+    cmp -s -- "$stage/resources/tests/creep.py" "$mount_point/software/creep.py"
 fi
 
 if root_selected build || [ "$exhaustive_verify" = True ]; then

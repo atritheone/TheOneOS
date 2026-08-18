@@ -152,6 +152,15 @@ repair, restore, cache changes, and lock application require Architect in both
 the frontend and the service. The T1OS LSM is the final runtime write boundary;
 Linux permission bits on an offline NTFS USB are not the authorization model.
 
+Local wheel and lock imports never give the privileged manager a caller path.
+Brick opens a read-only regular file without following symbolic links. Wheels
+send that exact descriptor over the manager socket with `SCM_RIGHTS`; locks use
+a bounded, length-prefixed stream after the manager-ready handshake and are
+placed in an anonymous manager-owned file. The manager verifies the authorized
+size and SHA-256 identity again before using either input. Lock export is
+returned to Brick as bounded authenticated data, then written atomically after
+Brick's normal filesystem permission check.
+
 ## Package transaction and native patching
 
 Every change resolves a complete dependency set from compatible binary wheels.

@@ -103,6 +103,12 @@ def loadx11():
     x11.XCreateFontCursor.restype = Cursor
     x11.XDefineCursor.argtypes = [Display, Window, Cursor]
     x11.XDefineCursor.restype = ctypes.c_int
+    x11.XWarpPointer.argtypes = [
+        Display, Window, Window,
+        ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+        ctypes.c_int, ctypes.c_int,
+    ]
+    x11.XWarpPointer.restype = ctypes.c_int
     x11.XFreeCursor.argtypes = [Display, Cursor]
     x11.XFreeCursor.restype = ctypes.c_int
     return x11
@@ -142,6 +148,8 @@ def main():
     )
     x11.XStoreName(display, window, b"T1OS Chromium XWM diagnostic")
     x11.XMapWindow(display, window)
+    x11.XSync(display, 0)
+    x11.XWarpPointer(display, 0, window, 0, 0, 0, 0, 100, 100)
     x11.XSync(display, 0)
     cursors = []
 

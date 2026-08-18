@@ -12,6 +12,7 @@ unpacker; it never writes the live interpreter.
 from __future__ import annotations
 
 import base64
+import array
 import csv
 import hashlib
 import importlib.metadata
@@ -41,6 +42,7 @@ if BUILDROOT not in sys.path:
     sys.path.insert(0, BUILDROOT)
 
 PROTOCOL = 1
+PROTOCOL_READY = b'R'
 STATE_FORMAT = 2
 SERVICE = 'T1OS system Python'
 DEFAULT_SOCKET = '/.ephemeral/python/manager.sock'
@@ -116,7 +118,8 @@ def architect_capability_check(*arguments, **options):
     return check(*arguments, **options)
 
 
-def request(operation, arguments=None, timeout=5.0, socket_path=None):
+def request(operation, arguments=None, timeout=5.0, socket_path=None,
+            descriptor=None):
     """Send one request and return the manager's structured response."""
 
     path = str(
@@ -142,7 +145,49 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None):
 
     try:
         channel.connect(path)
-        channel.sendall(encoded)
+        ready = channel.recv(1)
+        if ready != PROTOCOL_READY:
+            raise PythonManagerError(
+                'The Python manager did not complete its request handshake.',
+                'handshake_failed',
+            )
+        if descriptor is None:
+            channel.sendall(encoded)
+        elif str(operation or '').strip() == 'apply_lock':
+            try:
+                expected = int(payload['arguments']['size'])
+            except (KeyError, TypeError, ValueError) as error:
+                raise PythonManagerError(
+                    'The Python lock stream size is invalid.',
+                    'invalid_arguments',
+                ) from error
+            if expected <= 0 or expected > 1024 * 1024:
+                raise PythonManagerError(
+                    'The Python lock stream size is invalid.',
+                    'invalid_arguments',
+                )
+            channel.sendall(encoded)
+            remaining = expected
+            while remaining:
+                block = os.read(int(descriptor), min(65536, remaining))
+                if not block:
+                    raise PythonManagerError(
+                        'The Python lock stream ended early.',
+                        'short_request',
+                    )
+                channel.sendall(block)
+                remaining -= len(block)
+        else:
+            rights = array.array('i', [int(descriptor)])
+            sent = channel.sendmsg(
+                [encoded],
+                [(socket.SOL_SOCKET, socket.SCM_RIGHTS, rights)],
+            )
+            if sent != len(encoded):
+                raise PythonManagerError(
+                    'The Python manager descriptor request was incomplete.',
+                    'short_request',
+                )
         received = bytearray()
 
         while b'\n' not in received:
@@ -244,6 +289,21 @@ def catalogue_path():
         'T1OS_PYTHON_CATALOGUE',
         os.path.join(system_root(), 'catalogue', 'python'),
     ))
+
+
+def provider_catalogues():
+    """Return managed and immutable native-library provider catalogues."""
+
+    paths = [
+        catalogue_path(),
+        os.path.join(system_root(), 'catalogue', 'python'),
+    ]
+    result = []
+    for path in paths:
+        path = os.path.abspath(path)
+        if path not in result:
+            result.append(path)
+    return result
 
 
 def image_catalogue():
@@ -565,6 +625,21 @@ def requested_mapping(state):
 
 
 def distribution_imports(distribution):
+    try:
+        files = distribution.files or []
+    except Exception:
+        files = []
+    roots = {
+        str(item).replace('\\', '/').split('/', 1)[0]
+        for item in files
+    }
+
+    def import_exists(value):
+        return any(
+            root == value or root == value + '.py' or root.startswith(value + '.')
+            for root in roots
+        )
+
     values = []
     try:
         text = distribution.read_text('top_level.txt') or ''
@@ -574,12 +649,15 @@ def distribution_imports(distribution):
         value = value.strip()
         if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value):
             values.append(value)
-    if values:
-        return sorted(set(values), key=str.casefold)
-    try:
-        files = distribution.files or []
-    except Exception:
-        files = []
+    # Some wheels publish stale top_level.txt entries for extension modules
+    # which only exist inside a package (PyNaCl, for example, declares
+    # ``_sodium`` while shipping ``nacl/_sodium.abi3.so``).  Import only names
+    # that the wheel actually installs at its root.  Otherwise a valid native
+    # package is rejected by testing a module that cannot exist.
+    available = [value for value in values if import_exists(value)]
+    if available:
+        return sorted(set(available), key=str.casefold)
+    values = []
     for item in files:
         first = str(item).replace('\\', '/').split('/', 1)[0]
         if first.endswith('.py'):
@@ -935,6 +1013,120 @@ def copy_local_wheel(path):
             raise ManagerError('The Python wheel changed while being copied.', 'wheel_changed')
         os.replace(temporary, destination)
         fsync_directory(directory)
+    return destination, digest
+
+
+def descriptor_identity(descriptor, maximum, arguments, label,
+                        allow_anonymous=False):
+    if descriptor is None:
+        raise ManagerError(label + ' requires a file descriptor.',
+                           'descriptor_required')
+    try:
+        status = os.fstat(descriptor)
+    except OSError as error:
+        raise ManagerError(label + ' descriptor is unavailable.',
+                           'descriptor_invalid') from error
+    valid_links = (0, 1) if allow_anonymous else (1,)
+    if not stat.S_ISREG(status.st_mode) or status.st_nlink not in valid_links:
+        raise ManagerError(label + ' descriptor is unsafe.', 'descriptor_invalid')
+    try:
+        expected_size = int(arguments.get('size', -1))
+    except (TypeError, ValueError) as error:
+        raise ManagerError(label + ' size is invalid.',
+                           'invalid_arguments') from error
+    if status.st_size <= 0 or status.st_size > int(maximum):
+        raise ManagerError(label + ' has an unsafe size.', 'size_limit')
+    if status.st_size != expected_size:
+        raise ManagerError(label + ' changed before it was received.', 'file_changed')
+    expected_hash = str(arguments.get('sha256') or '').lower()
+    if not HASH.fullmatch(expected_hash):
+        raise ManagerError(label + ' hash is invalid.', 'invalid_arguments')
+    return status, expected_size, expected_hash
+
+
+def descriptor_bytes(descriptor, maximum, arguments, label,
+                     allow_anonymous=False):
+    """Read and authenticate one regular-file descriptor from a client."""
+
+    _, expected_size, expected_hash = descriptor_identity(
+        descriptor, maximum, arguments, label,
+        allow_anonymous=allow_anonymous)
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        content = bytearray()
+        digest = hashlib.sha256()
+        while len(content) <= maximum:
+            block = os.read(
+                descriptor, min(1024 * 1024, maximum + 1 - len(content)))
+            if not block:
+                break
+            content.extend(block)
+            digest.update(block)
+    except OSError as error:
+        raise ManagerError(label + ' could not be read.',
+                           'descriptor_invalid') from error
+    if len(content) != expected_size or digest.hexdigest() != expected_hash:
+        raise ManagerError(label + ' changed before it was received.', 'file_changed')
+    return bytes(content), expected_hash
+
+
+def copy_descriptor_wheel(descriptor, arguments):
+    filename = os.path.basename(str(arguments.get('filename') or ''))
+    if (not filename or filename != str(arguments.get('filename') or '')
+            or not filename.lower().endswith('.whl')):
+        raise ManagerError('Choose a Python wheel file.', 'wheel_required')
+    _, expected_size, digest = descriptor_identity(
+        descriptor, MAXIMUM_FILE_BYTES, arguments, 'Python wheel')
+    ensure_store()
+    directory = os.path.join(cache_path(), digest)
+    os.makedirs(directory, exist_ok=True)
+    destination = os.path.join(directory, filename)
+    temporary = os.path.join(directory, '.' + filename + '.' + uuid.uuid4().hex + '.new')
+    output = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0),
+        0o600,
+    )
+    copied = 0
+    actual = hashlib.sha256()
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while copied <= MAXIMUM_FILE_BYTES:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, MAXIMUM_FILE_BYTES + 1 - copied),
+            )
+            if not block:
+                break
+            actual.update(block)
+            offset = 0
+            while offset < len(block):
+                written = os.write(output, block[offset:])
+                if written <= 0:
+                    raise OSError('short write')
+                offset += written
+            copied += len(block)
+        os.fsync(output)
+    except BaseException:
+        os.close(output)
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    else:
+        os.close(output)
+    if copied != expected_size or actual.hexdigest() != digest:
+        os.unlink(temporary)
+        raise ManagerError('Python wheel changed before it was received.',
+                           'file_changed')
+    if not os.path.exists(destination):
+        os.replace(temporary, destination)
+        fsync_directory(directory)
+    else:
+        os.unlink(temporary)
+    if sha256(destination) != digest:
+        raise ManagerError('The cached Python wheel has changed.', 'wheel_changed')
     return destination, digest
 
 
@@ -1483,10 +1675,12 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
             raise ManagerError('A native package RUNPATH was not patched.', 'native_patch_failed')
 
     providers = set()
-    if os.path.isdir(catalogue_path()):
-        providers.update(os.listdir(catalogue_path()))
-        for entry in os.listdir(catalogue_path()):
-            provider = os.path.join(catalogue_path(), entry)
+    for provider_catalogue in provider_catalogues():
+        if not os.path.isdir(provider_catalogue):
+            continue
+        providers.update(os.listdir(provider_catalogue))
+        for entry in os.listdir(provider_catalogue):
+            provider = os.path.join(provider_catalogue, entry)
             if is_elf(provider):
                 try:
                     soname = elf_soname(provider)
@@ -1547,7 +1741,7 @@ def validate_staged_native_imports(site, catalogue_stage, packages):
         return
     libraries = [
         catalogue_stage,
-        catalogue_path(),
+        *provider_catalogues(),
         image_catalogue(),
         os.path.join(image_catalogue(), 'pillow.libs'),
     ]
@@ -1791,6 +1985,24 @@ def read_pylock(path):
             'url': str(raw.get('url') or ''),
             'sha256': digest,
         })
+    artifact_versions = {
+        item['name']: item['version'] for item in artifacts
+    }
+    for item in requested:
+        if item.get('kind') == 'wheel':
+            version = artifact_versions.get(item['name'])
+            if not version:
+                raise ManagerError(
+                    'A local-wheel lock is missing its artifact.',
+                    'lock_invalid')
+            # Imported locks deliberately contain no privileged cache path.
+            # Preserve the exact distribution version as an index request;
+            # this transaction still consumes the lock's hashed artifact URL.
+            item.update({
+                'kind': 'index',
+                'pinned': True,
+                'requirement': item['name'] + '==' + version,
+            })
     return requested, artifacts
 
 
@@ -2193,11 +2405,30 @@ def wheel_request(path):
     }
 
 
+def wheel_request_descriptor(descriptor, arguments):
+    cached, digest = copy_descriptor_wheel(descriptor, arguments)
+    _, _, _, _, _ = packaging_api()
+    try:
+        from pip._vendor.packaging.utils import parse_wheel_filename
+        name, version, _, _ = parse_wheel_filename(os.path.basename(cached))
+    except Exception as error:
+        raise ManagerError('The wheel filename is invalid.', 'wheel_invalid') from error
+    return {
+        'name': normalise_name(str(name)),
+        'requirement': normalise_name(str(name)),
+        'pinned': True,
+        'kind': 'wheel',
+        'path': cached,
+        'wheel_sha256': digest,
+        'version': str(version),
+    }
+
+
 def requested_for_install(arguments):
     state = load_state()
     mapping = requested_mapping(state)
-    # Client-supplied paths remain disabled until the manager receives an
-    # authenticated O_RDONLY regular-file descriptor via SCM_RIGHTS.
+    # Index installation accepts only a normalized project identity. Local
+    # wheels use the separate SCM_RIGHTS descriptor operation.
     item = request_item(
         arguments.get('name'), arguments.get('version') or '', False, 'index',
     )
@@ -2330,10 +2561,13 @@ def op_install_module(arguments):
     return operation_result(state, 'Python module installed.')
 
 
-def op_install_wheel(arguments):
-    raise ManagerError(
-        'Local wheel installation is disabled until descriptor transport is available.',
-        'descriptor_transport_required')
+def op_install_wheel(arguments, descriptor):
+    state = load_state()
+    mapping = requested_mapping(state)
+    item = wheel_request_descriptor(descriptor, arguments)
+    mapping[item['name']] = item
+    result = replace_environment(list(mapping.values()), 'install wheel')
+    return operation_result(result, 'Python wheel installed.')
 
 
 def change_requested(name, action):
@@ -2450,10 +2684,17 @@ def op_export_lock(arguments):
     }
 
 
-def op_apply_lock(arguments):
-    raise ManagerError(
-        'Python lock import is disabled until descriptor transport is available.',
-        'descriptor_transport_required')
+def op_apply_lock(arguments, descriptor):
+    content, _ = descriptor_bytes(
+        descriptor, 1024 * 1024, arguments, 'Python lock',
+        allow_anonymous=True)
+    with tempfile.TemporaryDirectory(
+            prefix='t1os-pylock-import-', dir=management_root()) as directory:
+        path = os.path.join(directory, 'pylock.toml')
+        atomic_bytes(path, content, mode=0o600)
+        requested, artifacts = read_pylock(path)
+    result = replace_environment(requested, 'apply lock', artifacts)
+    return operation_result(result, 'Python lock applied.')
 
 
 def op_clear_cache(arguments):
@@ -2502,9 +2743,9 @@ READ_OPERATIONS = frozenset({
 MUTATION_OPERATIONS = frozenset({
     'install_module', 'remove_module', 'pin_module', 'unpin_module',
     'update_module', 'update_modules', 'repair_modules', 'restore_modules',
-    'clear_cache',
+    'clear_cache', 'install_wheel', 'apply_lock',
 })
-DISABLED_DESCRIPTOR_OPERATIONS = frozenset({'install_wheel', 'apply_lock'})
+DESCRIPTOR_OPERATIONS = frozenset({'install_wheel', 'apply_lock'})
 
 OPERATION_ARGUMENT_KEYS = {
     'status': (frozenset(),),
@@ -2513,7 +2754,7 @@ OPERATION_ARGUMENT_KEYS = {
     'find_module': (frozenset(('name',)),),
     'list_updates': (frozenset(),),
     'install_module': (frozenset(('name',)), frozenset(('name', 'version'))),
-    'install_wheel': (frozenset(),),
+    'install_wheel': (frozenset(('filename', 'size', 'sha256')),),
     'remove_module': (frozenset(('name',)),),
     'pin_module': (frozenset(('name',)),),
     'unpin_module': (frozenset(('name',)),),
@@ -2524,12 +2765,12 @@ OPERATION_ARGUMENT_KEYS = {
     'check_modules': (frozenset(),),
     'history': (frozenset(), frozenset(('limit',))),
     'export_lock': (frozenset(),),
-    'apply_lock': (frozenset(),),
+    'apply_lock': (frozenset(('size', 'sha256')),),
     'clear_cache': (frozenset(),),
 }
 
 
-def dispatch(request, peer):
+def dispatch(request, peer, descriptors=None):
     if not isinstance(request, dict) or int(request.get('format', 0)) != PROTOCOL:
         raise ManagerError('The Python manager request is unsupported.', 'unsupported_request')
     operation = str(request.get('operation') or '').strip()
@@ -2538,15 +2779,30 @@ def dispatch(request, peer):
         raise ManagerError('The Python manager operation is unknown.', 'unknown_operation')
     if frozenset(arguments) not in OPERATION_ARGUMENT_KEYS.get(operation, ()):
         raise ManagerError('The Python manager arguments are invalid.', 'invalid_arguments')
-    if operation in DISABLED_DESCRIPTOR_OPERATIONS:
-        raise ManagerError(
-            'This operation requires descriptor transport that is not available.',
-            'descriptor_transport_required')
+    descriptors = list(descriptors or [])
+    if operation in DESCRIPTOR_OPERATIONS:
+        if len(descriptors) != 1:
+            raise ManagerError(
+                'This operation requires exactly one file descriptor.',
+                'descriptor_required')
+    elif descriptors:
+        raise ManagerError('This operation does not accept file descriptors.',
+                           'unexpected_descriptor')
     if operation in MUTATION_OPERATIONS:
         require_architect(peer, operation, arguments)
     elif operation not in READ_OPERATIONS:
         raise ManagerError('The Python manager operation is denied.', 'operation_denied')
-    data = OPERATIONS[operation](arguments)
+    try:
+        if operation in DESCRIPTOR_OPERATIONS:
+            data = OPERATIONS[operation](arguments, descriptors[0])
+        else:
+            data = OPERATIONS[operation](arguments)
+    finally:
+        # Resolution and commit phases update CURRENT for live status, but the
+        # completed request is the sole lifecycle boundary.  Always return the
+        # manager to idle after either a successful mutation or an exception.
+        if operation in MUTATION_OPERATIONS:
+            set_progress(running=False)
     message = str(data.get('message') or '') if isinstance(data, dict) else ''
     return {
         'format': PROTOCOL,
@@ -2574,31 +2830,149 @@ def error_response(error, operation=''):
 
 
 def receive_request(channel):
+    # Peer PID/UID/GID are captured with SO_PEERCRED immediately after accept.
+    # Do not also request unsolicited credentials or security labels here:
+    # those records can crowd a caller's explicit SCM_RIGHTS descriptor out of
+    # the ancillary buffer without adding any authority to the request.
+    for option_name in ('SO_PASSCRED', 'SO_PASSSEC'):
+        option = getattr(socket, option_name, None)
+        if option is None:
+            continue
+        try:
+            channel.setsockopt(socket.SOL_SOCKET, option, 0)
+        except OSError:
+            pass
     payload = bytearray()
-    while b'\n' not in payload:
-        block = channel.recv(min(65536, MAXIMUM_REQUEST + 1 - len(payload)))
-        if not block:
-            break
-        payload.extend(block)
-        if len(payload) > MAXIMUM_REQUEST:
-            raise ManagerError('The Python manager request is too large.', 'request_too_large')
-    line = bytes(payload).split(b'\n', 1)[0]
-    if not line:
-        raise ManagerError('The Python manager request is empty.', 'empty_request')
+    descriptors = []
+    truncation = None
+    # Linux may attach SCM_CREDENTIALS or an LSM security label alongside
+    # SCM_RIGHTS.  Reserve enough space for those records without exceeding
+    # the comparatively small per-socket ancillary-memory limit used by the
+    # VM kernel.  Asking recvmsg for a 64 KiB control buffer can itself be
+    # clipped there and reported as MSG_CTRUNC before the descriptor record is
+    # copied.  Four KiB comfortably covers one descriptor, credentials, and a
+    # normal security label while staying below that limit.
+    ancillary_space = socket.CMSG_SPACE(4 * 1024)
     try:
-        return json.loads(line.decode('utf-8'))
-    except (UnicodeError, ValueError, TypeError) as error:
-        raise ManagerError('The Python manager request is invalid.', 'invalid_request') from error
+        while b'\n' not in payload:
+            block, ancillary, flags, _ = channel.recvmsg(
+                min(65536, MAXIMUM_REQUEST + 1 - len(payload)),
+                ancillary_space,
+            )
+            for level, kind, data in ancillary:
+                if level != socket.SOL_SOCKET or kind != socket.SCM_RIGHTS:
+                    continue
+                received = array.array('i')
+                usable = len(data) - (len(data) % received.itemsize)
+                received.frombytes(data[:usable])
+                descriptors.extend(received.tolist())
+            # VM security metadata can be larger than the bounded ancillary
+            # buffer.  Linux closes any rights discarded by truncation; an
+            # intact received descriptor remains safe because dispatch still
+            # requires exactly one and descriptor_identity verifies it fully.
+            if (flags & getattr(socket, 'MSG_CTRUNC', 0)) and not descriptors:
+                detail = {
+                    'flags': int(flags),
+                    'control_buffer': ancillary_space,
+                    'control_records': [
+                        {'level': int(level), 'type': int(kind),
+                         'bytes': len(data)}
+                        for level, kind, data in ancillary
+                    ],
+                    'passcred': None,
+                    'passsec': None,
+                }
+                for option_name, field in (
+                        ('SO_PASSCRED', 'passcred'),
+                        ('SO_PASSSEC', 'passsec')):
+                    option = getattr(socket, option_name, None)
+                    if option is not None:
+                        try:
+                            detail[field] = int(channel.getsockopt(
+                                socket.SOL_SOCKET, option))
+                        except OSError:
+                            pass
+                log('descriptor ancillary truncation ' + json.dumps(
+                    detail, sort_keys=True, separators=(',', ':')))
+                truncation = detail
+            if len(descriptors) > 4:
+                raise ManagerError('Too many file descriptors were supplied.',
+                                   'unexpected_descriptor')
+            if not block:
+                break
+            payload.extend(block)
+            if len(payload) > MAXIMUM_REQUEST:
+                raise ManagerError('The Python manager request is too large.',
+                                   'request_too_large')
+        line, separator, remainder = bytes(payload).partition(b'\n')
+        if not line:
+            raise ManagerError('The Python manager request is empty.',
+                               'empty_request')
+        if not separator:
+            raise ManagerError('The Python manager request is incomplete.',
+                               'short_request')
+        try:
+            request = json.loads(line.decode('utf-8'))
+        except (UnicodeError, ValueError, TypeError) as error:
+            raise ManagerError('The Python manager request is invalid.',
+                               'invalid_request') from error
+        operation = str(request.get('operation') or '') if isinstance(request, dict) else ''
+        if operation == 'apply_lock' and not descriptors:
+            arguments = request.get('arguments', {})
+            try:
+                expected = int(arguments.get('size', -1))
+            except (AttributeError, TypeError, ValueError) as error:
+                raise ManagerError('The Python lock stream size is invalid.',
+                                   'invalid_arguments') from error
+            if expected <= 0 or expected > 1024 * 1024:
+                raise ManagerError('The Python lock stream size is invalid.',
+                                   'invalid_arguments')
+            content = bytearray(remainder)
+            if len(content) > expected:
+                raise ManagerError('The Python lock stream is too large.',
+                                   'request_too_large')
+            while len(content) < expected:
+                block = channel.recv(min(65536, expected - len(content)))
+                if not block:
+                    raise ManagerError('The Python lock stream ended early.',
+                                       'short_request')
+                content.extend(block)
+            with tempfile.TemporaryFile(
+                    prefix='t1os-pylock-stream-',
+                    dir=management_root()) as stream:
+                stream.write(content)
+                stream.flush()
+                stream.seek(0)
+                descriptors.append(os.dup(stream.fileno()))
+        elif truncation is not None and not descriptors:
+            raise ManagerError(
+                'The Python manager descriptor was truncated.',
+                'ancillary_truncated', truncation)
+        return request, descriptors
+    except BaseException:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        raise
 
 
 def handle_client(channel, peer):
     operation = ''
+    descriptors = []
     try:
-        request = receive_request(channel)
+        request, descriptors = receive_request(channel)
         operation = str(request.get('operation') or '') if isinstance(request, dict) else ''
-        response = dispatch(request, peer)
+        response = dispatch(request, peer, descriptors)
     except Exception as error:
         response = error_response(error, operation)
+    finally:
+        for descriptor in descriptors:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
     encoded = (json.dumps(response, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
     if len(encoded) > MAXIMUM_RESPONSE:
         encoded = (json.dumps(error_response(
@@ -2688,6 +3062,23 @@ def serve():
             channel, _ = listener.accept()
             peer = peer_identity(channel)
             if peer is None:
+                channel.close()
+                continue
+            # The ready byte is a transport barrier.  Clients do not send
+            # request data or SCM_RIGHTS until the accepted socket has had all
+            # unsolicited ancillary delivery disabled.  This prevents a
+            # descriptor-bearing message from being queued with VM security
+            # metadata before receive_request can normalize the socket.
+            for option_name in ('SO_PASSCRED', 'SO_PASSSEC'):
+                option = getattr(socket, option_name, None)
+                if option is not None:
+                    try:
+                        channel.setsockopt(socket.SOL_SOCKET, option, 0)
+                    except OSError:
+                        pass
+            try:
+                channel.sendall(PROTOCOL_READY)
+            except OSError:
                 channel.close()
                 continue
             thread = threading.Thread(

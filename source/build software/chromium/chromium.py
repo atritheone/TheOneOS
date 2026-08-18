@@ -290,6 +290,15 @@ FULLSCREENREQUEST = None
 WEBFULLSCREEN = False
 BROWSERCURSORMODE = "arrow"
 XCURSORSEMANTICS = None
+# Chromium's X11/Ozone backend synthesizes these cursor bitmaps itself instead
+# of loading the equivalent images from the configured Xcursor theme.  Their
+# fingerprints are therefore part of the bundled Chromium runtime contract.
+CHROMIUMCURSORIMAGESEMANTICS = {
+    "c084f4980a1b115b": "arrow",
+    "71aed559a3c8f918": "text",
+    "5a69dc0a3b7c37b3": "link",
+    "0020146237c19b34": "busy",
+}
 FULLSCREENCURSORVISIBLE = True
 FULLSCREENCURSORHIDEAT = 0.0
 FULLSCREENCURSORDELAY = 2.0
@@ -2224,6 +2233,9 @@ def setbrowsercursormode(name):
 
     BROWSERCURSORMODE = mode
 
+    if os.environ.get("T1OS_VM_TEST") == "1":
+        logline(f"chromium cursor mode changed mode={mode}")
+
     if WINID is not None and (not FULLSCREEN or FULLSCREENCURSORVISIBLE):
         sendws({
             "op": "CURSOR_MODE_SET",
@@ -2294,7 +2306,7 @@ def xcursorsemantics():
         ("text", ("text", "xterm", "vertical-text")),
         ("link", ("pointer", "hand1", "hand2")),
     )
-    result = {}
+    result = dict(CHROMIUMCURSORIMAGESEMANTICS)
     for mode, names in groups:
         for name in names:
             for fingerprint in xcursorfilehashes(os.path.join(directory, name)):
@@ -2303,10 +2315,16 @@ def xcursorsemantics():
     return result
 
 
-def setbrowsercursorimage(fingerprint):
-    setbrowsercursormode(
-        xcursorsemantics().get(str(fingerprint).strip().lower(), "arrow")
-    )
+def setbrowsercursorimage(fingerprint, width=0, height=0, xhot=0, yhot=0):
+    fingerprint = str(fingerprint).strip().lower()
+    mode = xcursorsemantics().get(fingerprint, "arrow")
+    if os.environ.get("T1OS_VM_TEST") == "1":
+        logline(
+            "chromium cursor image observed "
+            f"mode={mode} hash={fingerprint} "
+            f"size={int(width)}x{int(height)} hotspot={int(xhot)},{int(yhot)}"
+        )
+    setbrowsercursormode(mode)
 
 
 def fullscreenpointeractivity():
@@ -3147,6 +3165,12 @@ def engineenvironment():
         "XKB_CONFIG_EXTRA_PATH": RESOURCES + "/xkb",
         "XKB_COMPILED_DIR": XKBCACHE,
         "XCURSOR_PATH": RESOURCES + "/icons",
+        # XCURSOR_PATH only defines where themes may be found; without an
+        # explicit theme libXcursor may fall back to core X11 cursor images.
+        # The bridge fingerprints Adwaita images to translate Chromium's
+        # cursor into the corresponding native T1OS cursor, so both ends must
+        # use the same packaged theme.
+        "XCURSOR_THEME": "Adwaita",
         "FONTCONFIG_PATH": FONTCONFIGROOT,
         "FONTCONFIG_FILE": FONTCONFIGFILE,
         "ALSA_CONFIG_PATH": AUDIO + "/asound.conf",
@@ -4991,6 +5015,10 @@ def enginesupervisor(
                 if len(parts) == 6 and parts[0] == b"CURSOR_IMAGE":
                     controloutput.queue({
                         "op": "cursor-image",
+                        "width": int(parts[1]),
+                        "height": int(parts[2]),
+                        "xhot": int(parts[3]),
+                        "yhot": int(parts[4]),
                         "hash": parts[5].decode("ascii", "replace"),
                     })
                     continue
@@ -5353,7 +5381,13 @@ def receiveengine():
         elif operation == "cursor":
             setbrowsercursormode(message.get("name", ""))
         elif operation == "cursor-image":
-            setbrowsercursorimage(message.get("hash", ""))
+            setbrowsercursorimage(
+                message.get("hash", ""),
+                message.get("width", 0),
+                message.get("height", 0),
+                message.get("xhot", 0),
+                message.get("yhot", 0),
+            )
         elif operation == "web-fullscreen":
             WEBFULLSCREEN = bool(message.get("fullscreen"))
             setbrowserfullscreen(WEBFULLSCREEN)
@@ -6560,6 +6594,19 @@ def diagnostic():
         and abs(chromedevicescale(3840, 2160, 1.0) - 1.80) < 0.0001
         and initialwindowsize(1920, 1080, 1.0) == (1280, 900)
         and initialwindowsize(3840, 2160, 1.0) == (2560, 1800)
+    )
+    cursorenvironment = engineenvironment()
+    cursorsemantics = xcursorsemantics()
+    checks["cursor_policy"] = (
+        cursorenvironment.get("XCURSOR_PATH") == RESOURCES + "/icons"
+        and cursorenvironment.get("XCURSOR_THEME") == "Adwaita"
+        and set(cursorsemantics.values()) >= {"arrow", "link", "text", "busy"}
+        and all(
+            xcursorfilehashes(
+                os.path.join(RESOURCES, "icons", "Adwaita", "cursors", name)
+            )
+            for name in ("left_ptr", "pointer", "text", "wait")
+        )
     )
     checks["bounded_backing_surface"] = (
         chromiumbackingsurface() == (3840, 2160)

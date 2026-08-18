@@ -179,6 +179,7 @@ SECTIONS = (
     'recovery', 'python', 'about')
 ABOUTFOOTER = 'slayer'
 VMTESTSTATUSPATH = '/.ephemeral/settings-vm-test.json'
+VMTESTPYTHONSTATUS = {}
 EDITABLE = {
     'network': ('address', 'netmask', 'gateway', 'dns1', 'dns2'),
     'time & date': ('date', 'time'),
@@ -1046,13 +1047,14 @@ def startpythonrequest(operation='refresh', arguments=None, timeout=10.0):
     thread.start()
     if operation != 'refresh':
         setstatus('Preparing a protected system Python change…', section='python')
+        writevmteststatus('python-running', python_operation=str(operation))
     redraw()
     return True
 
 
 def pollpythonrequest():
     global PYTHONWORK, PYTHONWORKRESULT, PYTHONSTATE, PYTHONMODULES
-    global PYTHONSELECTED, PYTHONLASTREFRESH
+    global PYTHONSELECTED, PYTHONQUERY, PYTHONLASTREFRESH
     with PYTHONWORKLOCK:
         outcome = PYTHONWORKRESULT
         PYTHONWORKRESULT = None
@@ -1076,6 +1078,12 @@ def pollpythonrequest():
     error = outcome.get('error')
     if error is not None:
         setstatus(str(error), True, section='python')
+        writevmteststatus(
+            'python-error',
+            python_operation=str(outcome.get('operation') or ''),
+            python_code=str(getattr(error, 'code', 'failed')),
+            python_error=str(error),
+        )
     elif outcome.get('operation') == 'refresh':
         # A background inventory refresh is not evidence that the operation
         # which produced a visible error has recovered.  Keep authentication,
@@ -1085,9 +1093,20 @@ def pollpythonrequest():
         pass
     else:
         response = outcome.get('response') or {}
+        if outcome.get('operation') == 'install_module':
+            # A completed add is no longer an editable request.  Keeping its
+            # text in the field makes the next module name concatenate with
+            # the previous one and turns a valid request into another name.
+            PYTHONQUERY = ''
         setstatus(
             str(response.get('message') or 'Python module change completed.'),
             section='python',
+        )
+        writevmteststatus(
+            'python-complete',
+            python_operation=str(outcome.get('operation') or ''),
+            python_message=str(
+                response.get('message') or 'Python module change completed.'),
         )
     redraw()
     return True
@@ -2034,9 +2053,9 @@ def savemaster():
 
     currentpassword = str(MASTER.get('current_password') or '')
     try:
-        if not currentpassword:
+        if (namechanged or passwordchanged) and not currentpassword:
             raise ValueError(
-                'Enter the current password to apply master changes.')
+                'Enter the current password to apply account changes.')
         if passwordchanged:
             if not newpassword:
                 raise ValueError('New password cannot be empty.')
@@ -2741,7 +2760,7 @@ def requestmastersave():
                         MASTERPASSWORDMINCHARS, MASTERPASSWORDMAXCHARS))
             if newpassword != confirmation:
                 raise ValueError('New passwords do not match.')
-        if accountchanged or profilechanged:
+        if accountchanged:
             return openpasswordprompt(
                 'master_changes',
                 'apply master changes',
@@ -2749,6 +2768,9 @@ def requestmastersave():
                 'master',
                 submitlabel='apply',
             )
+        if profilechanged:
+            savemaster()
+            return True
         savemaster()
         return True
     except Exception as error:
@@ -2799,9 +2821,16 @@ def pointin(pointx, pointy, rect):
 
 
 def writevmteststatus(stage, **detail):
+    global VMTESTPYTHONSTATUS
     if os.environ.get('T1OS_VM_TEST') != '1':
         return
     try:
+        if str(stage).startswith('python-'):
+            VMTESTPYTHONSTATUS = {'python_stage': str(stage)}
+            VMTESTPYTHONSTATUS.update({
+                key: value for key, value in detail.items()
+                if str(key).startswith('python_')
+            })
         payload = {
             'format': 1,
             'pid': os.getpid(),
@@ -2814,7 +2843,10 @@ def writevmteststatus(stage, **detail):
                 GRAPHICSSTATE and GRAPHICSSTATE.get('pending')),
             'graphics_failure': str(
                 GRAPHICSSTATE.get('failure', '') if GRAPHICSSTATE else ''),
+            'python_busy': bool(
+                PYTHONWORK is not None and PYTHONWORK.is_alive()),
         }
+        payload.update(VMTESTPYTHONSTATUS)
         payload.update(detail)
         with open(VMTESTSTATUSPATH, 'w', encoding='utf-8') as stream:
             json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
@@ -3693,7 +3725,7 @@ def paint():
                     else 'choose image')
             drawtext(
                 205, 546,
-                'Passwords use 4-32 characters; applying asks for the current password.',
+                'Image changes apply directly; account changes require the current password.',
                 COLOURMUTED, 13)
     elif SECTION == 'recovery':
         ready, recoverydetail = recoveryready()
@@ -4860,7 +4892,9 @@ def diagnostic():
     ):
         del timeout
         requestedname = validatemastername(username)
-        if str(current_password) != diagnosticaccount['password']:
+        accountchanged = (
+            requestedname != diagnosticaccount['username'] or bool(new_password))
+        if accountchanged and str(current_password) != diagnosticaccount['password']:
             raise ValueError('The current password is incorrect.')
         oldname = diagnosticaccount['username']
         returnedimage = str(image_path or '')
@@ -5162,15 +5196,12 @@ def diagnostic():
                 'use_master_image': True,
                 'image_path': masterimage,
             })
-            result['checks']['master_profile_requires_password'] = False
-            try:
-                savemaster()
-            except ValueError:
-                result['checks']['master_profile_requires_password'] = (
-                    not diagnosticcalls['master']
-                    and not MASTER.get('current_password'))
-            MASTER['current_password'] = 'current secret'
-            savemaster()
+            profileapply = requestmastersave()
+            result['checks']['master_profile_without_password'] = (
+                profileapply is True
+                and PASSWORDPROMPT is None
+                and len(diagnosticcalls['master']) == 1
+                and not MASTER.get('current_password'))
             result['checks']['master_profile_broker_request'] = (
                 len(diagnosticcalls['master']) == 1
                 and diagnosticcalls['master'][0] == {

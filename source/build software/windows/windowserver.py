@@ -344,7 +344,7 @@ LASTFBPOLL = 0.0
 # base chrome
 BASEFRAMEW = 2
 BASETITLEH = 28
-BASEBTNWH = 20
+BASEBTNWH = 16
 BASEBTNGAP = 6
 BASEPLACEDELTA = 32
 BASESNAPTOP = 8
@@ -19314,6 +19314,16 @@ def windowcompositordiagnostic():
         "performance": {},
         "graphics_api": {},
         "errors": [],
+    }
+    if BASETITLEH != BASEBTNWH + (BASEBTNGAP * 2):
+        raise RuntimeError(
+            "base window chrome is internally inconsistent: "
+            f"title={BASETITLEH} button={BASEBTNWH} gap={BASEBTNGAP}"
+        )
+    result["checks"]["window_chrome_geometry"] = {
+        "title_height": int(BASETITLEH),
+        "button_size": int(BASEBTNWH),
+        "button_padding": int(BASEBTNGAP),
     }
     diagnosticbase = "/.ephemeral/windowserver-diagnostic"
     originalbufbase = BUFBASE
