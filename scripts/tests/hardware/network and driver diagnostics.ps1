@@ -167,6 +167,24 @@ network = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(network)
 network.ensurehostfirewall = lambda: True
 
+established_expressions = network._nftestablishedrelated()
+bitwise_expression = next(
+    expression for expression in established_expressions
+    if dict(expression["attrs"])["NFTA_EXPR_NAME"] == "bitwise"
+)
+bitwise_attributes = dict(
+    dict(bitwise_expression["attrs"])["NFTA_EXPR_DATA"]["attrs"]
+)
+state_mask = dict(
+    bitwise_attributes["NFTA_BITWISE_MASK"]["attrs"]
+)["NFTA_DATA_VALUE"]
+expected_state_mask = (0x06).to_bytes(4, sys.byteorder)
+if state_mask != expected_state_mask:
+    raise SystemExit(
+        "nftables conntrack state mask is not native-endian: "
+        f"expected {expected_state_mask.hex()}, got {state_mask.hex()}"
+    )
+
 with tempfile.TemporaryDirectory() as temporary:
     network.NETDIR = temporary
     network.DNSCONF = os.path.join(temporary, "dns.txt")

@@ -1,14 +1,9 @@
 
 
-chromium opens and crashes.
-
-
 ## todo
 
 
 add native rar compression and extraction.
-
-fix shutdown and restart hangs.
 
 add expanse.
 

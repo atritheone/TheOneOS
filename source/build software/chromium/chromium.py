@@ -136,6 +136,7 @@ NVIDIAPRESENTATIONVARIABLE = "T1OS_CHROMIUM_NVIDIA_PRESENTATION"
 SINGLETONNAMES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
 XWDFILE = FRAMEBUFFER + "/Xvfb_screen0"
 DNSFILE = "/the one/settings/network/dns.txt"
+VMTESTNETLOGPATH = "/the one/logs/chromium-netlog.json"
 FONTFILE = "/the one/resources/fonts/atkinsonhyperlegiblenext.ttf"
 BASEWIDTH = 1280
 BASEHEIGHT = 900
@@ -3488,6 +3489,11 @@ def chromiumdebugarguments():
             "*transport_connect_job*=2,*url_request*=1"
         ),
     ]
+    if os.environ.get("T1OS_VM_TEST") == "1":
+        arguments.extend([
+            "--log-net-log=" + VMTESTNETLOGPATH,
+            "--net-log-capture-mode=Default",
+        ])
     return arguments
 
 

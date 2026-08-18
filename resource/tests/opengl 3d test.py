@@ -36,6 +36,7 @@ WINDOWSOCK = "/.ephemeral/windowserver/accept.sock"
 WINDOWPATH = os.path.abspath(__file__)
 IMAGEBASE = "/.ephemeral/opengl-3d-test"
 IMAGEPATH = os.path.join(IMAGEBASE, "checker.raw")
+STATUSPATH = os.path.join(IMAGEBASE, "status.json")
 FONTFILE = "/the one/resources/fonts/atkinsonhyperlegiblenext.ttf"
 RESULTPATH = "/the one/logs/opengl 3d test.json"
 PROGRESSPATH = "/the one/logs/opengl 3d test progress.json"
@@ -215,9 +216,34 @@ def pumpsocket(timeout=SOCKETPOLLINTERVAL):
 
 
 ## texture functions
+def writestatus(stage, **detail):
+
+    try:
+        os.makedirs(IMAGEBASE, exist_ok=True)
+        os.chmod(IMAGEBASE, 0o711)
+        payload = {
+            "format": 1,
+            "pid": os.getpid(),
+            "stage": str(stage),
+            "window_id": int(WINID) if WINID is not None else None,
+            "active": bool(GRAPHICSSTATE.get("active")),
+            "available": bool(GRAPHICSSTATE.get("available")),
+            "pending": bool(GRAPHICSSTATE.get("pending")),
+            "failure": str(GRAPHICSSTATE.get("failure") or GRAPHICSERROR),
+        }
+        payload.update(detail)
+        with open(STATUSPATH, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+        os.chmod(STATUSPATH, 0o604)
+    except Exception:
+        pass
+
+
 def createimage():
 
     os.makedirs(IMAGEBASE, exist_ok=True)
+    os.chmod(IMAGEBASE, 0o711)
     width = 128
     height = 128
 
@@ -232,6 +258,9 @@ def createimage():
                 green = 72 + int(125 * y / max(1, height - 1))
                 blue = 235 if tile else 72
                 output.write(bytes((blue, green, red, 255)))
+
+    os.chmod(IMAGEPATH, 0o604)
+    writestatus("image-ready", image_bytes=os.path.getsize(IMAGEPATH))
 
 
 def removeimage():
@@ -606,12 +635,14 @@ def submitscene():
         SCENEDIRTY = False
         SCENEDAMAGE = []
         managedsubmit(GRAPHICSSTATE, sendmessage, int(WINID), commands)
+        writestatus("scene-submitted", commands=len(commands), scene3d=2)
         return bool(GRAPHICSSTATE.get("available"))
 
     except Exception as error:
 
         GRAPHICSERROR = str(error)
         manageddisable(GRAPHICSSTATE, GRAPHICSERROR)
+        writestatus("scene-build-failed", error=GRAPHICSERROR)
         sendmessage({"op": "GRAPHICS_CLEAR", "winid": int(WINID)})
         renderfallback(GRAPHICSERROR)
         return False
@@ -878,6 +909,7 @@ def handlemessage(message):
         WINBUFFER = str(message.get("buffer", ""))
         WINW = max(1, int(message.get("w", WINDOWWIDTH)))
         WINH = max(1, int(message.get("h", WINDOWHEIGHT)))
+        writestatus("window-created")
 
         try:
 
@@ -910,6 +942,14 @@ def handlemessage(message):
         managedresponse(GRAPHICSSTATE, message)
 
         if operation == "GRAPHICS_COMMITTED":
+
+            writestatus(
+                "scene-committed",
+                generation=int(message.get("generation", 0) or 0),
+                accelerated=message.get("accelerated") is True,
+                managed_only=message.get("managed_only") is True,
+                presented=message.get("presented") is True,
+            )
 
             if not bool(message.get("presented", False)):
                 GRAPHICSERROR = str(message.get("presentation_reason", "the accelerated frame was not physically presented"))
@@ -962,6 +1002,7 @@ def handlemessage(message):
 
             managedresponse(GRAPHICSSTATE, message)
             GRAPHICSERROR = str(GRAPHICSSTATE.get("failure", message.get("detail", code)))
+            writestatus("scene-rejected", code=code, error=GRAPHICSERROR)
             renderfallback(GRAPHICSERROR)
             mapwindow()
 
@@ -1385,6 +1426,7 @@ def cleanup():
 
 def main():
 
+    writestatus("starting")
     autoreset()
     autoprogress("started")
     createimage()
@@ -1415,6 +1457,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         pass
+
+    except Exception as error:
+
+        writestatus("fatal", error=str(error))
+        raise
 
     finally:
 

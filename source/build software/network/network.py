@@ -378,8 +378,13 @@ def _nftmetacompare(key, value):
 def _nftestablishedrelated():
 
     # nftables conntrack state bits: established=0x02, related=0x04.
-    mask = struct.pack('!I', 0x06)
-    zero = struct.pack('!I', 0)
+    # The ct expression places NFT_CT_STATE in a native-endian register.
+    # Encoding this mask in network byte order tests 0x06000000 on T1OS's
+    # little-endian x86-64 target, so no ESTABLISHED or RELATED reply can
+    # match and the input chain's default-drop policy discards DNS, TCP, and
+    # TLS responses.  Data-register masks must use the target's native order.
+    mask = struct.pack('=I', 0x06)
+    zero = struct.pack('=I', 0)
     return [
         _nftexpression('ct', (('dreg', 1), ('key', 0))),
         _nftexpression('bitwise', (

@@ -219,7 +219,7 @@ function Invoke-T1OSAgentRequest {
             'brick', 'brick-gui', 'settings-gui', 'settings-display-gui',
             'player-gui', 'player-audio-gui', 'viewer-gui', 'write-gui',
             'chromium-gui', 'array-opengl-gui', 'session-status',
-            'feature-status', 'service-status', 'close-fixed-guis'
+            'feature-status', 'service-status', 'network-probe', 'close-fixed-guis'
         )]
         [string]$Action = 'brick',
         [AllowEmptyString()][string]$Command = '',
@@ -865,6 +865,14 @@ function Invoke-T1OSIssueTest {
         $selectedIssueCases = @($IssueCase | ForEach-Object { [string]$_ })
         $cases = @($cases | Where-Object { $_.name -in $selectedIssueCases })
     }
+    $chromiumSelected = @($cases.name) -contains 'chromium'
+    if ($chromiumSelected) {
+        $networkProbe = Invoke-T1OSAgentRequest -Action 'network-probe' -Order 0
+        $script:issueLaunches['network-probe'] = $networkProbe
+        if (-not $networkProbe.passed) {
+            throw 'The fixed guest DNS/TCP/TLS network probe failed before Chromium launch.'
+        }
+    }
     $previous = [string]$script:guiStages['04-desktop'].sha256
     $number = 23
     $chromiumPresentationStatus = $null
@@ -906,11 +914,9 @@ function Invoke-T1OSIssueTest {
             } while ([DateTime]::UtcNow -lt $presentationDeadline)
             $chromiumNavigationBaseline = Save-T1OSGuiStage `
                 -Name 'issues-chromium-about-blank' -TimeoutSeconds 30
-            # The Chromium input bridge owns a private X11 display. Give its
-            # visible omnibox physical pointer focus before replacing the URL;
-            # a host-only Ctrl+L can otherwise remain with WindowServer when
-            # the first Chromium frame and focus transition coincide.
-            Send-T1OSClick -X 500 -Y 180
+            # This fixed-resolution VM run can physically exercise the visible
+            # omnibox. Ctrl+A is then scoped to the location field itself.
+            Send-T1OSClick -X 500 -Y 149
             Start-Sleep -Milliseconds 250
             Send-T1OSCtrlShortcut -ScanCode '1e'
             Start-Sleep -Milliseconds 250
@@ -939,7 +945,7 @@ function Invoke-T1OSIssueTest {
             # A document title is semantic renderer evidence. Do not accept a
             # changed hash, spinner, error page, or partially repainted frame
             # as successful internet navigation.
-            Send-T1OSClick -X 500 -Y 180
+            Send-T1OSClick -X 500 -Y 149
             Start-Sleep -Milliseconds 250
             Send-T1OSCtrlShortcut -ScanCode '1e'
             Start-Sleep -Milliseconds 250
@@ -955,6 +961,8 @@ function Invoke-T1OSIssueTest {
                 [DateTime]::UtcNow -lt $internetDeadline
             )
             if ($internetChromiumLog -notmatch 'chromium document title changed title="Example Domain"') {
+                $failurePath = Join-Path $guiRunRoot 'issues-chromium-internet-failure.png'
+                Invoke-T1OSVBox -Arguments @('controlvm', $cloneName, 'screenshotpng', $failurePath) -Quiet
                 throw 'Chromium did not finish the external HTTPS navigation.'
             }
             $chromiumNavigationBaseline = $offlineStage
@@ -1012,18 +1020,20 @@ function Invoke-T1OSIssueTest {
     $chromiumLog = [string]$script:serviceStatus.logs.'chromium.py'
     $chromiumEngineLog = [string]$script:serviceStatus.logs.'chromium-engine-debug'
     $graphicsLog = [string]$script:serviceStatus.logs.'graphics.py'
-    if (
-        $chromiumLog -match '(?i)engine supervisor failed|exited before creating a window' -or
-        $chromiumEngineLog -match '(?im)^\[[^\r\n]*:FATAL:|zygote_host_impl_linux\.cc'
-    ) {
-        throw 'Chromium reported a fatal engine or zygote startup failure.'
-    }
-    if (
-        $chromiumLog -notmatch 'Chromium T1OS GPU presentation authorized' -or
-        $chromiumEngineLog -notmatch 'T1OS_PRESENTATION_BRIDGE transport=rgb-gbm-dmabuf-v1' -or
-        $graphicsLog -notmatch 'video connection authorized.*chromium-presentation'
-    ) {
-        throw 'Chromium did not establish its brokered EGL/GBM GPU presentation path.'
+    if ($chromiumSelected) {
+        if (
+            $chromiumLog -match '(?i)engine supervisor failed|exited before creating a window' -or
+            $chromiumEngineLog -match '(?im)^\[[^\r\n]*:FATAL:|zygote_host_impl_linux\.cc'
+        ) {
+            throw 'Chromium reported a fatal engine or zygote startup failure.'
+        }
+        if (
+            $chromiumLog -notmatch 'Chromium T1OS GPU presentation authorized' -or
+            $chromiumEngineLog -notmatch 'T1OS_PRESENTATION_BRIDGE transport=rgb-gbm-dmabuf-v1' -or
+            $graphicsLog -notmatch 'video connection authorized.*chromium-presentation'
+        ) {
+            throw 'Chromium did not establish its brokered EGL/GBM GPU presentation path.'
+        }
     }
     if ($graphicsLog -match 'rejected CPU damage') {
         throw 'The accelerated issue run attempted CPU-rendered window damage.'

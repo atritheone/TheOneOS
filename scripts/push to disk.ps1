@@ -2790,8 +2790,8 @@ if root_selected resources; then
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
     sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
     sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
-    sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest1.py"
-    sync_file 'OpenGL test' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest2.py"
+    sync_file 'OpenGL test' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
+    sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
     sync_file 'OpenGL test compatibility name' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
     chmod 0555 "$system_software_destination/patchelf"
@@ -2884,8 +2884,8 @@ if [ "$exhaustive_verify" = True ]; then
     }
     verify_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
     verify_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
-    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest1.py"
-    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest2.py"
+    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
+    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
     cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
 fi

@@ -37,11 +37,34 @@ created=
 diagnostic_master_created=0
 diagnostic_identity_created=0
 diagnostic_user="crdiag$$"
+diagnostic_master_file="$root/the one/master/master.txt"
+if [ -f "$diagnostic_master_file" ] &&
+        [ ! -L "$diagnostic_master_file" ]; then
+    diagnostic_master_record=$(head -n 1 "$diagnostic_master_file" | tr -d '\r\n')
+    diagnostic_master_user=${diagnostic_master_record%%:*}
+    case "$diagnostic_master_user" in
+        ''|*[!A-Za-z0-9._-]*)
+            echo 'The Chromium diagnostic found an invalid master credential record' >&2
+            exit 1
+            ;;
+        *)
+            diagnostic_user=$diagnostic_master_user
+            ;;
+    esac
+fi
 diagnostic_user_root="$root/master/$diagnostic_user"
 diagnostic_identity_directory="$root/the one/settings/session"
 diagnostic_identity="$diagnostic_identity_directory/identity.json"
 chromium_program="$root/the one/software/chromium/program"
 chromium_extensions="$chromium_program/extensions"
+chromium_settings="$root/the one/settings/chromium"
+chromium_settings_backup="$ephemeral/chromium-settings-backup"
+chromium_settings_existed=0
+chromium_settings_backup_ready=0
+dns_file="$root/the one/settings/network/dns.txt"
+dns_backup="$ephemeral/dns.txt.backup"
+dns_file_existed=0
+dns_backup_ready=0
 if [ -e "$chromium_extensions" ] || [ -L "$chromium_extensions" ]; then
     echo 'The measured Chromium program tree already contains an extensions object' >&2
     exit 1
@@ -49,7 +72,6 @@ fi
 
 cleanup() {
     set +e
-    chromium_settings="$root/the one/settings/chromium"
     rm -rf -- \
         "$chromium_settings/profile/.t1os-owned-state-test" \
         "$chromium_settings/config/.t1os-owned-state-test" \
@@ -57,6 +79,19 @@ cleanup() {
     rm -f -- \
         "$chromium_settings/profile/Default/.t1os-unsafe-link" \
         "$chromium_settings/config/.t1os-unsafe-fifo"
+    if [ "$chromium_settings_backup_ready" = 1 ]; then
+        rm -rf -- "$chromium_settings"
+        if [ "$chromium_settings_existed" = 1 ]; then
+            cp -a -- "$chromium_settings_backup" "$chromium_settings"
+        fi
+    fi
+    if [ "$dns_backup_ready" = 1 ]; then
+        if [ "$dns_file_existed" = 1 ]; then
+            cp -a -- "$dns_backup" "$dns_file"
+        else
+            rm -f -- "$dns_file"
+        fi
+    fi
     for target in random urandom full zero null; do
         umount "$nodes/$target" 2>/dev/null || true
     done
@@ -67,7 +102,7 @@ cleanup() {
     for target in $created; do rm -f -- "$target"; done
     if [ "$diagnostic_master_created" = 1 ]; then
         rm -rf -- "$diagnostic_user_root"
-        rm -f -- "$root/the one/master/master.txt"
+        rm -f -- "$diagnostic_master_file"
         rmdir "$root/the one/master" "$root/master" 2>/dev/null || true
     fi
     if [ "$diagnostic_identity_created" = 1 ]; then
@@ -87,14 +122,32 @@ mkdir -p "$processes" "$state" "$nodes" "$ephemeral"
 mount -t proc proc "$processes"
 mount --bind /sys "$state"
 mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "$ephemeral"
+if [ -e "$chromium_settings" ] || [ -L "$chromium_settings" ]; then
+    if [ ! -d "$chromium_settings" ] || [ -L "$chromium_settings" ]; then
+        echo 'The Chromium settings root is not a real directory' >&2
+        exit 1
+    fi
+    cp -a -- "$chromium_settings" "$chromium_settings_backup"
+    chromium_settings_existed=1
+fi
+chromium_settings_backup_ready=1
+if [ -e "$dns_file" ] || [ -L "$dns_file" ]; then
+    if [ ! -f "$dns_file" ] || [ -L "$dns_file" ]; then
+        echo 'The Chromium DNS configuration is not a regular file' >&2
+        exit 1
+    fi
+    cp -a -- "$dns_file" "$dns_backup"
+    dns_file_existed=1
+fi
+dns_backup_ready=1
 
 # A booted T1OS instance has an authenticated user and measured DRM state
 # before Chromium starts. The live process-chain test uses the software-safe
 # Nouveau path because WSL exposes no physical DRM device. NVIDIA's mandatory
 # render-node and NVDEC contracts are covered by the static and video suites.
-if [ ! -e "$root/the one/master/master.txt" ]; then
+if [ ! -e "$diagnostic_master_file" ]; then
     mkdir -p "$root/the one/master" "$diagnostic_user_root/flash/downloads"
-    printf '%s\n' "$diagnostic_user" > "$root/the one/master/master.txt"
+    printf '%s\n' "$diagnostic_user" > "$diagnostic_master_file"
     diagnostic_master_created=1
 fi
 if [ ! -e "$diagnostic_identity" ]; then
@@ -138,7 +191,6 @@ if [ -e "$root/the one/settings/chromium/instance.sock" ] || [ -L "$root/the one
     exit 1
 fi
 
-chromium_settings="$root/the one/settings/chromium"
 profile="$chromium_settings/profile"
 config="$chromium_settings/config"
 font_cache="$chromium_settings/font-cache"
@@ -179,15 +231,13 @@ for directory in "$profile" "$config" "$font_cache"; do
     find "$fixture" -type f -exec chmod 0400 {} +
 done
 
-engine_log="$root/the one/logs/chromium.py.log"
-engine_log_start=1
-if [ -f "$engine_log" ]; then
-    engine_log_start=$(( $(wc -l < "$engine_log") + 1 ))
-fi
+engine_diagnostic_log="$ephemeral/chromium-engine-current.log"
 chroot "$root" \
     '/the one/software/python/bin/python3.13' -B \
-    '/the one/build/chromium/chromium.py' engine-diagnostic |
+    '/the one/build/chromium/chromium.py' engine-diagnostic \
+    2>"$engine_diagnostic_log" |
     tee "$ephemeral/chromium-engine-diagnostic.json"
+cat "$engine_diagnostic_log" >&2
 grep -F '"zygote_provider": true' \
     "$ephemeral/chromium-engine-diagnostic.json"
 grep -F '"zygote_library_path": true' \
@@ -214,9 +264,6 @@ grep -F '"gpu_driver_loaded": false' \
     "$ephemeral/chromium-engine-diagnostic.json"
 grep -F '"expected_library_path": "/the one/software/chromium/libraries:/the one/catalogue/graphics"' \
     "$ephemeral/chromium-engine-diagnostic.json"
-tail -n +"$engine_log_start" "$engine_log" \
-    > "$ephemeral/chromium-engine-current.log"
-
 for directory in "$profile" "$config" "$font_cache"; do
     fixture="$directory/.t1os-owned-state-test"
     [ "$(stat -c '%u:%g:%a' "$fixture")" = '1000:1000:700' ]
