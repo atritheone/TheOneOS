@@ -2453,6 +2453,24 @@ def startnativevideo(session, startseconds, acceleration):
             session['maximumheight'],
             aspect=number(sourcevideo.get('display_aspect'), 0.0),
         )
+        adaptivepresentation = (
+            str(acceleration.get('driver') or '').strip().casefold()
+            != 'vmwgfx'
+        )
+        if not adaptivepresentation:
+            # VirtualBox's SVGA VAProc path reports successful VPP submission
+            # but its exported presentation surface contains zeroed Y/UV
+            # planes (the solid-green frame seen in Player).  Keep the decoded
+            # NV12 surface GPU-owned and let the compositor's texture sampler
+            # perform the presentation scaling instead.
+            targetwidth = integer(
+                sourcevideo.get('width') or sourcevideo.get('display_width'),
+                targetwidth,
+            )
+            targetheight = integer(
+                sourcevideo.get('height') or sourcevideo.get('display_height'),
+                targetheight,
+            )
         environment = videoaccelerationenvironment(
             acceleration,
             preload_path_provider=True,
@@ -2497,7 +2515,8 @@ def startnativevideo(session, startseconds, acceleration):
             'native video decoder started '
             f'pid={process.pid} backend={acceleration.get("backend", "vaapi")} '
             f'driver={acceleration.get("driver", "")} '
-            f'device={acceleration.get("device", "")}'
+            f'device={acceleration.get("device", "")} '
+            f'adaptive_presentation={adaptivepresentation}'
         )
     except Exception as error:
 
@@ -2542,6 +2561,7 @@ def startnativevideo(session, startseconds, acceleration):
         'height': integer(session['info']['video'].get('display_height') or session['info']['video'].get('height'), 0),
         'presentation_width': targetwidth,
         'presentation_height': targetheight,
+        'adaptive_presentation': adaptivepresentation,
         'framerate': max(1.0, number(session['info']['video'].get('frame_rate'), 25.0)),
         'framesize': 0,
         'slots': [],
@@ -3470,6 +3490,26 @@ def videocontrol(session):
                 height,
                 aspect=number(sourcevideo.get('display_aspect'), 0.0),
             )
+
+            if (
+                isinstance(context, dict)
+                and context.get('adaptive_presentation') is False
+            ):
+
+                with session['lock']:
+
+                    session['maximumwidth'] = width
+                    session['maximumheight'] = height
+                    session['presentation_width'] = integer(
+                        context.get('presentation_width'),
+                        integer(sourcevideo.get('width'), targetwidth),
+                    )
+                    session['presentation_height'] = integer(
+                        context.get('presentation_height'),
+                        integer(sourcevideo.get('height'), targetheight),
+                    )
+
+                return ''
 
             if (
                 isinstance(context, dict)

@@ -52,7 +52,7 @@ from graphics.graphics import managedsubmit, managedresponse, uiscalefactor, dis
 
 # software
 PLAYERPATH = '/the one/build/player/player.py'
-VMTESTSTATUSPATH = '/.ephemeral/media/vm-player-status.json'
+VMTESTSTATUSPATH = f'/.ephemeral/media/vm-player-status-{os.getpid()}.json'
 RUNNING = True
 CLOSING = False
 
@@ -934,6 +934,7 @@ def infoworker(generation, path, knowninfo=None):
     info = dict(knowninfo) if isinstance(knowninfo, dict) else {}
     artwork = {}
     errors = []
+    log(f'artwork worker started generation={generation} path={path!r}')
 
     try:
 
@@ -958,11 +959,21 @@ def infoworker(generation, path, knowninfo=None):
 
     try:
 
-        os.makedirs(INFOROOT, mode=0o700, exist_ok=True)
+        infoparent = os.path.dirname(INFOROOT)
+        os.makedirs(infoparent, mode=0o711, exist_ok=True)
+
+        if os.path.islink(infoparent):
+
+            raise ValueError('player artwork parent directory is not safe')
+
+        os.chmod(infoparent, 0o711)
+        os.makedirs(INFOROOT, mode=0o711, exist_ok=True)
 
         if os.path.islink(INFOROOT):
 
             raise ValueError('player artwork directory is not safe')
+
+        os.chmod(INFOROOT, 0o711)
 
         if mediaapi.extractart(path, artpath):
 
@@ -989,6 +1000,11 @@ def infoworker(generation, path, knowninfo=None):
         errors.append(str(error))
         discardart({'source': artpath, 'output': surfacepath})
         artwork = {}
+
+    log(
+        f'artwork worker completed generation={generation} '
+        f'artwork={bool(artwork)} errors={errors}'
+    )
 
     try:
 
@@ -4248,6 +4264,18 @@ def cleanup():
     shutdowninfo()
     clearart()
     clearvideo()
+
+    if os.environ.get('T1OS_VM_TEST') == '1':
+
+        try:
+
+            if os.path.isfile(VMTESTSTATUSPATH) and not os.path.islink(VMTESTSTATUSPATH):
+
+                os.unlink(VMTESTSTATUSPATH)
+
+        except Exception:
+
+            pass
 
     try:
 

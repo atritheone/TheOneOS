@@ -36,15 +36,26 @@
 #define T1OS_CHROMIUM_NVIDIA_ROOT \
 	"/the one/drivers/nodes/nvidia"
 #define T1OS_CHROMIUM_NVIDIA_MAXIMUM_GPUS 16
+#define T1OS_CHROMIUM_MESA_GPU_VARIABLE "T1OS_CHROMIUM_MESA_GPU"
 
 static const char *t1os_path(const char *path, char output[PATH_MAX]);
 
 static int chromium_urandom_descriptor = -1;
+static bool chromium_mesa_gpu_process = false;
 
 __attribute__((constructor))
 static void t1os_path_provider_initialize(void)
 {
 	const char *executable = (const char *)getauxval(AT_EXECFN);
+	const char *mesa_gpu = getenv(T1OS_CHROMIUM_MESA_GPU_VARIABLE);
+
+	/*
+	 * Chromium clears parts of its inherited environment before initializing
+	 * GL. Capture the helper-issued GPU identity while this preload constructor
+	 * still owns the original exec environment, then use the immutable process-
+	 * local result for later open/dlopen redirects.
+	 */
+	chromium_mesa_gpu_process = mesa_gpu && strcmp(mesa_gpu, "1") == 0;
 
 	/*
 	 * The SUID sandbox eventually chroots the zygote into an empty directory.
@@ -287,6 +298,18 @@ static const struct path_map path_maps[] = {
 	{ "/opt", "/the one/software", true },
 };
 
+/*
+ * Mesa's GBM loader retains its distribution build-time plugin directory even
+ * when GBM_BACKENDS_PATH is supplied.  Only the measured direct GPU process
+ * may substitute the T1OS graphics catalogue here: Xvfb, the browser, zygotes,
+ * renderers, and utilities intentionally retain Chromium's private Mesa ABI.
+ */
+static const struct path_map mesa_gpu_path_maps[] = {
+	{ "/usr/lib/x86_64-linux-gnu/gbm", "/the one/catalogue/graphics/gbm", true },
+	{ "/usr/lib64/gbm", "/the one/catalogue/graphics/gbm", true },
+	{ "/usr/lib/gbm", "/the one/catalogue/graphics/gbm", true },
+};
+
 static bool path_matches(const char *path, const struct path_map *mapping)
 {
 	size_t length = strlen(mapping->legacy);
@@ -324,6 +347,27 @@ static const char *t1os_path(const char *path, char output[PATH_MAX])
 			return NULL;
 		}
 		return output;
+	}
+
+	if (chromium_mesa_gpu_process) {
+		for (index = 0;
+		     index < sizeof(mesa_gpu_path_maps) /
+				     sizeof(mesa_gpu_path_maps[0]);
+		     index++) {
+			const struct path_map *mapping = &mesa_gpu_path_maps[index];
+			size_t legacy_length;
+
+			if (!path_matches(path, mapping))
+				continue;
+			legacy_length = strlen(mapping->legacy);
+			written = snprintf(output, PATH_MAX, "%s%s", mapping->t1os,
+					   path + legacy_length);
+			if (written < 0 || written >= PATH_MAX) {
+				errno = ENAMETOOLONG;
+				return NULL;
+			}
+			return output;
+		}
 	}
 
 	for (index = 0; index < sizeof(path_maps) / sizeof(path_maps[0]); index++) {

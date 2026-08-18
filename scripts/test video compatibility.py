@@ -131,6 +131,9 @@ def main():
         "LIBRARIES": "/the one/software/chromium/libraries",
         "BASEGRAPHICSLIBRARYPATH":
             "/the one/software/chromium/libraries:/the one/catalogue/graphics",
+        "MESAGRAPHICSLIBRARYPATH":
+            "/the one/catalogue/graphics:"
+            "/the one/software/chromium/libraries",
         "NVIDIAGRAPHICSLIBRARYPATH":
             "/the one/catalogue/graphics/nvidia:"
             "/the one/catalogue/graphics:"
@@ -664,7 +667,10 @@ def main():
         and "servicechromiumenvironment(environment)" in chromiumtext
         and re.search(
             r"expected_gpu_library_path\s*=\s*chrome_environment\.get\(\s*"
-            r"NVIDIAGPULIBRARYPATHVARIABLE,\s*\"\",\s*\)",
+            r"NVIDIAGPULIBRARYPATHVARIABLE,\s*"
+            r"MESAGRAPHICSLIBRARYPATH\s*"
+            r"if presentationbridge and not proprietarynvidia\s*"
+            r"else \"\",\s*\)",
             chromiumtext,
         ),
         "Chromium hardware decode is not bound to the brokered T1MD service",
@@ -704,7 +710,7 @@ def main():
         "--disable-gpu-sandbox" not in nvidia_gpu_arguments
         and '"--disable-gpu-sandbox"' not in chromiumtext
         and "--no-zygote" not in nvidia_gpu_arguments
-        and "--no-unsandboxed-zygote" in nvidia_gpu_arguments
+        and "--no-unsandboxed-zygote" not in nvidia_gpu_arguments
         and "--use-gl=egl" in nvidia_gpu_arguments
         and "--disable-accelerated-video-decode" in nvidia_gpu_arguments
         and "--disable-accelerated-video-decode"

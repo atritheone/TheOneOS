@@ -1,9 +1,12 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('Smoke', 'Brick', 'Gui', 'Features', 'Full')]
+    [ValidateSet('Smoke', 'Brick', 'Gui', 'Features', 'Issues', 'Full')]
     [string]$Suite = 'Brick',
 
     [string[]]$Directive,
+
+    [ValidateSet('viewer', 'write', 'player-audio', 'player-video', 'array-opengl', 'chromium')]
+    [string[]]$IssueCase,
 
     [ValidateRange(60, 600)]
     [int]$BootTimeoutSeconds = 240,
@@ -62,6 +65,8 @@ $guiMode = $null
 $featureChecks = [ordered]@{}
 $featureLaunches = [ordered]@{}
 $featureStatus = $null
+$issueChecks = [ordered]@{}
+$issueLaunches = [ordered]@{}
 $serviceStatus = $null
 $failure = $null
 $startedAt = [DateTime]::UtcNow
@@ -210,7 +215,12 @@ function Wait-T1OSTestGuest {
 
 function Invoke-T1OSAgentRequest {
     param(
-        [ValidateSet('brick', 'brick-gui', 'settings-gui', 'player-gui', 'session-status', 'feature-status', 'service-status')]
+        [ValidateSet(
+            'brick', 'brick-gui', 'settings-gui', 'settings-display-gui',
+            'player-gui', 'player-audio-gui', 'viewer-gui', 'write-gui',
+            'chromium-gui', 'array-opengl-gui', 'session-status',
+            'feature-status', 'service-status', 'close-fixed-guis'
+        )]
         [string]$Action = 'brick',
         [AllowEmptyString()][string]$Command = '',
         [Parameter(Mandatory)][int]$Order
@@ -361,6 +371,13 @@ function Send-T1OSWinShortcut {
     Send-T1OSScanCodes -Codes @('e0', '5b', $ScanCode, $released, 'e0', 'db')
 }
 
+function Send-T1OSCtrlShortcut {
+    param([Parameter(Mandatory)][string]$ScanCode)
+
+    $released = '{0:x2}' -f (([Convert]::ToInt32($ScanCode, 16) + 0x80) -band 0xff)
+    Send-T1OSScanCodes -Codes @('1d', $ScanCode, $released, '9d')
+}
+
 function Send-T1OSAltF4 {
     Send-T1OSScanCodes -Codes @('38', '3e', 'be', 'b8')
 }
@@ -467,6 +484,7 @@ function Get-T1OSImageStats {
     try {
         $nonBlack = 0
         $light = 0
+        $red = 0
         $samples = 0
         $colors = [System.Collections.Generic.HashSet[int]]::new()
 
@@ -481,6 +499,9 @@ function Get-T1OSImageStats {
                 if ($pixel.R -gt 180 -and $pixel.G -gt 180 -and $pixel.B -gt 180) {
                     $light++
                 }
+                if ($pixel.R -gt 180 -and $pixel.G -lt 40 -and $pixel.B -lt 40) {
+                    $red++
+                }
             }
         }
 
@@ -490,6 +511,7 @@ function Get-T1OSImageStats {
             samples = $samples
             non_black_samples = $nonBlack
             light_samples = $light
+            red_samples = $red
             unique_sampled_colors = $colors.Count
             sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
         }
@@ -796,6 +818,221 @@ function Invoke-T1OSFeatureTest {
     }
 }
 
+function Invoke-T1OSIssueTest {
+    $settingsNavigationFailure = ''
+    Write-Host 'ISSUES: exercising Settings navigation through physical pointer input...'
+    $launch = Invoke-T1OSAgentRequest -Action 'settings-display-gui' -Order 0
+    $script:issueLaunches.settings = $launch
+    if (-not $launch.passed) { throw 'the issue test could not launch Settings.' }
+    Start-Sleep -Seconds 3
+    Send-T1OSWinShortcut -ScanCode '39'
+    Start-Sleep -Seconds 2
+    $display = Save-T1OSGuiStage -Name '20-issues-settings-display' -TimeoutSeconds 30
+    # Exercise the visible Master and About rows at the image's current 100%
+    # scale.  The former 80%-scale coordinates hit Network and Recovery and
+    # made a screenshot change look like a navigation pass.
+    Send-T1OSClick -X 76 -Y 388
+    Start-Sleep -Seconds 2
+    $masterStatus = Get-T1OSFeatureStatus
+    $script:issueLaunches['settings-master-status'] = $masterStatus
+    if ([string]$masterStatus.settings_status.section -ne 'master') {
+        $settingsDetail = $masterStatus.settings_status | ConvertTo-Json -Depth 5 -Compress
+        $settingsNavigationFailure = "Settings did not select Master from physical pointer input: $settingsDetail"
+    }
+    $master = Save-T1OSGuiStage -Name '21-issues-settings-master' -DifferentFrom $display.sha256 -TimeoutSeconds 20
+    Send-T1OSClick -X 76 -Y 532
+    Start-Sleep -Seconds 2
+    $aboutStatus = Get-T1OSFeatureStatus
+    $script:issueLaunches['settings-about-status'] = $aboutStatus
+    if ([string]$aboutStatus.settings_status.section -ne 'about') {
+        $settingsDetail = $aboutStatus.settings_status | ConvertTo-Json -Depth 5 -Compress
+        $settingsNavigationFailure = "Settings did not select About from physical pointer input: $settingsDetail"
+    }
+    [void](Save-T1OSGuiStage -Name '22-issues-settings-about' -DifferentFrom $master.sha256 -TimeoutSeconds 20)
+    $script:issueChecks.settings_navigation_clicks = $true
+    Send-T1OSAltF4
+    Start-Sleep -Seconds 2
+
+    $cases = @(
+        [ordered]@{ action='viewer-gui'; name='viewer'; wait=6 },
+        [ordered]@{ action='write-gui'; name='write'; wait=4 },
+        [ordered]@{ action='player-audio-gui'; name='player-audio'; wait=8 },
+        [ordered]@{ action='player-gui'; name='player-video'; wait=8 },
+        [ordered]@{ action='array-opengl-gui'; name='array-opengl'; wait=8 },
+        [ordered]@{ action='chromium-gui'; name='chromium'; wait=10 }
+    )
+    if ($IssueCase -and $IssueCase.Count -gt 0) {
+        $selectedIssueCases = @($IssueCase | ForEach-Object { [string]$_ })
+        $cases = @($cases | Where-Object { $_.name -in $selectedIssueCases })
+    }
+    $previous = [string]$script:guiStages['04-desktop'].sha256
+    $number = 23
+    $chromiumPresentationStatus = $null
+    foreach ($case in $cases) {
+        $chromiumNavigationBaseline = $null
+        Write-Host "ISSUES: launching $($case.name)..."
+        $caseLaunch = Invoke-T1OSAgentRequest -Action $case.action -Order 0
+        $script:issueLaunches[$case.name] = $caseLaunch
+        if (-not $caseLaunch.passed) { throw "the issue test could not launch $($case.name)." }
+        Start-Sleep -Seconds $case.wait
+        if ($case.name -eq 'chromium') {
+            # A first launch from the immutable runtime can spend more than
+            # ten seconds starting the sandboxed GPU process.  Readiness is
+            # the complete brokered transport contract, not merely a live
+            # Python wrapper or a mapped but still-empty X11 window.
+            # Match the guest supervisor's bounded cold-start allowance plus
+            # its GPU-runtime verification interval.  A freshly cloned VDI
+            # reaches BrowserWindow after roughly 45-50 seconds and its first
+            # renderer after roughly 70 seconds, so the former 60-second host
+            # poll stopped before the guest could finish a valid cold start.
+            $presentationDeadline = [DateTime]::UtcNow.AddSeconds(150)
+            do {
+                $chromiumPresentationStatus = Get-T1OSServiceStatus
+                $presentationChromiumLog = [string]$chromiumPresentationStatus.logs.'chromium.py'
+                $presentationEngineLog = [string]$chromiumPresentationStatus.logs.'chromium-engine-debug'
+                $presentationGraphicsLog = [string]$chromiumPresentationStatus.logs.'graphics.py'
+                if (
+                    $presentationChromiumLog -match 'Chromium T1OS GPU presentation authorized' -and
+                    $presentationEngineLog -match 'T1OS_PRESENTATION_BRIDGE transport=rgb-gbm-dmabuf-v1' -and
+                    $presentationGraphicsLog -match 'video connection authorized.*chromium-presentation'
+                ) {
+                    break
+                }
+                $chromiumLiveness = Get-T1OSFeatureStatus
+                if (-not $chromiumLiveness.chromium_alive) {
+                    throw 'Chromium exited before establishing its brokered GPU presentation path.'
+                }
+                Start-Sleep -Seconds 2
+            } while ([DateTime]::UtcNow -lt $presentationDeadline)
+            $chromiumNavigationBaseline = Save-T1OSGuiStage `
+                -Name 'issues-chromium-about-blank' -TimeoutSeconds 30
+            # The Chromium input bridge owns a private X11 display. Give its
+            # visible omnibox physical pointer focus before replacing the URL;
+            # a host-only Ctrl+L can otherwise remain with WindowServer when
+            # the first Chromium frame and focus transition coincide.
+            Send-T1OSClick -X 500 -Y 180
+            Start-Sleep -Milliseconds 250
+            Send-T1OSCtrlShortcut -ScanCode '1e'
+            Start-Sleep -Milliseconds 250
+            Send-T1OSText -Text 'data:text/html,%3Ctitle%3ET1OSDATA%3C%2Ftitle%3E%3Cbody%20style%3D%22background%3Ared%3Bcolor%3Awhite%3Bfont-size%3A72px%22%3ET1OSDATA%3C%2Fbody%3E'
+            Send-T1OSKey -ScanCode '1c'
+            $offlineDeadline = [DateTime]::UtcNow.AddSeconds(20)
+            do {
+                Start-Sleep -Milliseconds 500
+                $offlineStatus = Get-T1OSServiceStatus
+                $offlineChromiumLog = [string]$offlineStatus.logs.'chromium.py'
+            } while (
+                $offlineChromiumLog -notmatch 'chromium document title changed title="T1OSDATA"' -and
+                [DateTime]::UtcNow -lt $offlineDeadline
+            )
+            if ($offlineChromiumLog -notmatch 'chromium document title changed title="T1OSDATA"') {
+                throw 'Chromium did not load the deterministic offline document.'
+            }
+            $offlineStage = Save-T1OSGuiStage `
+                -Name 'issues-chromium-offline' `
+                -DifferentFrom $chromiumNavigationBaseline.sha256 `
+                -TimeoutSeconds 20
+            if ([int]$offlineStage.red_samples -lt 5000) {
+                throw "Chromium loaded the offline title but did not present its full red document ($($offlineStage.red_samples) red samples)."
+            }
+
+            # A document title is semantic renderer evidence. Do not accept a
+            # changed hash, spinner, error page, or partially repainted frame
+            # as successful internet navigation.
+            Send-T1OSClick -X 500 -Y 180
+            Start-Sleep -Milliseconds 250
+            Send-T1OSCtrlShortcut -ScanCode '1e'
+            Start-Sleep -Milliseconds 250
+            Send-T1OSText -Text 'https://example.com'
+            Send-T1OSKey -ScanCode '1c'
+            $internetDeadline = [DateTime]::UtcNow.AddSeconds(45)
+            do {
+                Start-Sleep -Seconds 1
+                $internetStatus = Get-T1OSServiceStatus
+                $internetChromiumLog = [string]$internetStatus.logs.'chromium.py'
+            } while (
+                $internetChromiumLog -notmatch 'chromium document title changed title="Example Domain"' -and
+                [DateTime]::UtcNow -lt $internetDeadline
+            )
+            if ($internetChromiumLog -notmatch 'chromium document title changed title="Example Domain"') {
+                throw 'Chromium did not finish the external HTTPS navigation.'
+            }
+            $chromiumNavigationBaseline = $offlineStage
+        }
+        $stage = Save-T1OSGuiStage -Name ('{0}-issues-{1}' -f $number, $case.name) `
+            -DifferentFrom $(if ($chromiumNavigationBaseline) { $chromiumNavigationBaseline.sha256 } else { $previous }) `
+            -TimeoutSeconds 30
+        $previous = $stage.sha256
+        $status = Get-T1OSFeatureStatus
+        if ($case.name -eq 'array-opengl' -and -not $status.opengl_scene_ready) {
+            # The capability test continuously submits retained telemetry and
+            # animation patches after its first accelerated frame. A single
+            # status sample can therefore land on scene-submitted even though
+            # the preceding managed-only frame is visibly presented. Wait for
+            # the WindowServer's next physical GRAPHICS_COMMITTED receipt.
+            $openglDeadline = [DateTime]::UtcNow.AddSeconds(10)
+            do {
+                Start-Sleep -Milliseconds 250
+                $status = Get-T1OSFeatureStatus
+            } while (
+                -not $status.opengl_scene_ready -and
+                [DateTime]::UtcNow -lt $openglDeadline
+            )
+        }
+        $script:issueLaunches["$($case.name)-status"] = $status
+        if ($case.name -eq 'viewer' -and -not $status.viewer_alive) { throw 'Viewer exited while loading the fixed image.' }
+        if ($case.name -eq 'write' -and -not $status.write_alive) { throw 'Write exited while loading the non-empty file.' }
+        if ($case.name -eq 'player-audio' -and -not $status.player_audio_alive) { throw 'Player exited while loading audio artwork.' }
+        if ($case.name -eq 'player-video' -and (-not $status.player_alive -or -not $status.player_playback_ready)) { throw 'Player did not reach decoded video playback.' }
+        if ($case.name -eq 'array-opengl' -and -not $status.opengl_scene_ready) {
+            $openglDetail = $status.opengl_status | ConvertTo-Json -Depth 5 -Compress
+            throw "OpenGL test did not commit an accelerated managed-only scene: $openglDetail"
+        }
+        if ($case.name -eq 'chromium' -and -not $status.chromium_alive) { throw 'Chromium exited after launch.' }
+        if ($case.name -eq 'chromium') {
+            $script:issueChecks.chromium_internet_navigation = $true
+        }
+        $script:issueChecks[$case.name] = $true
+        $number++
+        Send-T1OSAltF4
+        Start-Sleep -Seconds 2
+        $close = Invoke-T1OSAgentRequest -Action 'close-fixed-guis' -Order 0
+        $script:issueLaunches["$($case.name)-close"] = $close
+        if (-not $close.passed -or $close.response.source -ne 'deployed') {
+            throw "the issue test could not close $($case.name) after verification."
+        }
+        Start-Sleep -Seconds 1
+    }
+    $script:serviceStatus = if ($chromiumPresentationStatus) {
+        $chromiumPresentationStatus
+    }
+    else {
+        Get-T1OSServiceStatus
+    }
+    $chromiumLog = [string]$script:serviceStatus.logs.'chromium.py'
+    $chromiumEngineLog = [string]$script:serviceStatus.logs.'chromium-engine-debug'
+    $graphicsLog = [string]$script:serviceStatus.logs.'graphics.py'
+    if (
+        $chromiumLog -match '(?i)engine supervisor failed|exited before creating a window' -or
+        $chromiumEngineLog -match '(?im)^\[[^\r\n]*:FATAL:|zygote_host_impl_linux\.cc'
+    ) {
+        throw 'Chromium reported a fatal engine or zygote startup failure.'
+    }
+    if (
+        $chromiumLog -notmatch 'Chromium T1OS GPU presentation authorized' -or
+        $chromiumEngineLog -notmatch 'T1OS_PRESENTATION_BRIDGE transport=rgb-gbm-dmabuf-v1' -or
+        $graphicsLog -notmatch 'video connection authorized.*chromium-presentation'
+    ) {
+        throw 'Chromium did not establish its brokered EGL/GBM GPU presentation path.'
+    }
+    if ($graphicsLog -match 'rejected CPU damage') {
+        throw 'The accelerated issue run attempted CPU-rendered window damage.'
+    }
+    if ($settingsNavigationFailure) {
+        throw $settingsNavigationFailure
+    }
+}
+
 function Remove-T1OSVmTestDirectory {
     if (-not (Test-Path -LiteralPath $runRoot)) {
         return
@@ -819,11 +1056,13 @@ if (-not $Directive -or $Directive.Count -eq 0) {
         'Brick' { @('version; role', 'test parsing', 'test dogfood') }
         'Gui' { @('version') }
         'Features' { @('version') }
+        'Issues' { @('version') }
         'Full' { @('test brick', 'test directives') }
     }
 }
-$runGui = $Suite -in @('Gui', 'Features', 'Full')
+$runGui = $Suite -in @('Gui', 'Features', 'Issues', 'Full')
 $runFeatures = $Suite -in @('Features', 'Full')
+$runIssues = $Suite -eq 'Issues'
 $deferredDirectives = @()
 
 $script:vbox = Get-T1OSVBoxManage
@@ -939,6 +1178,9 @@ try {
     if ($runFeatures) {
         Invoke-T1OSFeatureTest
     }
+    if ($runIssues) {
+        Invoke-T1OSIssueTest
+    }
 }
 catch {
     $failure = $_.Exception.Message
@@ -1023,6 +1265,16 @@ finally {
                 launches = $featureLaunches
                 status = $featureStatus
                 terminal_fixture = $terminalFixtureSource
+            }
+        }
+        else {
+            $null
+        }
+        issues = if ($runIssues) {
+            [ordered]@{
+                passed = -not $failure -and $issueChecks.Count -ge 7 -and -not ($issueChecks.Values -contains $false)
+                checks = $issueChecks
+                launches = $issueLaunches
             }
         }
         else {

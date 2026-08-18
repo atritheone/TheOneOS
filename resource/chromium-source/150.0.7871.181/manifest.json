@@ -13,6 +13,6 @@
   "protocol_magic": "T1MD",
   "protocol_version": 1,
   "protocol_header_sha256": "11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0",
-  "source_overlay_sha256": "597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e",
-  "build_marker": "T1OS_MEDIA_DECODER=T1MD/1;brokered_socket=1;pool=8;chromium=24b04c927b23c39cf9c5227cc8dc6f64a744c8e9;protocol_sha256=11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0;source_sha256=597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e"
+  "source_overlay_sha256": "102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705",
+  "build_marker": "T1OS_MEDIA_DECODER=T1MD/1;brokered_socket=1;pool=8;chromium=24b04c927b23c39cf9c5227cc8dc6f64a744c8e9;protocol_sha256=11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0;source_sha256=102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705"
 }

@@ -271,7 +271,10 @@ try {
     $browsePath = Join-Path $Destination 'logs'
     New-Item -ItemType Directory -Path $browsePath -Force | Out-Null
     $wslBrowsePath = ConvertTo-T1OSWslPath -Path $browsePath
-    & wsl.exe -u root --exec sh -c 'cp -R --preserve=timestamps "$1"/. "$2"/' sh "$mountPoint/the one/logs" $wslBrowsePath
+    # The tarball above is the metadata-preserving forensic copy.  The
+    # browsable tree is deliberately host-readable, including guest logs that
+    # were mode 0600, so inspection never depends on guest ownership.
+    & wsl.exe -u root --exec sh -c 'cp -R --preserve=timestamps "$1"/. "$2"/ && chmod -R a+rX "$2"' sh "$mountPoint/the one/logs" $wslBrowsePath
     if ($LASTEXITCODE -ne 0) {
         throw 'WSL could not create the browsable copy of the T1OS logs.'
     }

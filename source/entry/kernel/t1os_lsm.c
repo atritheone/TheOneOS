@@ -1223,9 +1223,11 @@ static bool t1os_process_read_allowed(const char *path)
 	relative = path + sizeof(prefix) - 1;
 
 	if (!strcmp(relative, "stat") || !strcmp(relative, "meminfo") ||
+	    !strcmp(relative, "cpuinfo") ||
 	    !strcmp(relative, "cmdline") || !strcmp(relative, "uptime") ||
 	    !strcmp(relative, "loadavg") || !strcmp(relative, "mounts") ||
-	    !strcmp(relative, "sys/kernel/random/boot_id"))
+	    !strcmp(relative, "sys/kernel/random/boot_id") ||
+	    !strcmp(relative, "sys/fs/inotify/max_user_watches"))
 		return true;
 
 	slash = strchr(relative, '/');
@@ -1252,6 +1254,7 @@ static bool t1os_process_read_allowed(const char *path)
 	     !strcmp(leaf, "/cmdline") || !strcmp(leaf, "/comm") ||
 	     !strcmp(leaf, "/wchan") || !strcmp(leaf, "/attr") ||
 	     !strcmp(leaf, "/attr/current") || !strcmp(leaf, "/exe") ||
+	     !strcmp(leaf, "/fd") ||
 	     !strcmp(leaf, "/cwd") || !strcmp(leaf, "/mounts") ||
 	     !strcmp(leaf, "/mountinfo") || !strcmp(leaf, "/maps") ||
 	     !strcmp(leaf, "/environ")))
@@ -2397,6 +2400,31 @@ static bool t1os_unprivileged_creds(const struct cred *cred,
 	return task_no_new_privs(current) && cap_isclear(cred->cap_bset);
 }
 
+/* The setuid Chromium sandbox returns renderer, utility, and GPU children to
+ * the exact uid-1000 identity, clears every usable capability, and then may
+ * retain a bounding set while enforcing its own namespace/seccomp policy.
+ * That post-sandbox identity must be able to enter only immutable packaged
+ * Chromium helpers.  It is deliberately separate from the pre-sandbox
+ * exception above: user-selected executables never receive this allowance. */
+static bool t1os_chromium_child_creds(const struct cred *cred)
+{
+	kuid_t uid = make_kuid(&init_user_ns, 1000);
+	kgid_t gid = make_kgid(&init_user_ns, 1000);
+
+	if (!cred || !uid_valid(uid) || !gid_valid(gid) ||
+	    cred->user_ns != &init_user_ns)
+		return false;
+	return uid_eq(cred->uid, uid) && uid_eq(cred->euid, uid) &&
+	       uid_eq(cred->suid, uid) && uid_eq(cred->fsuid, uid) &&
+	       gid_eq(cred->gid, gid) && gid_eq(cred->egid, gid) &&
+	       gid_eq(cred->sgid, gid) && gid_eq(cred->fsgid, gid) &&
+	       cred->group_info && cred->group_info->ngroups == 0 &&
+	       cap_isclear(cred->cap_inheritable) &&
+	       cap_isclear(cred->cap_permitted) &&
+	       cap_isclear(cred->cap_effective) &&
+	       cap_isclear(cred->cap_ambient);
+}
+
 static bool t1os_root_service_creds(const struct cred *cred)
 {
 	if (!cred || cred->user_ns != &init_user_ns)
@@ -2470,7 +2498,8 @@ static bool t1os_exec_cred_class_allowed(const struct linux_binprm *bprm,
 	case T1OS_CRED_VIDEO_WORKER:
 		return t1os_video_worker_creds(bprm->cred);
 	case T1OS_CRED_CHROMIUM:
-		return t1os_unprivileged_creds(bprm->cred, true);
+		return t1os_unprivileged_creds(bprm->cred, true) ||
+		       t1os_chromium_child_creds(bprm->cred);
 	case T1OS_CRED_CHROMIUM_SANDBOX:
 		return t1os_chromium_sandbox_creds(bprm->cred);
 	case T1OS_CRED_ROOT:
@@ -2640,7 +2669,9 @@ static bool t1os_general_exec_allowed(enum t1os_domain domain,
 		return t1os_immutable_exec_path(path);
 	if (domain == T1OS_DOMAIN_CHROMIUM)
 		return t1os_unprivileged_creds(bprm->cred, true) ||
-		       t1os_chromium_sandbox_creds(bprm->cred);
+		       t1os_chromium_sandbox_creds(bprm->cred) ||
+		       (t1os_chromium_child_creds(bprm->cred) &&
+			t1os_immutable_exec_path(path));
 	if (domain == T1OS_DOMAIN_VIDEO &&
 	    t1os_video_worker_creds(bprm->cred))
 		return true;
@@ -2902,8 +2933,24 @@ static void t1os_bprm_committing_creds(const struct linux_binprm *bprm)
 
 static void t1os_bprm_committed_creds(const struct linux_binprm *bprm)
 {
+	const struct cred *cred = current_cred();
+	enum t1os_domain domain = t1os_task_domain(current);
+
 	(void)bprm;
-	if (t1os_runtime_root_active() && current->mm)
+	if (!t1os_runtime_root_active() || !current->mm)
+		return;
+
+	/* procfs applies Linux's ordinary dumpability/credential check before the
+	 * T1OS ptrace hook.  Chromium's capability-free uid-1000 supervisor must
+	 * measure maps and environment from its same-domain children to verify the
+	 * immutable GPU/utility runtime.  Make only that exact post-sandbox identity
+	 * ptrace-readable; the T1OS hooks still reject cross-domain reads, invasive
+	 * proc leaves, and every attach operation.  In particular, the privileged
+	 * setuid sandbox stage never satisfies t1os_chromium_child_creds(). */
+	if (domain == T1OS_DOMAIN_CHROMIUM &&
+	    t1os_chromium_child_creds(cred))
+		set_dumpable(current->mm, SUID_DUMP_USER);
+	else
 		set_dumpable(current->mm, SUID_DUMP_DISABLE);
 }
 
@@ -3055,11 +3102,15 @@ static int t1os_capable(const struct cred *cred, struct user_namespace *ns,
 		return domain == T1OS_DOMAIN_GODDESS ||
 		       domain == T1OS_DOMAIN_STARTUP ||
 		       domain == T1OS_DOMAIN_OPERATIONS ||
-		       domain == T1OS_DOMAIN_DRIVER ? 0 : -EACCES;
+		       domain == T1OS_DOMAIN_DRIVER ||
+		       (domain == T1OS_DOMAIN_CHROMIUM &&
+			t1os_is_executable_process(T1OS_CHROMIUM_SANDBOX)) ? 0 : -EACCES;
 	case CAP_DAC_READ_SEARCH:
 		return domain == T1OS_DOMAIN_GODDESS ||
 		       domain == T1OS_DOMAIN_STARTUP ||
-		       domain == T1OS_DOMAIN_OPERATIONS ? 0 : -EACCES;
+		       domain == T1OS_DOMAIN_OPERATIONS ||
+		       (domain == T1OS_DOMAIN_CHROMIUM &&
+			t1os_is_executable_process(T1OS_CHROMIUM_SANDBOX)) ? 0 : -EACCES;
 	case CAP_NET_BIND_SERVICE:
 	case CAP_NET_BROADCAST:
 		return domain == T1OS_DOMAIN_NETWORK ? 0 : -EACCES;

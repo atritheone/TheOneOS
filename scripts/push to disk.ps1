@@ -883,6 +883,16 @@ then
     make_tree_writable resources "$cursor_resource_destination"
     make_tree_writable resources "$system_resource_destination"
     make_tree_writable resources "$system_software_destination"
+    if root_selected resources; then
+        for test_file in \
+            "$mount_point/software/opengltest1.py" \
+            "$mount_point/software/opengltest2.py" \
+            "$mount_point/software/opengl 3d test.py" \
+            "$mount_point/software/opengl test.py"
+        do
+            [ ! -f "$test_file" ] || chmod u+rw "$test_file"
+        done
+    fi
 
     if root_selected runtime_contract && [ -f "$runtime_path_contract_destination" ]; then
         chmod u+rw "$runtime_path_contract_destination"
@@ -957,7 +967,11 @@ mkdir -p \
     "$stage/resources/fonts" \
     "$stage/resources/expanse" \
     "$stage/resources/graphics/mouse cursors" \
-    "$stage/resources/system"
+    "$stage/resources/system" \
+    "$stage/resources/tests"
+
+cp -a -- "$resource_source/tests/opengl test.py" "$stage/resources/tests/opengl test.py"
+cp -a -- "$resource_source/tests/opengl 3d test.py" "$stage/resources/tests/opengl 3d test.py"
 
 cp -a -- "$resource_source/fonts/atkinsonhyperlegiblenext.ttf" "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf"
 cp -a -- "$resource_source/fonts/cambria.ttf" "$stage/resources/fonts/cambria.ttf"
@@ -2776,10 +2790,24 @@ if root_selected resources; then
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
     sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
     sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest1.py"
+    sync_file 'OpenGL test' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest2.py"
+    sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
+    sync_file 'OpenGL test compatibility name' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
     chmod 0555 "$system_software_destination/patchelf"
     if [ "$target_mode" = image ]; then
         chown 0:0 "$system_software_destination" "$system_software_destination/patchelf"
         chmod 0755 "$system_software_destination"
+        chown 0:0 \
+            "$mount_point/software/opengltest1.py" \
+            "$mount_point/software/opengltest2.py" \
+            "$mount_point/software/opengl 3d test.py" \
+            "$mount_point/software/opengl test.py"
+        chmod 0555 \
+            "$mount_point/software/opengltest1.py" \
+            "$mount_point/software/opengltest2.py" \
+            "$mount_point/software/opengl 3d test.py" \
+            "$mount_point/software/opengl test.py"
     fi
 fi
 # Fonts are immutable shared display resources.  WindowServer renders managed
@@ -2856,6 +2884,10 @@ if [ "$exhaustive_verify" = True ]; then
     }
     verify_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
     verify_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest1.py"
+    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest2.py"
+    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
+    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
 fi
 
 if root_selected build || [ "$exhaustive_verify" = True ]; then

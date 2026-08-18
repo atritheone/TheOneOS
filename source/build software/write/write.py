@@ -9076,22 +9076,25 @@ def loaddocumentfromfile(path):
 
         LAST_STATUS_MESSAGE = 'loaded'
 
-    except FileNotFoundError:
+    except FileNotFoundError as error:
 
         # file does not exist
         LAST_STATUS_MESSAGE = 'file not found'
+        logmsg(f'> document load failed path={path!r} error={error}')
         return
 
-    except PermissionError:
+    except PermissionError as error:
 
         # permission denied
         LAST_STATUS_MESSAGE = 'permission denied'
+        logmsg(f'> document load denied path={path!r} error={error}')
         return
 
     except Exception as e:
 
         # general load error
         LAST_STATUS_MESSAGE = f'load error {e}'
+        logmsg(f'> document load failed path={path!r} error={e}')
         return
 
     return

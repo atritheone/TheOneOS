@@ -188,6 +188,10 @@ extern void XFixesSelectCursorInput(Display *, Window, unsigned long);
 extern XFixesCursorImage *XFixesGetCursorImage(Display *);
 
 enum {
+	CREATE_NOTIFY = 16,
+	DESTROY_NOTIFY = 17,
+	UNMAP_NOTIFY = 18,
+	MAP_NOTIFY = 19,
 	MAP_REQUEST = 20,
 	CONFIGURE_REQUEST = 23,
 	CLIENT_MESSAGE = 33,
@@ -237,6 +241,9 @@ static Atom net_wm_state;
 static Atom net_wm_state_fullscreen;
 static Atom net_active_window;
 static Window fullscreen_window;
+static Window primary_window;
+static unsigned int expected_root_width;
+static unsigned int expected_root_height;
 static int damage_event_base = -1;
 static int cursor_event_base = -1;
 static int restore_x;
@@ -487,6 +494,33 @@ static void handle_configure(const XConfigureRequestEvent *event)
 	XConfigureWindow(display, event->window, mask, &changes);
 }
 
+static void activate_client_window(Window window)
+{
+	XMapWindow(display, window);
+	XDamageCreate(display, window, XDAMAGE_REPORT_DELTA_RECTANGLES);
+	XRaiseWindow(display, window);
+	XSetInputFocus(display, window, REVERT_TO_POINTER_ROOT, 0);
+	printf("WINDOW %lu\n", window);
+	fflush(stdout);
+}
+
+static int read_root_dimension(const char *name, unsigned int *value)
+{
+	const char *encoded = getenv(name);
+	char *end = NULL;
+	unsigned long parsed;
+
+	if (!encoded || !*encoded)
+		return 0;
+	errno = 0;
+	parsed = strtoul(encoded, &end, 10);
+	if (errno != 0 || !end || *end != '\0' || parsed == 0 ||
+	    parsed > UINT32_MAX)
+		return 0;
+	*value = (unsigned int)parsed;
+	return 1;
+}
+
 static int damage_rects_touch(const DamageRect *left, const DamageRect *right)
 {
 	return left->left <= right->right && right->left <= left->right &&
@@ -617,6 +651,11 @@ int main(void)
 
 	signal(SIGINT, stop);
 	signal(SIGTERM, stop);
+	if (!read_root_dimension("T1OS_XWM_ROOT_WIDTH", &expected_root_width) ||
+	    !read_root_dimension("T1OS_XWM_ROOT_HEIGHT", &expected_root_height)) {
+		fputs("T1OS Chromium XWM: invalid root geometry contract\n", stderr);
+		return 1;
+	}
 	display = XOpenDisplay(NULL);
 	if (!display) {
 		fputs("T1OS Chromium XWM: cannot open the private X display\n", stderr);
@@ -697,17 +736,37 @@ int main(void)
 				break;
 			}
 			batch_events++;
+			if (event.type >= CREATE_NOTIFY &&
+			    event.type <= CONFIGURE_REQUEST) {
+				Window geometry_root = 0;
+				int geometry_x = 0;
+				int geometry_y = 0;
+				unsigned int geometry_width = 0;
+				unsigned int geometry_height = 0;
+				unsigned int geometry_border = 0;
+				unsigned int geometry_depth = 0;
+				int geometry_ok = XGetGeometry(
+					display, event.xmaprequest.window,
+					&geometry_root, &geometry_x, &geometry_y,
+					&geometry_width, &geometry_height,
+					&geometry_border, &geometry_depth);
+				fprintf(stderr,
+					"T1OS Chromium XWM event type=%d window=%lu "
+					"geometry=%s%d,%d:%ux%u\n",
+					event.type, event.xmaprequest.window,
+					geometry_ok ? "" : "unavailable:",
+					geometry_x, geometry_y,
+					geometry_width, geometry_height);
+				if (event.type == CREATE_NOTIFY && !primary_window &&
+				    geometry_ok && geometry_x == 0 && geometry_y == 0 &&
+				    geometry_width == expected_root_width &&
+				    geometry_height == expected_root_height) {
+					primary_window = event.xmaprequest.window;
+					activate_client_window(primary_window);
+				}
+			}
 			if (event.type == MAP_REQUEST) {
-				XMapWindow(display, event.xmaprequest.window);
-				XDamageCreate(
-					display, event.xmaprequest.window,
-					XDAMAGE_REPORT_DELTA_RECTANGLES);
-				XRaiseWindow(display, event.xmaprequest.window);
-				XSetInputFocus(
-					display, event.xmaprequest.window,
-					REVERT_TO_POINTER_ROOT, 0);
-				printf("WINDOW %lu\n", event.xmaprequest.window);
-				fflush(stdout);
+				activate_client_window(event.xmaprequest.window);
 			} else if (event.type == CONFIGURE_REQUEST) {
 				handle_configure(&event.xconfigurerequest);
 			} else if (

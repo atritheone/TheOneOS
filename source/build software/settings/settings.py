@@ -178,6 +178,7 @@ SECTIONS = (
     'display', 'audio', 'mouse', 'network', 'time & date', 'master',
     'recovery', 'python', 'about')
 ABOUTFOOTER = 'slayer'
+VMTESTSTATUSPATH = '/.ephemeral/settings-vm-test.json'
 EDITABLE = {
     'network': ('address', 'netmask', 'gateway', 'dns1', 'dns2'),
     'time & date': ('date', 'time'),
@@ -279,6 +280,7 @@ WIRELESSSTATEMTIME = 0.0
 NETWORKSTATEMTIME = 0.0
 LASTNETWORKPOLL = 0.0
 RESOLUTIONS = []
+RESIZETARGET = None
 
 
 def clamp(value, minimum, maximum):
@@ -329,6 +331,24 @@ def scalerect(rect):
     right = int(round((x + width) * UISCALE))
     bottom = int(round((y + height) * UISCALE))
     return [left, top, max(0, right - left), max(0, bottom - top)]
+
+
+def windowpixelsize():
+    return scalepixel(BASEWINW, 1), scalepixel(BASEWINH, 1)
+
+
+def managedtexttop(y, pixelsize, ascender=None):
+    """Translate the CPU text top coordinate to the managed GPU line box."""
+    try:
+        if ascender is None:
+            face = gfx.getttfface(FONT)
+            if face is None:
+                return scalepixel(y)
+            face.set_pixel_sizes(0, int(pixelsize))
+            ascender = int(face.size.ascender >> 6)
+        return scalepixel(y) + int(pixelsize) - int(ascender)
+    except Exception:
+        return scalepixel(y)
 
 
 def logicalcoordinate(value):
@@ -2778,6 +2798,32 @@ def pointin(pointx, pointy, rect):
     return bool(rect and rect[0] <= pointx < rect[0] + rect[2] and rect[1] <= pointy < rect[1] + rect[3])
 
 
+def writevmteststatus(stage, **detail):
+    if os.environ.get('T1OS_VM_TEST') != '1':
+        return
+    try:
+        payload = {
+            'format': 1,
+            'pid': os.getpid(),
+            'stage': str(stage),
+            'section': str(SECTION),
+            'window': int(WINID) if WINID is not None else None,
+            'graphics_active': bool(
+                GRAPHICSSTATE and GRAPHICSSTATE.get('active')),
+            'graphics_pending': bool(
+                GRAPHICSSTATE and GRAPHICSSTATE.get('pending')),
+            'graphics_failure': str(
+                GRAPHICSSTATE.get('failure', '') if GRAPHICSSTATE else ''),
+        }
+        payload.update(detail)
+        with open(VMTESTSTATUSPATH, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
+            stream.write('\n')
+        os.chmod(VMTESTSTATUSPATH, 0o604)
+    except Exception:
+        pass
+
+
 def layout():
     contentx = 205
     right = max(contentx + 360, WINW - 28)
@@ -2964,14 +3010,20 @@ def managedclip(clip=None):
 
 def drawtext(x, y, text, colour=COLOURTEXT, size=15, clip=None):
     try:
+        text = str(text)
+        # Empty editable fields have no glyphs to draw.  Omitting their text
+        # node keeps the whole retained scene valid while the field border and
+        # caret continue to describe the empty value.
+        if not text:
+            return
         physicalclip = scalerect(clip) if clip is not None else None
         if GRAPHICSCOMMANDS is not None:
             pixelsize = scalepixel(size, 1)
             GRAPHICSCOMMANDS.append({
                 'kind': 'text',
                 'x': scalepixel(x),
-                'y': scalepixel(y) + pixelsize,
-                'text': str(text),
+                'y': managedtexttop(y, pixelsize),
+                'text': text,
                 'size': pixelsize,
                 'font': FONT,
                 'color': int(colour),
@@ -2979,7 +3031,7 @@ def drawtext(x, y, text, colour=COLOURTEXT, size=15, clip=None):
             })
             return
         gfx.drawtextttf(
-            scalepixel(x), scalepixel(y), str(text), int(colour),
+            scalepixel(x), scalepixel(y), text, int(colour),
             scalepixel(size, 1), fontpath=FONT, clip=physicalclip)
     except Exception:
         pass
@@ -2987,6 +3039,15 @@ def drawtext(x, y, text, colour=COLOURTEXT, size=15, clip=None):
 
 def fill(rect, colour):
     physical = scalerect(rect)
+    if (
+        len(rect) >= 4 and
+        int(rect[0]) == 0 and int(rect[1]) == 0 and
+        int(rect[2]) == int(WINW) and int(rect[3]) == int(WINH)
+    ):
+        # Fractional UI scales can round the logical inverse one pixel away
+        # from the actual surface.  A canvas background always owns the exact
+        # physical surface, independent of logical-coordinate rounding.
+        physical = [0, 0, int(PIXELW), int(PIXELH)]
     if GRAPHICSCOMMANDS is not None:
         if physical[2] > 0 and physical[3] > 0:
             GRAPHICSCOMMANDS.append({
@@ -3116,8 +3177,7 @@ def dropdownrow(name, label, value, rect, options, disabled=False):
         border(valuebox, COLOURTEXT if opened else COLOURDIVIDER)
         drawtext(valuebox[0] + 12, valuebox[1] + 10, shown,
                  COLOURMUTED if disabled else COLOURTEXT, 15)
-        drawtext(valuebox[0] + valuebox[2] - 26, valuebox[1] + 9,
-                 '⌄', COLOURMUTED, 16)
+        chevrondown(valuebox, COLOURMUTED)
     else:
         physical = scalerect(valuebox)
         gfx.drawdropdowncontrol(
@@ -3261,6 +3321,16 @@ def checkbox(rect, checked, label):
     drawtext(rect[0] + 38, rect[1] + 10, label)
 
 
+def chevrondown(rect, colour=COLOURMUTED):
+    # Draw this control glyph from managed rectangles.  The UI font does not
+    # contain U+2304, which otherwise appears as a missing-glyph box.
+    left = int(rect[0] + rect[2] - 24)
+    top = int(rect[1] + rect[3] // 2 - 3)
+    for offset in range(4):
+        fill([left + offset, top + offset, 2, 2], colour)
+        fill([left + 8 - offset, top + offset, 2, 2], colour)
+
+
 def sectionrow(rect, label, value=''):
     border(rect, COLOURDIVIDER)
     drawtext(rect[0] + 12, rect[1] + 10, label)
@@ -3360,12 +3430,21 @@ def pythonscrollmaximum(modules=None):
 
 def paint():
     global NEEDREDRAW, CONTROLS, GRAPHICSCOMMANDS
-    if not NEEDREDRAW or BUFFER is None or WINID is None:
+    if (
+        not NEEDREDRAW or BUFFER is None or WINID is None or
+        RESIZETARGET is not None
+    ):
         return
-    NEEDREDRAW = False
     managed = bool(
         GRAPHICSSTRICT and GRAPHICSSTATE is not None and
         GRAPHICSSTATE.get('available'))
+    if managed and GRAPHICSSTATE.get('pending'):
+        # Keep the latest application state queued until the preceding retained
+        # scene is physically presented.  Consuming NEEDREDRAW here made rapid
+        # navigation (or a click during a display-scale resize) update SECTION
+        # without ever submitting the corresponding visible scene.
+        return
+    NEEDREDRAW = False
     if GRAPHICSSTRICT and not managed:
         # Never hide a managed-rendering failure with shared-buffer pixels.
         return
@@ -3945,6 +4024,9 @@ def handlebutton(message):
             if section == 'network' and wirelessinterfaces() and not WIRELESSNETWORKS:
                 requestwirelessscan()
             redraw()
+            writevmteststatus(
+                'navigation', pointer_x=x, pointer_y=y,
+                target=section)
             return
     rows = CONTROLS.get('rows', {})
     if pointin(x, y, CONTROLS.get('save')):
@@ -4484,7 +4566,7 @@ def bindbuffer(path, width, height):
 def handlews(message):
     global WINID, SCREENW, SCREENH, GRAPHICSBACKEND, GRAPHICSCONNECTOR
     global NEEDWINDOW, RUNNING, HASFOCUS, PICKER_VERSION, PICKER_PENDING
-    global PASSWORDPROMPT
+    global PASSWORDPROMPT, RESIZETARGET
     operation = str(message.get('op', ''))
     if operation in ('WELCOME', 'FB_SIZE'):
         framebuffer = message if operation == 'FB_SIZE' else message.get('fb', {})
@@ -4507,28 +4589,48 @@ def handlews(message):
                 PICKER_VERSION = 0
         if NEEDWINDOW:
             NEEDWINDOW = False
+            targetwidth, targetheight = windowpixelsize()
             sendws({'op': 'CREATE_WINDOW', 'role': 'window', 'title': APPNAME,
                     'current': windowname(), 'path': APPPATH,
-                    'w': scalepixel(BASEWINW, 1), 'h': scalepixel(BASEWINH, 1),
+                    'w': targetwidth, 'h': targetheight,
                     'x': scalepixel(140), 'y': scalepixel(90), 'pid': os.getpid()})
         elif scalechanged and WINID is not None:
+            targetwidth, targetheight = windowpixelsize()
+            RESIZETARGET = (targetwidth, targetheight)
             sendws({'op': 'RESIZE', 'winid': WINID,
-                    'w': scalepixel(BASEWINW, 1), 'h': scalepixel(BASEWINH, 1)})
+                    'w': targetwidth, 'h': targetheight})
         redraw()
     elif operation == 'WINDOW_CREATED':
         WINID = int(message.get('winid'))
+        RESIZETARGET = None
         bindbuffer(message.get('buffer'), message.get('w', PIXELW), message.get('h', PIXELH))
         paint()
         sendws({'op': 'MAP', 'winid': WINID})
         sendws({'op': 'RAISE', 'winid': WINID})
         sendws({'op': 'FOCUS_SET', 'winid': WINID})
     elif operation == 'RESIZED':
-        bindbuffer(message.get('buffer', BUFFER), message.get('w', PIXELW), message.get('h', PIXELH))
+        resizedwidth = max(1, int(message.get('w', PIXELW)))
+        resizedheight = max(1, int(message.get('h', PIXELH)))
+        bindbuffer(message.get('buffer', BUFFER), resizedwidth, resizedheight)
+        if RESIZETARGET is not None:
+            if (resizedwidth, resizedheight) == tuple(RESIZETARGET):
+                RESIZETARGET = None
+            else:
+                targetwidth, targetheight = RESIZETARGET
+                sendws({
+                    'op': 'RESIZE', 'winid': WINID,
+                    'w': int(targetwidth), 'h': int(targetheight),
+                })
+        redraw()
     elif operation in ('GRAPHICS_COMMITTED', 'GRAPHICS_CLEARED') or (
             operation == 'ERROR' and
             str(message.get('code', '')).startswith('graphics_')):
         if GRAPHICSSTATE is not None:
             gfx.managedresponse(GRAPHICSSTATE, message)
+            writevmteststatus(
+                'graphics-response', operation=operation,
+                generation=int(message.get('generation', 0) or 0),
+                presented=message.get('presented'))
             if GRAPHICSSTATE.get('need_submit'):
                 redraw()
     elif operation == 'FOCUS':
@@ -4697,7 +4799,7 @@ def main():
 def diagnostic():
     global SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE, TERMINALNAME, MASTER
     global architect_authorize, architect_revoke, service_secret_delete, service_secret_exists, service_secret_put, settings_account_get, settings_hostname_set, settings_master_update, settings_recovery_authorize, settings_time_set
-    global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE
+    global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE, CONTROLS
     if os.name == 'nt':
         result = {
             'passed': False,
@@ -5185,6 +5287,20 @@ def diagnostic():
                 abs(uiscalefor(2560, 1440, 1.0) - (4.0 / 3.0)) < 0.001
                 and abs(uiscalefor(2560, 1600, 1.0) - (4.0 / 3.0)) < 0.001
                 and abs(uiscalefor(3840, 2160, 1.0) - 2.0) < 0.001)
+            screenshotscale = uiscalefor(3839, 1974, 0.8)
+            previousscale = UISCALE
+            try:
+                UISCALE = screenshotscale
+                screenshotwindow = windowpixelsize()
+                result['checks']['settings_3839x1974_80_scale'] = (
+                    abs(screenshotscale - (1974.0 / 1080.0 * 0.8)) < 0.001
+                    and screenshotwindow == (
+                        int(round(BASEWINW * screenshotscale)),
+                        int(round(BASEWINH * screenshotscale)))
+                    and managedtexttop(100, 22, ascender=18) ==
+                    scalepixel(100) + 4)
+            finally:
+                UISCALE = previousscale
             previouslayoutstate = (UISCALE, WINW, WINH, SECTION, DISPLAYPAGE)
             try:
                 UISCALE = uiscalefor(2560, 1440, 1.0)
@@ -5369,6 +5485,24 @@ def diagnostic():
             result['checks']['sections'] = tuple(SECTIONS) == (
                 'display', 'audio', 'mouse', 'network', 'time & date',
                 'master', 'recovery', 'python', 'about')
+            SECTION = 'display'
+            CONTROLS = layout()
+            masterrect = CONTROLS['nav']['master']
+            handlebutton({
+                'button': 1, 'state': 'down',
+                'x': scalepixel(masterrect[0] + masterrect[2] // 2),
+                'y': scalepixel(masterrect[1] + masterrect[3] // 2),
+            })
+            masterclicked = SECTION == 'master'
+            CONTROLS = layout()
+            aboutrect = CONTROLS['nav']['about']
+            handlebutton({
+                'button': 1, 'state': 'down',
+                'x': scalepixel(aboutrect[0] + aboutrect[2] // 2),
+                'y': scalepixel(aboutrect[1] + aboutrect[3] // 2),
+            })
+            result['checks']['physical_navigation_clicks'] = (
+                masterclicked and SECTION == 'about')
             result['passed'] = all(result['checks'].values())
     except Exception as error:
         result['errors'].append(str(error))

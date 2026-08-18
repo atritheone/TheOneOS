@@ -6014,17 +6014,36 @@ def opsrun(path, args, name, log, user, mode):
 
     try:
 
-        # build request
-        payload={
-            'op':'RUN',
-            'path':path,
-            'args':list(args) if args else [],
-            'name':name,
-            'log':log,
-            'user':user,
-            'mode':mode,
-            'stream':False,
-        }
+        target = os.path.normpath(str(path))
+
+        # Python files outside the immutable application catalogue are data,
+        # not executable identities. Ask Operations to launch the measured
+        # Brick entry in its no-window runner mode instead of using the retired
+        # arbitrary-path RUN protocol.
+        if target.lower().endswith('.py') and (
+            target == '/master' or target.startswith('/master/') or
+            target == '/.ephemeral/volumes' or target.startswith('/.ephemeral/volumes/') or
+            target == '/software' or target.startswith('/software/')
+        ):
+            payload = {
+                'op': 'LAUNCH_CATALOGUE',
+                'path': BRICKPATH,
+                'args': ['--run-file', target] + [str(value) for value in (args or [])],
+                'environment': {'BRICK_WINDOW': '0'},
+            }
+        else:
+            # Non-catalogue executables remain fail-closed. Operations owns
+            # executable identity and rejects this retired request.
+            payload={
+                'op':'RUN',
+                'path':target,
+                'args':list(args) if args else [],
+                'name':name,
+                'log':log,
+                'user':user,
+                'mode':mode,
+                'stream':False,
+            }
 
     except Exception:
         return None
@@ -7371,12 +7390,19 @@ def viewdecode(source):
 
     global VIEWNEXT
 
-    os.makedirs(VIEWROOT, mode=0o700, exist_ok=True)
+    viewparent = os.path.dirname(VIEWROOT)
+    os.makedirs(viewparent, mode=0o711, exist_ok=True)
+
+    if os.path.islink(viewparent):
+        raise ValueError('image surface parent directory cannot be a symbolic link')
+
+    os.chmod(viewparent, 0o711)
+    os.makedirs(VIEWROOT, mode=0o711, exist_ok=True)
 
     if os.path.islink(VIEWROOT):
         raise ValueError('image surface directory cannot be a symbolic link')
 
-    os.chmod(VIEWROOT, 0o700)
+    os.chmod(VIEWROOT, 0o711)
     VIEWNEXT += 1
     identifier = VIEWNEXT
     output = os.path.join(VIEWROOT, f'image-{identifier}.bgra')
@@ -20927,6 +20953,38 @@ def main(startupfile=None):
         close()
 
 
+def runfilewithoutwindow(path, arguments=None):
+
+    """Run an Array-opened Python file without exposing Brick's own window."""
+
+    target = os.path.abspath(os.path.normpath(str(path)))
+
+    if not target.lower().endswith('.py') or not os.path.isfile(target):
+        print(formatlog('brick', 'the selected Python file is unavailable'), file=sys.stderr)
+        return 1
+
+    command = [os.path.realpath(sys.executable), '-u', target]
+    command.extend(str(value) for value in (arguments or []))
+
+    try:
+        process = subprocess.Popen(command)
+        opsregisterpid(
+            process.pid,
+            os.path.splitext(os.path.basename(target))[0],
+            target,
+            f'/the one/logs/{os.path.basename(target)}.log',
+            'session',
+            'front',
+        )
+        status = int(process.wait())
+        opscompletepid(process.pid, status)
+        return status
+
+    except Exception as error:
+        print(formatlog('brick', f'could not run selected Python file: {error}'), file=sys.stderr)
+        return 1
+
+
 
 # execute main
 if __name__ == '__main__':
@@ -20954,7 +21012,10 @@ if __name__ == '__main__':
 
         sys.exit(consolediagnosticcommand())
 
-    if len(sys.argv) == 3 and str(sys.argv[1]).strip().lower() == "--run-file":
+    if len(sys.argv) >= 3 and str(sys.argv[1]).strip().lower() == "--run-file":
+
+        if str(os.environ.get('BRICK_WINDOW', '1')).strip() == '0':
+            sys.exit(runfilewithoutwindow(sys.argv[2], sys.argv[3:]))
 
         main(sys.argv[2])
 

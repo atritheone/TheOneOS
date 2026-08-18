@@ -72,8 +72,12 @@ MAXIMUMREQUEST = 65536
 VMTESTMAXOUTPUT = 4 * 1024 * 1024
 VMTESTMAXDIRECTIVE = 32 * 1024
 VMTESTMEDIA = '/software/without_a_blush.mp4'
+VMTESTAUDIO = '/software/hey_now.flac'
+VMTESTIMAGE = '/software/if_you_wait.jpg'
+VMTESTTEXT = '/software/opengltest1.py'
+VMTESTOPENGL = '/software/opengltest2.py'
 VMTESTTERMINALRESULT = '/master/development/terminal_test.result'
-VMTESTPLAYERSTATUS = '/.ephemeral/media/vm-player-status.json'
+VMTESTPLAYERSTATUS = '/.ephemeral/media/vm-player-status-{}.json'
 SESSIONIDENTITYFILE = '/the one/settings/session/identity.json'
 LOCKSCREENREADYPATH = '/.ephemeral/windowserver/state/lockscreen-ready.json'
 LOCKSCREENLIFECYCLEPATH = '/.ephemeral/lock screen/state.json'
@@ -108,7 +112,7 @@ APPLICATIONCATALOGUE = {
     },
     '/the one/build/brick/brick.py': {
         'name': 'brick', 'profile': 'brick', 'arguments': 'brick',
-        'environment': {'BRICK_WINDOW': frozenset(('1',))},
+        'environment': {'BRICK_WINDOW': frozenset(('0', '1'))},
     },
     '/the one/build/calculator/calculator.py': {
         'name': 'calculator', 'profile': 'desktop', 'arguments': 'none',
@@ -295,6 +299,7 @@ ACTIONDOMAINS = {
     'BOOTSTRAP': frozenset(('goddess',)),
     'VM_TEST_BRICK_EXECUTE': frozenset(('virtualbox',)),
     'VM_TEST_LAUNCH': frozenset(('virtualbox',)),
+    'VM_TEST_CLOSE': frozenset(('virtualbox',)),
     'VM_TEST_STATUS': frozenset(('virtualbox',)),
     'LAUNCH_CATALOGUE': frozenset(('expanse', 'desktop', 'brick')),
     'SESSION_LOGOUT': frozenset(('expanse', 'brick')),
@@ -982,7 +987,7 @@ def cataloguearguments(kind, arguments):
     if kind == 'brick':
         if not values:
             return []
-        if len(values) != 2 or values[0] != '--run-file':
+        if len(values) < 2 or values[0] != '--run-file':
             raise ValueError('arguments denied')
         target = userpath(values[1])
         if not target.lower().endswith('.py') or not (
@@ -992,7 +997,14 @@ def cataloguearguments(kind, arguments):
             target == '/software' or target.startswith('/software/')
         ):
             raise ValueError('Python file denied')
-        return ['--run-file', target]
+        trailing = values[2:]
+        if any(
+            len(value.encode('utf-8')) > 256 or
+            any(character in value for character in ('\x00', '\n', '\r'))
+            for value in trailing
+        ):
+            raise ValueError('Python arguments denied')
+        return ['--run-file', target, *trailing]
     if kind == 'files':
         return [userpath(value) for value in values]
     if kind == 'array':
@@ -1242,14 +1254,36 @@ def handlevmtestlaunch(request):
             'settings': (
                 '/the one/build/settings/settings.py', [],
                 {'T1OS_SETTINGS_SECTION': 'python'}),
+            'settings-display': (
+                '/the one/build/settings/settings.py', [],
+                {'T1OS_SETTINGS_SECTION': 'display'}),
             'player': (
                 '/the one/build/player/player.py', [VMTESTMEDIA], {}),
+            'player-audio': (
+                '/the one/build/player/player.py', [VMTESTAUDIO], {}),
+            'viewer': (
+                '/the one/build/viewer/viewer.py', [VMTESTIMAGE], {}),
+            'write': (
+                '/the one/build/write/write.py', [VMTESTTEXT], {}),
+            'chromium': (
+                '/the one/build/chromium/chromium.py', [], {}),
+            'array-opengl': (
+                '/the one/build/array/array.py',
+                ['--open-item', VMTESTOPENGL], {}),
         }
         if application not in applications:
             raise ValueError('VM test application denied')
         path, requestedarguments, requestedenvironment = applications[application]
-        if application == 'player' and not os.path.isfile(VMTESTMEDIA):
-            raise FileNotFoundError(VMTESTMEDIA)
+        fixtures = {
+            'player': VMTESTMEDIA,
+            'player-audio': VMTESTAUDIO,
+            'viewer': VMTESTIMAGE,
+            'write': VMTESTTEXT,
+            'array-opengl': VMTESTOPENGL,
+        }
+        fixture = fixtures.get(application)
+        if fixture and not os.path.isfile(fixture):
+            raise FileNotFoundError(fixture)
         policy = APPLICATIONCATALOGUE[path]
         arguments = cataloguearguments(policy['arguments'], requestedarguments)
         environment = applicationenvironment(requestedenvironment, policy)
@@ -1270,7 +1304,7 @@ def handlevmtestlaunch(request):
             'pid': int(process.pid),
             'profile': policy['profile'],
             'application_path': path,
-            'media_path': VMTESTMEDIA if application == 'player' else None,
+            'media_path': fixture if application in ('player', 'player-audio') else None,
             'source': 'deployed',
         }
     except (OSError, ValueError, TypeError, PermissionError) as error:
@@ -1278,6 +1312,66 @@ def handlevmtestlaunch(request):
     except Exception as error:
         print(f'> operations server VM test launch error {error}', file=sys.stderr)
         return {'status': 'error', 'message': 'VM test launch failed'}
+
+
+def handlevmtestclose(request):
+
+    try:
+        vmtestfields(request, {'action', 'op'})
+        peer = request['_peer']
+        if not peerstillvalid(peer):
+            raise PermissionError('VM test owner is no longer valid')
+        reaptracked()
+        with STATELOCK:
+            entries = [
+                dict(entry) for entry in OPMETA.values()
+                if (
+                    str(entry.get('_session_identity', '')) == 'vm-test' and
+                    int(entry.get('_owner_pid', -1)) == int(peer['pid']) and
+                    int(entry.get('_owner_started', -1)) == int(peer['started'])
+                )
+            ]
+        records = processrecords()
+        targets = []
+        for entry in entries:
+            pid = int(entry.get('pid', 0) or 0)
+            record = records.get(str(pid))
+            if (
+                pid <= 1 or record is None or
+                str(record.get('identity', '')) !=
+                    str(entry.get('_process_identity', ''))
+            ):
+                continue
+            targets.extend(processtree(pid, records=records, registered=()))
+        signalled = []
+        for target in reversed(list(dict.fromkeys(targets))):
+            expected = records.get(str(target))
+            fresh = processrecord(int(target))
+            if (
+                expected is None or fresh is None or
+                str(expected.get('identity', '')) !=
+                    str(fresh.get('identity', '')) or
+                processdomain(int(target)) not in (
+                    'desktop', 'brick', 'video', 'settings', 'chromium',
+                    'picker', 'untrusted', 'snap')
+            ):
+                continue
+            try:
+                os.kill(int(target), signal.SIGTERM)
+                signalled.append(int(target))
+            except ProcessLookupError:
+                pass
+        return {
+            'status': 'ok',
+            'passed': True,
+            'signalled': signalled,
+            'source': 'deployed',
+        }
+    except (OSError, ValueError, TypeError, PermissionError) as error:
+        return {'status': 'error', 'message': str(error) or 'VM test close denied'}
+    except Exception as error:
+        print(f'> operations server VM test close error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'VM test close failed'}
 
 
 def vmtestsessionidentity():
@@ -1516,7 +1610,17 @@ def handlevmteststatus(request):
                     int(entry.get('_owner_started', -1)) == int(peer['started'])
                 )
             ]
-        expected = {'brick': 'brick', 'settings': 'settings', 'player': 'video'}
+        expected = {
+            'brick': 'brick',
+            'settings': 'settings',
+            'settings-display': 'settings',
+            'player': 'video',
+            'player-audio': 'video',
+            'viewer': 'desktop',
+            'write': 'desktop',
+            'chromium': 'chromium',
+            'array-opengl': 'desktop',
+        }
         applications = {name: False for name in expected}
         playerpid = 0
         for entry in entries:
@@ -1596,7 +1700,8 @@ def handlevmteststatus(request):
         except OSError:
             pass
         try:
-            playerstat = os.stat(VMTESTPLAYERSTATUS, follow_symlinks=False)
+            playerstatuspath = VMTESTPLAYERSTATUS.format(playerpid)
+            playerstat = os.stat(playerstatuspath, follow_symlinks=False)
             if (
                 statmodule.S_ISREG(playerstat.st_mode) and
                 int(playerstat.st_uid) == DESKTOPUID and
@@ -1605,7 +1710,7 @@ def handlevmteststatus(request):
                 not (int(playerstat.st_mode) & 0o022)
             ):
                 with open(
-                    VMTESTPLAYERSTATUS, 'r', encoding='utf-8',
+                    playerstatuspath, 'r', encoding='utf-8',
                     errors='strict') as stream:
                     candidate = json.load(stream)
                 if (
@@ -3490,6 +3595,22 @@ def handlesafestream(request, connection):
         connection.close()
 
 
+def sendresponse(conn, response):
+
+    try:
+
+        conn.sendall((json.dumps(response) + '\n').encode('utf-8'))
+
+        return True
+
+    except (BrokenPipeError, ConnectionResetError):
+
+        # A request client may time out or close after dispatch.  The broker
+        # operation has already completed, so a vanished reply destination is
+        # not a server failure and must not escape the worker thread.
+        return False
+
+
 def handleclient(conn, peer=None):
 
     fileobj = None
@@ -3531,7 +3652,7 @@ def handleclient(conn, peer=None):
     except Exception as e:
 
         resp = {'status': 'error', 'message': 'invalid request'}
-        conn.sendall((json.dumps(resp) + '\n').encode('utf-8'))
+        sendresponse(conn, resp)
         return
 
     op = None
@@ -3548,12 +3669,12 @@ def handleclient(conn, peer=None):
     except Exception:
 
         resp = {'status': 'error', 'message': 'invalid request'}
-        conn.sendall((json.dumps(resp) + '\n').encode('utf-8'))
+        sendresponse(conn, resp)
         return
 
     if not authorizerequest(request):
         response = {'status': 'error', 'message': 'request denied'}
-        conn.sendall((json.dumps(response) + '\n').encode('utf-8'))
+        sendresponse(conn, response)
         conn.close()
         return
 
@@ -3566,7 +3687,7 @@ def handleclient(conn, peer=None):
     response = handlerequest(request)
 
 
-    conn.sendall((json.dumps(response) + '\n').encode('utf-8'))
+    sendresponse(conn, response)
 
 
     conn.close()
@@ -4101,6 +4222,9 @@ def handlerequest(request):
 
     if op == 'VM_TEST_LAUNCH':
         return handlevmtestlaunch(request)
+
+    if op == 'VM_TEST_CLOSE':
+        return handlevmtestclose(request)
 
     if op == 'VM_TEST_STATUS':
         return handlevmteststatus(request)

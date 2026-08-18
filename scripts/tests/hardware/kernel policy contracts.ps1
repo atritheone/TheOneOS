@@ -476,6 +476,72 @@ if (
     throw 'The process discovery ACL does not expose public GPU/system data and self inspection while retaining cross-process isolation.'
 }
 
+$committedCredsStart = $kernelPolicyText.IndexOf(
+    'static void t1os_bprm_committed_creds(',
+    [System.StringComparison]::Ordinal
+)
+$committedCredsEnd = $kernelPolicyText.IndexOf(
+    '/* Guard the actual module and firmware read paths',
+    [Math]::Max(0, $committedCredsStart),
+    [System.StringComparison]::Ordinal
+)
+$committedCredsBody = if (
+    $committedCredsStart -ge 0 -and $committedCredsEnd -gt $committedCredsStart
+) {
+    $kernelPolicyText.Substring(
+        $committedCredsStart,
+        $committedCredsEnd - $committedCredsStart
+    )
+}
+else {
+    ''
+}
+if (
+    -not $committedCredsBody.Contains(
+        'domain == T1OS_DOMAIN_CHROMIUM'
+    ) -or
+    -not $committedCredsBody.Contains(
+        't1os_chromium_child_creds(cred)'
+    ) -or
+    -not $committedCredsBody.Contains(
+        'set_dumpable(current->mm, SUID_DUMP_USER);'
+    ) -or
+    -not $committedCredsBody.Contains(
+        'set_dumpable(current->mm, SUID_DUMP_DISABLE);'
+    )
+) {
+    throw 'Chromium same-domain runtime attestation is not narrowly reconciled with Linux procfs dumpability checks.'
+}
+$ptraceStart = $kernelPolicyText.IndexOf(
+    'static int t1os_ptrace_access_check(',
+    [System.StringComparison]::Ordinal
+)
+$ptraceEnd = $kernelPolicyText.IndexOf(
+    'static int t1os_ptrace_traceme(',
+    [Math]::Max(0, $ptraceStart),
+    [System.StringComparison]::Ordinal
+)
+$ptraceBody = if ($ptraceStart -ge 0 -and $ptraceEnd -gt $ptraceStart) {
+    $kernelPolicyText.Substring($ptraceStart, $ptraceEnd - $ptraceStart)
+}
+else {
+    ''
+}
+if (
+    -not $ptraceBody.Contains(
+        'access != PTRACE_MODE_READ_FSCREDS'
+    ) -or
+    -not $ptraceBody.Contains(
+        'access != PTRACE_MODE_READ_REALCREDS'
+    ) -or
+    -not [regex]::IsMatch(
+        $ptraceBody,
+        'case T1OS_DOMAIN_CHROMIUM:\s*return target == T1OS_DOMAIN_CHROMIUM \? 0 : -EACCES;'
+    )
+) {
+    throw 'Chromium process inspection is not restricted to read-only same-domain access.'
+}
+
 foreach ($forbiddenText in @(
     't1os_bootstrap_python_symlink_allowed',
     'static const char name[] = "t1python";',

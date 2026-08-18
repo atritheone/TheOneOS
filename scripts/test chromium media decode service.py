@@ -241,8 +241,8 @@ def chromiumtests(chromium):
         "the unsafe Chromium NVIDIA VA-API route was re-enabled",
     )
     require(
-        "--no-unsandboxed-zygote" in defaultarguments
-        and "--no-unsandboxed-zygote" in servicearguments
+        "--no-unsandboxed-zygote" not in defaultarguments
+        and "--no-unsandboxed-zygote" not in servicearguments
         and "--no-unsandboxed-zygote" not in stablearguments,
         "native NVIDIA presentation does not use the measured direct GPU helper",
     )

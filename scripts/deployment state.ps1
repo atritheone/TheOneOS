@@ -73,6 +73,8 @@ function Get-T1OSDeploymentRootDefinitions {
         )
         resources = @(
             (Join-Path $ProjectRoot 'source\software\system')
+            (Join-Path $ProjectRoot 'resource\tests\opengl test.py')
+            (Join-Path $ProjectRoot 'resource\tests\opengl 3d test.py')
             (Join-Path $ProjectRoot 'resource\fonts\atkinsonhyperlegiblenext.ttf')
             (Join-Path $ProjectRoot 'resource\fonts\cambria.ttf')
             (Join-Path $ProjectRoot 'resource\fonts\Fira_Code_v6.2\ttf\FiraCode-Retina.ttf')

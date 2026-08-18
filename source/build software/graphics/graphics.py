@@ -957,6 +957,12 @@ DRM_FORMAT_MOD_INVALID = 0x00FFFFFFFFFFFFFF
 DRM_FORMAT_MOD_LINEAR = 0
 DRM_FORMAT_XRGB8888 = 0x34325258
 DRM_FORMAT_ARGB8888 = 0x34325241
+DRM_FORMAT_R8 = 0x20203852
+DRM_FORMAT_R16 = 0x20363152
+DRM_FORMAT_GR88 = 0x38385247
+DRM_FORMAT_GR1616 = 0x32335247
+DRM_FORMAT_NV12 = 0x3231564E
+DRM_FORMAT_P010 = 0x30313050
 
 # GLES
 GL_COLOR_BUFFER_BIT = 0x00004000
@@ -4793,9 +4799,8 @@ def gpuvideoinitialise():
     )
     _gpuvideoprogram = openglprogram(vertexsource, fragmentsource)
     planarfragment = (
-        "#extension GL_OES_EGL_image_external : require\n"
-        "precision mediump float; uniform samplerExternalOES ysurface; "
-        "uniform samplerExternalOES uvsurface; uniform float opacity; "
+        "precision mediump float; uniform sampler2D ysurface; "
+        "uniform sampler2D uvsurface; uniform float opacity; "
         "uniform float videoheight; uniform float deinterlace; "
         "uniform float hdrtransfer; "
         "uniform vec3 yuvoffset; uniform vec3 redrow; "
@@ -5405,6 +5410,64 @@ def _gpuvideoattributes(
     return (ctypes.c_int * len(attributes))(*attributes)
 
 
+def _gpuvideonormalizedescriptor(descriptor):
+
+    result = dict(descriptor or {})
+    layers = result.get("layers", [])
+
+    # VirtualBox's VMSVGA VA exporter exposes one packed NV12/P010 object.
+    # Importing that object as one external YUV texture currently produces a
+    # uniform green image in Mesa's vmwgfx EGL path.  The same driver exposes
+    # correct R and GR plane views of the packed SVGA surface, including the
+    # physical UV offset.  Split only this vmwgfx descriptor into those two
+    # GPU views and let the existing planar shader perform YUV conversion.
+    if (
+        str(_drmdriver or "").casefold() != "vmwgfx"
+        or not isinstance(layers, list)
+        or len(layers) != 1
+        or not isinstance(layers[0], dict)
+    ):
+        return result
+
+    layer = layers[0]
+    planes = layer.get("planes", [])
+    fourcc = int(layer.get("fourcc", 0))
+
+    if not isinstance(planes, list) or len(planes) != 2:
+        return result
+
+    if fourcc == DRM_FORMAT_NV12:
+        lumaformat, chromaformat = DRM_FORMAT_R8, DRM_FORMAT_GR88
+    elif fourcc == DRM_FORMAT_P010:
+        lumaformat, chromaformat = DRM_FORMAT_R16, DRM_FORMAT_GR1616
+    else:
+        return result
+
+    width = int(layer.get("width", result.get("width", 0)))
+    height = int(layer.get("height", result.get("height", 0)))
+
+    if width < 1 or height < 1:
+        return result
+
+    result["layers"] = [
+        {
+            "fourcc": lumaformat,
+            "width": width,
+            "height": height,
+            "planes": [dict(planes[0])],
+        },
+        {
+            "fourcc": chromaformat,
+            "width": (width + 1) // 2,
+            "height": (height + 1) // 2,
+            "planes": [dict(planes[1])],
+        },
+    ]
+    result["source_export_mode"] = str(result.get("export_mode", "composed"))
+    result["export_mode"] = "vmwgfx-planar-views"
+    return result
+
+
 def gpuvideosurfacecreate(descriptor, fds):
 
     global _gpuhandle
@@ -5420,6 +5483,7 @@ def gpuvideosurfacecreate(descriptor, fds):
         _gputelemetry["video_surface_last_import_failure"] = str(error)
         _gputelemetry["video_surface_import_failures"] += 1
         raise
+    descriptor = _gpuvideonormalizedescriptor(descriptor)
     layers = descriptor.get("layers", [])
 
     if not isinstance(layers, list) or not layers or len(layers) > 2:
@@ -5505,13 +5569,18 @@ def gpuvideosurfacecreate(descriptor, fds):
                 )
 
             textures.append(texture)
+            texturetarget = (
+                GL_TEXTURE_2D
+                if len(layers) == 2
+                else GL_TEXTURE_EXTERNAL_OES
+            )
             _gles.glActiveTexture(GL_TEXTURE0 + layerindex)
-            _gles.glBindTexture(GL_TEXTURE_EXTERNAL_OES, texture)
-            _gles.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            _gles.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            _gles.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            _gles.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-            _glimage_target_texture(GL_TEXTURE_EXTERNAL_OES, image)
+            _gles.glBindTexture(texturetarget, texture)
+            _gles.glTexParameteri(texturetarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+            _gles.glTexParameteri(texturetarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+            _gles.glTexParameteri(texturetarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+            _gles.glTexParameteri(texturetarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            _glimage_target_texture(texturetarget, image)
 
         _gles.glActiveTexture(GL_TEXTURE0)
 
@@ -5523,6 +5592,9 @@ def gpuvideosurfacecreate(descriptor, fds):
             "images": list(images),
             "textures": list(textures),
             "planar": len(images) == 2,
+            "texture_target": (
+                GL_TEXTURE_2D if len(images) == 2 else GL_TEXTURE_EXTERNAL_OES
+            ),
             "width": int(descriptor.get("width", 0)),
             "height": int(descriptor.get("height", 0)),
             "frame": int(descriptor.get("frame", 0)),
@@ -5749,9 +5821,10 @@ def gpudrawvideosurface(handle, x, y, width, height, opacity=1.0, clip=None):
             return False
 
         offset, rows = _gpuvideocolourtransform(resource)
-        _gles.glBindTexture(GL_TEXTURE_EXTERNAL_OES, int(textures[0]))
+        texturetarget = int(resource.get("texture_target", GL_TEXTURE_2D))
+        _gles.glBindTexture(texturetarget, int(textures[0]))
         _gles.glActiveTexture(GL_TEXTURE1)
-        _gles.glBindTexture(GL_TEXTURE_EXTERNAL_OES, int(textures[1]))
+        _gles.glBindTexture(texturetarget, int(textures[1]))
         _gpusetuniform1i(program, b"ysurface", 0)
         _gpusetuniform1i(program, b"uvsurface", 1)
         _gpusetuniform3f(program, b"yuvoffset", *offset)

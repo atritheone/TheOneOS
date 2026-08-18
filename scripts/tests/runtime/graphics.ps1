@@ -22,7 +22,7 @@ function Invoke-GraphicsBaseline {
         [Parameter(Mandatory)]
         [bool]$Update,
 
-        [ValidateSet('baseline', 'opengl', 'compositor', 'brick', 'player', 'brick-directives', 'write', 'write-performance', 'array', 'calculator', 'operations-centre', 'operations-server', 'expanse', 'startup', 'lockscreen', 'boot', 'virtualbox-clipboard')]
+        [ValidateSet('baseline', 'opengl', 'compositor', 'brick', 'player', 'viewer', 'brick-directives', 'write', 'write-performance', 'array', 'calculator', 'operations-centre', 'operations-server', 'settings', 'expanse', 'startup', 'lockscreen', 'boot', 'virtualbox-clipboard')]
         [string]$Mode = 'baseline',
 
         [bool]$UseDeployed = $false
@@ -150,7 +150,7 @@ function Invoke-GraphicsBaseline {
             $buildMounted = $true
         }
 
-        if (-not $UseDeployed -and $Mode -in @('baseline', 'opengl', 'compositor', 'player', 'write', 'write-performance', 'array', 'calculator', 'operations-centre', 'expanse', 'startup')) {
+        if (-not $UseDeployed -and $Mode -in @('baseline', 'opengl', 'compositor', 'player', 'viewer', 'write', 'write-performance', 'array', 'calculator', 'operations-centre', 'expanse', 'startup')) {
             Write-Host 'locating and binding the current font resources...'
 
             $wslFontOutput = & wsl.exe --exec wslpath -a $fontSource
@@ -223,7 +223,7 @@ function Invoke-GraphicsBaseline {
             $bootMounted = $true
         }
 
-        if (-not $UseDeployed -and $Mode -in @('opengl', 'compositor', 'brick', 'player', 'brick-directives', 'write', 'array', 'calculator', 'operations-centre', 'expanse', 'startup', 'lockscreen', 'boot')) {
+        if (-not $UseDeployed -and $Mode -in @('opengl', 'compositor', 'brick', 'player', 'viewer', 'brick-directives', 'write', 'array', 'calculator', 'operations-centre', 'expanse', 'startup', 'lockscreen', 'boot')) {
             Write-Host 'locating and binding the current graphics catalogue...'
 
             $wslCatalogueOutput = & wsl.exe --exec wslpath -a $catalogueSource
@@ -261,6 +261,11 @@ function Invoke-GraphicsBaseline {
         if ($Mode -eq 'player') {
             $program = '/the one/build/player/player.py'
             $argument = 'graphics-diagnostic'
+        }
+
+        if ($Mode -eq 'viewer') {
+            $program = '/the one/build/viewer/viewer.py'
+            $argument = '--graphics-diagnostic'
         }
 
         if ($Mode -eq 'brick-directives') {
@@ -303,6 +308,11 @@ function Invoke-GraphicsBaseline {
             $argument = 'graphics-diagnostic'
         }
 
+        if ($Mode -eq 'settings') {
+            $program = '/the one/build/settings/settings.py'
+            $argument = '--diagnostic'
+        }
+
         if ($Mode -eq 'startup') {
             $program = '/the one/build/startup/startup.py'
             $argument = 'graphics-diagnostic'
@@ -331,6 +341,10 @@ function Invoke-GraphicsBaseline {
         }
         elseif ($Mode -eq 'brick-directives') {
             $baselineOutput = & wsl.exe -u root --exec nsenter -t 1 -m -- /usr/bin/env 'T1OS_MASTER_FILE=/.ephemeral/brick-test-master.txt' /usr/sbin/chroot $mountPoint '/the one/software/python/bin/python3.13' -B $program $argument
+        }
+        elseif ($Mode -eq 'settings') {
+            $loader = 'import runpy,sys,tempfile; tempfile.tempdir="/.ephemeral"; program=sys.argv[1]; argument=sys.argv[2]; sys.argv=[program,argument]; runpy.run_path(program,run_name="__main__")'
+            $baselineOutput = & wsl.exe -u root --exec nsenter -t 1 -m -- /usr/sbin/chroot $mountPoint '/the one/software/python/bin/python3.13' -B -c $loader $program $argument
         }
         else {
             $baselineOutput = & wsl.exe -u root --exec nsenter -t 1 -m -- /usr/sbin/chroot $mountPoint '/the one/software/python/bin/python3.13' -B $program $argument
@@ -506,6 +520,16 @@ function Invoke-GraphicsBaseline {
         return
     }
 
+    if ($Mode -eq 'settings') {
+        if (-not $actual.checks.settings_3839x1974_80_scale) {
+            throw 'Settings did not preserve its 3839x1974 at 80% scale contract.'
+        }
+
+        Write-Host 'Settings persistence, layout, scale, and managed-text diagnostic passed.'
+        Write-Host ($actual | ConvertTo-Json -Depth 5 -Compress)
+        return
+    }
+
     if ($Mode -eq 'opengl') {
         Write-Host 'graphics OpenGL diagnostic passed.'
         Write-Host ($actual | ConvertTo-Json -Depth 5 -Compress)
@@ -656,6 +680,22 @@ function Invoke-GraphicsBaseline {
         }
 
         Write-Host 'Player managed graphics diagnostic passed.'
+        Write-Host ($actual | ConvertTo-Json -Depth 8 -Compress)
+        return
+    }
+
+    if ($Mode -eq 'viewer') {
+        if (
+            -not $actual.checks.managed_scene -or
+            -not $actual.checks.async_worker -or
+            [string]$actual.checks.surface_permissions.parent -ne '0711' -or
+            [string]$actual.checks.surface_permissions.directory -ne '0711' -or
+            [string]$actual.checks.surface_permissions.file -ne '0604'
+        ) {
+            throw 'the Viewer diagnostic did not preserve its managed-scene and WindowServer-readable surface contract.'
+        }
+
+        Write-Host 'Viewer managed graphics and surface-permission diagnostic passed.'
         Write-Host ($actual | ConvertTo-Json -Depth 8 -Compress)
         return
     }

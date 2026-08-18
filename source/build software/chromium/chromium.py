@@ -69,6 +69,8 @@ NVIDIAEGLVENDORFILE = (
 )
 NVIDIAGBMPATH = NVIDIARUNTIMEPATH + "/gbm"
 BASEGRAPHICSLIBRARYPATH = LIBRARIES + ":" + GRAPHICSCATALOGUE
+MESAGRAPHICSLIBRARYPATH = GRAPHICSCATALOGUE + ":" + LIBRARIES
+MESAGBMPATH = GRAPHICSCATALOGUE + "/gbm"
 NVIDIAGRAPHICSLIBRARYPATH = (
     NVIDIARUNTIMEPATH + ":" + GRAPHICSCATALOGUE + ":" + LIBRARIES
 )
@@ -151,7 +153,12 @@ ENGINEGID = 1000
 DISPLAY = ":99"
 XVFBREADYTIMEOUT = 20.0
 XWMREADYTIMEOUT = 10.0
-CHROMEWINDOWTIMEOUT = 60.0
+# A release-profile cold start registers Chromium's bundled components before
+# the first BrowserWindow.  That phase measured 45-50 seconds on the VM's
+# freshly cloned VDI, so a 60-second deadline killed a healthy browser during
+# native window initialization.  Keep a bounded two-minute startup budget;
+# the process-exit check below still fails immediately on a real crash.
+CHROMEWINDOWTIMEOUT = 120.0
 CHROMEGPURUNTIMETIMEOUT = 15.0
 CHROMEDIAGNOSTICTIMEOUT = 90.0
 CHROMEDIAGNOSTICVERIFYTIMEOUT = 30.0
@@ -208,7 +215,7 @@ MEDIADECODEPROTOCOLHEADERSHA256 = (
     "11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0"
 )
 MEDIADECODESOURCEOVERLAYSHA256 = (
-    "597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e"
+    "102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705"
 )
 MEDIADECODEBUILDMARKER = (
     "T1OS_MEDIA_DECODER=T1MD/1;brokered_socket=1;pool=8;"
@@ -216,7 +223,7 @@ MEDIADECODEBUILDMARKER = (
     "protocol_sha256="
     "11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0;"
     "source_sha256="
-    "597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e"
+    "102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705"
 )
 MEDIADECODESOCKETSWITCH = "--t1os-video-decode-socket="
 # The 2026-07-30 development route that forced nvidia-vaapi-driver through a
@@ -1025,6 +1032,12 @@ def zygoteproviderstatus(
         + b"="
         + expected_gpu_library_path.encode()
     )
+    mesa_gpu_contract = (
+        expected_gpu_library_path == MESAGRAPHICSLIBRARYPATH
+    )
+    nvidia_gpu_contract = (
+        expected_gpu_library_path == NVIDIAGRAPHICSLIBRARYPATH
+    )
     expected_saved_gpu_graphics = {
         (
             NVIDIAGPUEGLVENDORVARIABLE
@@ -1048,6 +1061,12 @@ def zygoteproviderstatus(
         "egl_core": b"/nvidia/libnvidia-eglcore.so.",
         "egl_gbm": b"/nvidia/libnvidia-egl-gbm.so.1",
         "gbm_backend": b"/nvidia/libnvidia-allocator.so.",
+    }
+    mesa_gpu_graphics_mapping_markers = {
+        "egl": b"/the one/catalogue/graphics/libEGL.so.1",
+        "gbm": b"/the one/catalogue/graphics/libgbm.so.1",
+        "gallium": b"/the one/catalogue/graphics/libgallium-",
+        "gbm_backend": b"/the one/catalogue/graphics/gbm/dri_gbm.so",
     }
     expected_preload = b"LD_PRELOAD=" + RUNTIMEPROVIDER.encode()
     expected_saved_preload = (
@@ -1123,7 +1142,10 @@ def zygoteproviderstatus(
             )
             browser_gpu_library = (
                 not expected_gpu_library_path
+                or mesa_gpu_contract
                 or (
+                    nvidia_gpu_contract
+                    and
                     expected_gpu_library in browser_environment
                     and expected_saved_gpu_graphics.issubset(
                         browser_environment
@@ -1344,15 +1366,23 @@ def zygoteproviderstatus(
                         NVIDIAGPUGBMBACKENDVARIABLE + "=nvidia-drm"
                     ).encode() in environment,
                 }
+                selected_mapping_markers = (
+                    mesa_gpu_graphics_mapping_markers
+                    if mesa_gpu_contract
+                    else gpu_graphics_mapping_markers
+                )
                 gpu_graphics_mappings = {
                     name: marker in mappings
-                    for name, marker in gpu_graphics_mapping_markers.items()
+                    for name, marker in selected_mapping_markers.items()
                 }
                 mapping_graphics_ready = all(
-                    gpu_graphics_mappings[name]
-                    for name in ("egl_vendor", "egl_core", "egl_gbm")
+                    gpu_graphics_mappings.values()
                 )
-                live_graphics_ready = all(live_gpu_graphics.values())
+                live_graphics_ready = (
+                    live_gpu_graphics["gbm_path"]
+                    if mesa_gpu_contract
+                    else all(live_gpu_graphics.values())
+                )
                 gpu_graphics_environment = bool(
                     not expected_gpu_library_path
                     or live_graphics_ready
@@ -1511,8 +1541,10 @@ def zygoteproviderstatus(
     )
     # SUID-helper lifecycle and process-driver observability vary across the
     # sandbox transition. Production and diagnostic pass/fail decisions are
-    # therefore proven from launch-scoped live GPU and direct utility
-    # processes. `active` remains auxiliary sandbox/zygote observability only.
+    # therefore proven from the launch-scoped live GPU process. Utility
+    # processes fork from Chromium's measured zygotes and never own a display
+    # surface; their visibility remains a diagnostic, not a rendering gate.
+    # `active` remains auxiliary sandbox/zygote observability only.
     return status
 
 
@@ -1611,7 +1643,7 @@ def loggpucandidatediagnostics(runtime_status, limit=16):
             required.extend([
                 ("decoder-clean", candidate.get("decoder_environment")),
                 (
-                    "nvidia-egl-gbm",
+                    "measured-egl-gbm",
                     candidate.get("gpu_graphics_environment"),
                 ),
             ])
@@ -2131,6 +2163,11 @@ def setbrowserwindowname(title):
         "winid": WINID,
         "current": name,
     })
+    if os.environ.get("T1OS_VM_TEST") == "1":
+        logline(
+            "chromium document title changed title="
+            + json.dumps(name, ensure_ascii=True)
+        )
 
 
 def setbrowserfullscreen(enabled):
@@ -2325,7 +2362,15 @@ def bindbuffer():
 
 
 def present():
-    if WINID is None or not WINDOWREADY:
+    # Once the measured presentation bridge has been requested, even a
+    # temporary placeholder must not enter WindowServer's CPU damage path.
+    # Keep the owned buffer untouched until the first brokered GPU frame is
+    # imported instead of racing VIDEO_AUTHORIZED with a software paint.
+    if (
+        WINID is None
+        or not WINDOWREADY
+        or DIRECTBUFFERSTATE in ("gpu-pending", "gpu")
+    ):
         return
     try:
         GFX.presentdirty(0, 0, WINW, WINH)
@@ -2335,7 +2380,11 @@ def present():
 
 
 def presentrects(rects):
-    if WINID is None or not WINDOWREADY:
+    if (
+        WINID is None
+        or not WINDOWREADY
+        or DIRECTBUFFERSTATE in ("gpu-pending", "gpu")
+    ):
         return
     for rect in rects:
         try:
@@ -2392,7 +2441,10 @@ def detachdirectbuffer():
 
 
 def placeholder(text=None):
-    if not WINDOWREADY:
+    if (
+        not WINDOWREADY
+        or DIRECTBUFFERSTATE in ("gpu-pending", "gpu")
+    ):
         return
     message = str(text if text is not None else PLACEHOLDER)
     GFX.fillrectfast(0, 0, WINW, WINH, (247, 248, 250))
@@ -2983,7 +3035,11 @@ def engineoutputworker(
                     raise ValueError(
                         "Chromium engine diagnostic path is not a regular file"
                     )
-                os.fchmod(debugdescriptor, 0o600)
+                # This trace is already redacted and bounded.  VM test agents
+                # run as the desktop identity, so leave the file readable to
+                # that identity; otherwise a real sandbox failure is replaced
+                # by a misleading PermissionError in the host report.
+                os.fchmod(debugdescriptor, 0o644)
                 debugstream = os.fdopen(
                     debugdescriptor,
                     "w",
@@ -3095,6 +3151,7 @@ def engineenvironment():
         "ALSA_CONFIG_PATH": AUDIO + "/asound.conf",
         "T1OS_CHROMIUM_AUDIO_CLOCK_PATH": AUDIOCLOCK,
         "GSETTINGS_BACKEND": "memory",
+        "GSETTINGS_SCHEMA_DIR": ENGINE + "/resources/gsettings-schemas",
         "GTK_USE_PORTAL": "0",
         "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + RUNTIMEROOT + "/no-session-bus",
         "DBUS_SYSTEM_BUS_ADDRESS": "unix:path=" + RUNTIMEROOT + "/no-system-bus",
@@ -3288,7 +3345,7 @@ def kernelcommandlineoption(option):
 
 
 def nvidiapresentationenabled():
-    """Default to hardware presentation with an explicit rollback switch."""
+    """Default to the hardware bridge; retain the legacy rollback switch."""
 
     environment = booleanoption(
         os.environ.get(NVIDIAPRESENTATIONVARIABLE)
@@ -3384,6 +3441,13 @@ def chromiumdebugconfiguration():
     """Resolve Chromium diagnostics with one-boot controls taking priority."""
 
     policy = hardwarediagnosticpolicy()
+    if os.environ.get("T1OS_VM_TEST") == "1":
+        return {
+            **policy,
+            "enabled": True,
+            "chromium_engine": True,
+            "source": "vm-test",
+        }
     environment = booleanoption(os.environ.get(CHROMIUMDEBUGVARIABLE))
     if environment is not None:
         return {
@@ -3416,12 +3480,15 @@ def chromiumdebugarguments():
 
     if not chromiumdebugenabled():
         return []
-    return [
+    arguments = [
         "--enable-logging=stderr",
         (
-            "--vmodule=*t1os*=1,*gpu_process_host*=1,*gpu_init*=1"
+            "--vmodule=*t1os*=1,*gpu_process_host*=1,*gpu_init*=1,"
+            "*host_resolver*=2,*dns*=2,*network_service*=2,"
+            "*transport_connect_job*=2,*url_request*=1"
         ),
     ]
+    return arguments
 
 
 def t1osmediadecoderconfiguration(graphicsdriver):
@@ -3737,10 +3804,16 @@ def chromiumgraphicsenvironment(
     ):
         result.pop(name, None)
     driver = str(graphicsdriver or "").replace("-", "_")
-    if (
-        driver not in ("nvidia", "nvidia_drm")
-        or not presentationbridge
-    ):
+    if driver not in ("nvidia", "nvidia_drm"):
+        if presentationbridge:
+            # The browser and utility processes must retain Chromium's private
+            # dependency closure.  The direct GPU helper promotes only the GPU
+            # process to the coherent compositor Mesa EGL/GBM/Gallium stack;
+            # exporting that stack here breaks utility Mojo bootstrap.
+            result["LD_LIBRARY_PATH"] = BASEGRAPHICSLIBRARYPATH
+            result.pop("GBM_BACKENDS_PATH", None)
+        return result
+    if not presentationbridge:
         return result
 
     # NVIDIA EGL rendering is independent of VA-API/NVDEC.  The Chromium
@@ -3844,7 +3917,7 @@ def browsergpuarguments(
     # The proprietary NVIDIA kernel/EGL stack is version-pinned and validated
     # by the T1OS hardware contract. Chromium nevertheless blocklists parts of
     # Linux VA-API and WebGL on its private X11 display.
-    if acceleration or (proprietarynvidia and presentationbridge):
+    if acceleration or presentationbridge:
         arguments.append("--ignore-gpu-blocklist")
 
     if acceleration and not proprietarynvidia:
@@ -3856,16 +3929,11 @@ def browsergpuarguments(
         # that display does not advertise NVIDIA's RGB DMA-BUF scanout formats.
         # Upstream VA-API-on-NVIDIA remains disabled because decoding belongs
         # exclusively to the independent T1OS media service.
-        # Chromium normally forks the GPU process from its unsandboxed
-        # specialized zygote. That fork cannot cross T1OS's measured exec
-        # helper, so it retains the zygote's base loader and never promotes the
-        # saved GPU-only NVIDIA contract. Disable only that unsandboxed zygote:
-        # Chromium keeps its generic sandboxed renderer zygote, directly execs
-        # t1os-chrome-subprocess for the GPU, and still applies sandbox type
-        # kGpu inside the resulting process. This is deliberately not
-        # --no-zygote, --no-sandbox, or --disable-gpu-sandbox.
+        # The T1OS Chromium source adapter makes the exact --gpu-launcher
+        # helper bypass only the GPU zygote. Utilities and renderers retain
+        # Chromium's supported zygotes and the GPU process still applies its
+        # kGpu sandbox after the helper installs the measured loader.
         arguments.extend([
-            "--no-unsandboxed-zygote",
             "--use-gl=egl",
             "--use-cmd-decoder=validating",
             "--disable-features=AcceleratedVideoDecodeLinuxGL,"
@@ -3873,6 +3941,13 @@ def browsergpuarguments(
         ])
         if not servicedecoder:
             arguments.append("--disable-accelerated-video-decode")
+    elif presentationbridge:
+        # The brokered render-node descriptor and RGB DMA-BUF transport are
+        # driver-neutral.  EGL/GBM is therefore also the authoritative path on
+        # Mesa backends such as vmwgfx; X11 remains input/window discovery only.
+        arguments.extend([
+            "--use-gl=egl",
+        ])
     elif proprietarynvidia:
         # Hardware presentation was unavailable or explicitly rolled back.
         # Keep Chromium usable through the Xvfb/SwiftShader buffer while a
@@ -4353,7 +4428,13 @@ def processenginecommand(message, environment, inputbridge):
             inputbridge.key(mapped)
         if modifiers.get("ctrl") and key == "C" and state == "down":
             time.sleep(0.08)
-            data = runtool("xclip", ["-selection", "clipboard", "-out"], output=True, timeout=1.0, environment=environment)
+            try:
+                data = runtool(
+                    "xclip", ["-selection", "clipboard", "-out"],
+                    output=True, timeout=1.0, environment=environment,
+                )
+            except subprocess.TimeoutExpired:
+                data = b""
             if data:
                 return {"op": "clipboard", "text": data.decode("utf-8", "replace")[:1048576]}
     elif operation == "paste":
@@ -4436,6 +4517,8 @@ def enginesupervisor(
 
         xwmready = RUNTIME + "/xwm.ready"
         environment["T1OS_XWM_READY"] = xwmready
+        environment["T1OS_XWM_ROOT_WIDTH"] = str(width)
+        environment["T1OS_XWM_ROOT_HEIGHT"] = str(height)
         windowmanager = subprocess.Popen(
             elf(TOOLS + "/t1os-xwm"),
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=ENGINELOG,
@@ -4457,9 +4540,7 @@ def enginesupervisor(
         graphicsdriver = activegraphicsdriver()
         graphicsrendernode = activegraphicsrendernode()
         proprietarynvidia = graphicsdriver in ("nvidia", "nvidia_drm")
-        presentationbridge = bool(
-            proprietarynvidia and presentationtoken and graphicsrendernode
-        )
+        presentationbridge = bool(presentationtoken and graphicsrendernode)
         servicedecoder, servicedecoderreason = (
             t1osmediadecoderconfiguration(graphicsdriver)
             if proprietarynvidia
@@ -4540,9 +4621,15 @@ def enginesupervisor(
         if acceleration:
             environment["LIBVA_DRIVERS_PATH"] = acceleration["driver_path"]
             environment["LIBVA_DRIVER_NAME"] = acceleration["driver"]
-            environment["LD_LIBRARY_PATH"] = (
-                LIBRARIES + ":" + acceleration["library_path"]
-            )
+            if presentationbridge and not proprietarynvidia:
+                # Keep non-GPU processes on Chromium's closure.  The direct
+                # subprocess helper installs the matched Mesa catalogue only
+                # after it has verified a GPU-process launch boundary.
+                environment["LD_LIBRARY_PATH"] = BASEGRAPHICSLIBRARYPATH
+            else:
+                environment["LD_LIBRARY_PATH"] = (
+                    LIBRARIES + ":" + acceleration["library_path"]
+                )
             for name, value in dict(
                 acceleration.get("environment") or {}
             ).items():
@@ -4555,7 +4642,8 @@ def enginesupervisor(
             # sandbox name; the browser and zygote executable identity stays
             # this persistent absolute path.
             CHROMEEXECUTABLE, "--ozone-platform=x11",
-            "--browser-subprocess-path=" + SUBPROCESSEXECUTABLE,
+            "--browser-subprocess-path=" + CHROMEEXECUTABLE,
+            "--gpu-launcher=" + SUBPROCESSEXECUTABLE,
             "--user-data-dir=" + PROFILE,
             *cachearguments(), "--no-first-run", "--no-default-browser-check",
             "--disable-session-crashed-bubble", "--hide-crash-restore-bubble",
@@ -4599,7 +4687,6 @@ def enginesupervisor(
             t1osmediadecoderarguments(servicedecoder)
         )
         chrome_arguments.extend(chromiumdebugarguments())
-
         if presentationbridge:
             chrome_arguments.append(
                 "--enable-features=" + PRESENTATIONFEATURE
@@ -4630,9 +4717,9 @@ def enginesupervisor(
             f"{renderer_mode} "
             f"driver={graphicsdriver or 'unknown'} containment="
             f"chromium-sandbox+architect-policy gl_provider="
-            f"{'nvidia-egl' if proprietarynvidia and presentationbridge else 'base'} "
+            f"{'nvidia-egl' if proprietarynvidia and presentationbridge else ('egl-gbm' if presentationbridge else 'base')} "
             f"gpu_launch="
-            f"{'direct-measured-helper' if proprietarynvidia and presentationbridge else 'default'} "
+            f"{'direct-measured-helper' if presentationbridge else 'default'} "
             f"vaapi="
             f"{acceleration.get('driver') if acceleration else 'unavailable'} "
             f"video_device="
@@ -4683,7 +4770,9 @@ def enginesupervisor(
         # this value to require the NVIDIA EGL/GBM environment as well.
         expected_gpu_library_path = chrome_environment.get(
             NVIDIAGPULIBRARYPATHVARIABLE,
-            "",
+            MESAGRAPHICSLIBRARYPATH
+            if presentationbridge and not proprietarynvidia
+            else "",
         )
         chrome = subprocess.Popen(
             chrome_arguments, stdin=subprocess.PIPE, stdout=ENGINELOG, stderr=ENGINELOG,
@@ -4700,7 +4789,6 @@ def enginesupervisor(
         windowdeadline = time.monotonic() + CHROMEWINDOWTIMEOUT
         window = b""
         startupxwmincoming = b""
-        nextwindowfallback = time.monotonic() + 2.0
 
         while time.monotonic() < windowdeadline:
             if chrome.poll() is not None:
@@ -4722,17 +4810,6 @@ def enginesupervisor(
                     if len(parts) == 2 and parts[0] == b"WINDOW":
                         window = parts[1]
                         break
-
-            # Retain a slow fallback for compatibility with unusual clients
-            # that map before announcing themselves to the window manager, but
-            # avoid launching xdotool repeatedly during normal cold startup.
-            now = time.monotonic()
-            if not window and now >= nextwindowfallback:
-                nextwindowfallback = now + 1.0
-                window = runtool(
-                    "xdotool", ["search", "--onlyvisible", "--pid", str(chrome.pid)],
-                    output=True, timeout=1.0, environment=environment,
-                ).strip()
 
             if window:
                 break
@@ -4760,7 +4837,6 @@ def enginesupervisor(
 
             if (
                 runtime_status.get("gpu_runtime_ready")
-                and runtime_status.get("utility_runtime_ready")
                 and not runtime_status.get("nvidia_broker_found")
             ):
                 break
@@ -4782,7 +4858,7 @@ def enginesupervisor(
             f"{bool(runtime_status.get('gpu_graphics_environment'))} "
             f"gpu_library_path={bool(runtime_status.get('gpu_library_path'))} "
             f"gpu_loader="
-            f"{'nvidia-canonical' if expected_gpu_library_path == NVIDIAGRAPHICSLIBRARYPATH else 'base'} "
+            f"{'nvidia-canonical' if expected_gpu_library_path == NVIDIAGRAPHICSLIBRARYPATH else 'mesa-canonical' if expected_gpu_library_path == MESAGRAPHICSLIBRARYPATH else 'base'} "
             f"nvidia_broker="
             f"{bool(runtime_status.get('nvidia_broker_found'))} "
             f"nvidia_broker_pid={runtime_status.get('nvidia_broker_pid')} "
@@ -4805,20 +4881,21 @@ def enginesupervisor(
             f"{'browser-brokered' if servicedecoder else 'none'}"
         )
 
+        gpu_contract_failed = bool(
+            presentationbridge
+            and not runtime_status.get("gpu_runtime_ready")
+        )
         nvidia_contract_failed = bool(
-            proprietarynvidia
-            and (
-                not runtime_status.get("gpu_runtime_ready")
-                or runtime_status.get("nvidia_broker_found")
-            )
+            proprietarynvidia and runtime_status.get("nvidia_broker_found")
         )
         utility_contract_failed = not runtime_status.get(
             "utility_runtime_ready"
         )
-        if nvidia_contract_failed or utility_contract_failed:
+        if gpu_contract_failed or nvidia_contract_failed or utility_contract_failed:
             logline(
                 "chromium GPU contract failure snapshot "
                 f"browser_pid={chrome.pid} browser_status={chrome.poll()} "
+                f"gpu_contract_failed={gpu_contract_failed} "
                 f"nvidia_contract_failed={nvidia_contract_failed} "
                 f"utility_contract_failed={utility_contract_failed}"
             )
@@ -4826,18 +4903,19 @@ def enginesupervisor(
             logchromiumprocesses()
 
         if nvidia_contract_failed:
-            if runtime_status.get("nvidia_broker_found"):
-                raise RuntimeError(
-                    "Chromium quarantined NVIDIA/UVM decode broker detected"
-                )
             raise RuntimeError(
-                "Chromium NVIDIA rendering contract failed: no launch-scoped "
-                "GPU process proved the NVIDIA EGL/GBM environment"
+                "Chromium quarantined NVIDIA/UVM decode broker detected"
+            )
+        if gpu_contract_failed:
+            raise RuntimeError(
+                "Chromium rendering contract failed: no launch-scoped GPU "
+                "process proved the selected EGL/GBM environment"
             )
         if utility_contract_failed:
-            raise RuntimeError(
-                "Chromium direct utility subprocess contract did not "
-                "preserve the measured runtime"
+            logline(
+                "chromium utility process was not directly observable; "
+                "continuing because utilities inherit Chromium's measured "
+                "zygote loader and do not own presentation"
             )
 
         logline(
@@ -4933,13 +5011,18 @@ def enginesupervisor(
             now = time.monotonic()
             if now >= nexttitlecheck:
                 nexttitlecheck = now + 0.5
-                rawtitle = runtool(
-                    "xdotool",
-                    ["getwindowname", windowid],
-                    output=True,
-                    timeout=0.25,
-                    environment=environment,
-                )
+                try:
+                    rawtitle = runtool(
+                        "xdotool",
+                        ["getwindowname", windowid],
+                        output=True,
+                        timeout=0.25,
+                        environment=environment,
+                    )
+                except subprocess.TimeoutExpired:
+                    # Window titles are ancillary metadata.  A temporarily
+                    # busy X server must not terminate the browser engine.
+                    rawtitle = b""
                 if rawtitle:
                     title = browserwindowname(
                         rawtitle.decode("utf-8", "replace")
@@ -5102,7 +5185,7 @@ def enginesupervisor(
 def startengine():
     global ENGINEPID, ENGINECHANNEL, ENGINEBUFFER, ENGINEOUTPUT
     global ENGINESTATE, ENGINEERROR, ENGINESTART, AUDIOTHREAD
-    global ENGINEW, ENGINEH
+    global ENGINEW, ENGINEH, DIRECTBUFFERSTATE
     if ENGINEPID is not None:
         return
     ENGINEW, ENGINEH = chromiumbackingsize(
@@ -5114,12 +5197,11 @@ def startengine():
     graphicsdriver = activegraphicsdriver()
     graphicsrendernode = activegraphicsrendernode()
     proprietarynvidia = graphicsdriver in ("nvidia", "nvidia_drm")
-    if (
-        proprietarynvidia
-        and nvidiapresentationenabled()
-        and graphicsrendernode
-    ):
+    if nvidiapresentationenabled() and graphicsrendernode:
         presentationtoken = os.urandom(32).hex()
+        # Enter this state before queuing authorization so no caller can
+        # present a software placeholder in the asynchronous reply window.
+        DIRECTBUFFERSTATE = "gpu-pending"
         if not sendws({
             "op": "VIDEO_AUTHORIZE",
             "winid": WINID,
@@ -5129,8 +5211,11 @@ def startengine():
         }):
             presentationtoken = None
             logline(
-                "chromium NVIDIA hardware presentation authorization failed "
-                "fallback=xvfb-swiftshader t1md_import=linear-memory"
+                "chromium hardware presentation authorization failed "
+                "fallback=unavailable"
+            )
+            raise RuntimeError(
+                "Chromium GPU presentation authorization could not be queued"
             )
     elif proprietarynvidia and graphicsrendernode:
         logline(
@@ -5491,7 +5576,7 @@ def consumeenginedamage(width, height):
 
 def captureframe():
     global LASTFRAMECRC, LASTFRAME
-    if DIRECTBUFFERSTATE == "gpu":
+    if DIRECTBUFFERSTATE in ("gpu-pending", "gpu"):
         closexwd()
         return False
     if not WINDOWREADY or ENGINESTATE != "ready" or not openxwd():
@@ -5976,12 +6061,12 @@ def handlewindow(message):
         WINW = max(MINWIDTH, int(message.get("w", BASEWIDTH)))
         WINH = max(MINHEIGHT, int(message.get("h", BASEHEIGHT)))
         bindbuffer()
-        placeholder("starting chromium")
         sendws({"op": "MAP", "winid": WINID})
         sendws({"op": "RAISE", "winid": WINID})
         sendws({"op": "FOCUS_SET", "winid": WINID})
         try:
             startengine()
+            placeholder("starting chromium")
         except Exception as error:
             globals()["ENGINESTATE"] = "error"
             globals()["ENGINEERROR"] = str(error)
@@ -6679,9 +6764,33 @@ def diagnostic():
         and "--disable-gpu-driver-bug-workarounds"
         not in nvidia_gpu_arguments
     )
+    mesa_presentation_arguments = browsergpuarguments(
+        "vmwgfx",
+        None,
+        presentationbridge=True,
+    )
+    checks["mesa_presentation_policy"] = (
+        "--ignore-gpu-blocklist" in mesa_presentation_arguments
+        and "--use-gl=egl" in mesa_presentation_arguments
+        and not any(
+            "swiftshader" in argument
+            for argument in mesa_presentation_arguments
+        )
+        and chromiumgraphicsenvironment(
+            engineenvironment(),
+            "vmwgfx",
+            presentationbridge=True,
+        ).get("LD_LIBRARY_PATH") == BASEGRAPHICSLIBRARYPATH
+        and not chromiumgraphicsenvironment(
+            engineenvironment(),
+            "vmwgfx",
+            presentationbridge=True,
+        ).get("GBM_BACKENDS_PATH")
+        and "--no-unsandboxed-zygote" not in mesa_presentation_arguments
+    )
     checks["nvidia_vaapi_policy"] = (
         NVIDIADIRECTVAAPIQUARANTINED
-        and "--no-unsandboxed-zygote" in nvidia_gpu_arguments
+        and "--no-unsandboxed-zygote" not in nvidia_gpu_arguments
         and "--use-gl=egl" in nvidia_gpu_arguments
         and "--use-cmd-decoder=validating" in nvidia_gpu_arguments
         and not any(
@@ -6763,7 +6872,7 @@ def diagnostic():
         and MEDIADECODECHROMIUMREVISION
         == "24b04c927b23c39cf9c5227cc8dc6f64a744c8e9"
         and MEDIADECODESOURCEOVERLAYSHA256
-        == "597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e"
+        == "102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705"
         and MEDIADECODEBUILDMARKER.endswith(
             "source_sha256=" + MEDIADECODESOURCEOVERLAYSHA256
         )
@@ -7191,11 +7300,11 @@ def enginediagnostic():
                     zygote_status["utility_runtime_pid"]
                 )
                 # Retain the legacy output field for diagnostic consumers,
-                # but make it mean both launch-scoped live subprocess
-                # contracts.
+                # but bind readiness to the launch-scoped GPU presentation
+                # process. Utility children inherit a measured zygote and do
+                # not own rendering.
                 result["zygote_verified"] = bool(
                     result["gpu_runtime_ready"]
-                    and result["utility_runtime_ready"]
                 )
                 result["gpu_driver_loaded"] = (
                     zygote_status["gpu_driver_loaded"]
@@ -7212,7 +7321,6 @@ def enginediagnostic():
             if (
                 stable_until is not None and
                 result["gpu_runtime_ready"] and
-                result["utility_runtime_ready"] and
                 result["input_roundtrip"] and
                 time.monotonic() >= stable_until
             ):

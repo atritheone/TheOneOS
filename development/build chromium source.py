@@ -118,9 +118,19 @@ BUILD_TARGETS = ("chrome", "media_unittests", "sandbox_linux_unittests")
 T1OS_TARGETED_RELINK_OBJECTS = (
     "obj/skia/skia/GrGLCaps.o",
     "obj/components/viz/service/service/direct_renderer.o",
+    "obj/components/viz/service/service/skia_output_surface_impl_on_gpu.o",
+    "obj/components/viz/service/service/root_compositor_frame_sink_impl.o",
+    "obj/components/viz/host/host/gpu_host_impl.o",
     "obj/content/browser/browser/gpu_process_host.o",
+    "obj/content/browser/browser/viz_process_transport_factory.o",
+    "obj/content/browser/browser/child_process_launcher_helper.o",
+    "obj/content/child/child/child_thread_impl.o",
+    "obj/content/gpu/gpu_sources/gpu_child_thread.o",
+    "obj/content/gpu/gpu_sources/gpu_main.o",
+    "obj/mojo/core/impl_for_embedder/channel_posix.o",
     "obj/content/browser/browser/t1os_media_decode_broker.o",
     "obj/content/common/common/gpu_pre_sandbox_hook_linux.o",
+    "obj/content/common/sandbox_support_linux/zygote_communication_linux.o",
     "obj/content/renderer/renderer/render_thread_impl.o",
     "obj/media/base/base/t1os_media_switches.o",
     "obj/media/gpu/chromeos/common/mailbox_video_frame_converter.o",
@@ -171,6 +181,8 @@ T1OS_TARGETED_RELINK_ARCHIVES = (
     "obj/skia/libskia.a",
     "obj/components/viz/service/libservice.a",
     "obj/content/renderer/librenderer.a",
+    "obj/content/child/libchild.a",
+    "obj/content/gpu/libgpu_sources.a",
     "obj/media/mojo/services/libmedia_mojo_services.a",
     "obj/gpu/ipc/service/libgpu_ipc_service.a",
     "obj/gpu/command_buffer/service/libgles2_sources.a",
@@ -184,6 +196,10 @@ T1OS_TARGETED_ARCHIVE_GRAPHS = {
         "obj/components/viz/service/service.ninja",
     "obj/content/renderer/librenderer.a":
         "obj/content/renderer/renderer.ninja",
+    "obj/content/child/libchild.a":
+        "obj/content/child/child.ninja",
+    "obj/content/gpu/libgpu_sources.a":
+        "obj/content/gpu/gpu_sources.ninja",
     "obj/gpu/ipc/service/libgpu_ipc_service.a":
         "obj/gpu/ipc/service/service.ninja",
     "obj/gpu/command_buffer/service/libgles2_sources.a":
@@ -519,8 +535,6 @@ def targeted_relink(args: argparse.Namespace, runner: Runner) -> None:
     command. It does not manufacture Ninja freshness for unrelated outputs.
     """
 
-    if args.profile != "development":
-        raise RuntimeError("targeted relink is development-profile only")
     if runner.dry_run:
         print("+ targeted T1OS Chromium compile, archive, link, test, package")
         return

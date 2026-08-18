@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <!--
+    Chromium's GTK integration asks GLib for the default schema source before
+    looking up optional desktop-specific schemas.  T1OS intentionally does
+    not impersonate GNOME, but it must provide a valid source so those optional
+    lookups can return "not installed" instead of receiving a null source.
+  -->
+  <schema id="org.t1os.chromium.runtime" path="/org/t1os/chromium/runtime/">
+    <key name="initialized" type="b">
+      <default>true</default>
+      <summary>T1OS Chromium runtime schema source</summary>
+      <description>
+        Marks the private, memory-backed Chromium GSettings source as valid.
+      </description>
+    </key>
+  </schema>
+</schemalist>

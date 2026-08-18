@@ -619,10 +619,18 @@ def submitscene():
 
 
 ## fallback functions
+def cpufallbackallowed():
+
+    # CPU drawing exists only for the explicit 3dcputest diagnostic.  A normal
+    # or GPU test must fail closed if the managed renderer is unavailable;
+    # otherwise the fallback frame hides a broken accelerated path.
+    return AUTOEXPECT == "cpu" and not bool(GRAPHICSSTATE.get("available"))
+
+
 def renderpreparing():
 
-    if not WINBUFFER:
-        return
+    if not WINBUFFER or not cpufallbackallowed():
+        return False
 
     try:
 
@@ -633,18 +641,19 @@ def renderpreparing():
         drawtextttf(34, 140, "Waiting for a physical accelerated presentation receipt.", MUTED, 15, fontpath=FONTFILE)
         present()
         sendmessage({"op": "DAMAGE", "winid": int(WINID), "rect": [0, 0, int(WINW), int(WINH)]})
+        return True
 
     except Exception:
 
-        pass
+        return False
 
 
 def renderfallback(reason="controlled OpenGL 3D is unavailable"):
 
     global FALLBACKRENDERS
 
-    if not WINBUFFER:
-        return
+    if not WINBUFFER or not cpufallbackallowed():
+        return False
 
     try:
 
@@ -653,14 +662,15 @@ def renderfallback(reason="controlled OpenGL 3D is unavailable"):
         drawtextttf(34, 31, WINDOWTITLE, TEXT, 24, fontpath=FONTFILE)
         drawtextttf(34, 105, "The controlled GPU 3D path is unavailable.", ORANGE, 18, fontpath=FONTFILE)
         drawtextttf(34, 140, str(reason)[:160], MUTED, 15, fontpath=FONTFILE)
-        drawtextttf(34, 185, "This shared-buffer frame confirms the required CPU fallback path.", TEXT, 15, fontpath=FONTFILE)
+        drawtextttf(34, 185, "This frame is limited to the explicit 3dcputest diagnostic.", TEXT, 15, fontpath=FONTFILE)
         present()
         FALLBACKRENDERS += 1
         sendmessage({"op": "DAMAGE", "winid": int(WINID), "rect": [0, 0, int(WINW), int(WINH)]})
+        return True
 
     except Exception:
 
-        pass
+        return False
 
 
 

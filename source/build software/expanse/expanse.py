@@ -1252,6 +1252,13 @@ def graphicscpudamage(sock, role, rect, force=False):
 
     try:
 
+        # Once the compositor advertises the strict managed GPU contract,
+        # never submit a legacy CPU DAMAGE request--including during the
+        # interval before a surface's first asynchronous scene commit.  The
+        # retained scene submission owns that initial presentation too.
+        if graphicsstrictgpu():
+            return False
+
         state = graphicsstatefor(role)
 
         if not force and state is not None and state.get("active"):
@@ -11288,6 +11295,13 @@ def requesttaskbar(sock):
         log(f"requesttaskbar error {e}")
 
 
+def taskbarresizegeometry():
+    """Publish final taskbar surface geometry before a managed repaint."""
+    y = max(0, int(DESKTOPH) - int(TASKBARH))
+    graphicsupdategeometry("taskbar", DESKTOPW, TASKBARH, TASKBARBUF)
+    return y
+
+
 def requesttooltip(sock):
     try:
 
@@ -11876,11 +11890,10 @@ def handlefbsize(sock, msg):
     try:
 
         if TASKBARID is not None:
-
-            y = DESKTOPH - TASKBARH
-
-            if y < 0:
-                y = 0
+            # Managed drawing clips every command to the registered surface.
+            # Update that surface before building the new taskbar scene so
+            # right-anchored controls are not clipped to the previous mode.
+            y = taskbarresizegeometry()
 
             sendline(sock, {"op": "RESIZE", "winid": TASKBARID, "w": DESKTOPW, "h": TASKBARH})
 
@@ -13445,6 +13458,46 @@ def graphicsdiagnostic():
             "roles": rolesperformance,
             "maximum_surface_commands": max(maximums.values()),
             "aggregate_commands": totalcommands,
+        }
+
+        # Reproduce the final mode and preference from the captured failing
+        # boot.  Taskbar geometry must be current before its managed scene is
+        # built or every right-anchored command is clipped to the old width.
+        globals()["DESKTOPW"] = 3839
+        globals()["DESKTOPH"] = 1974
+        applyscale(0.8)
+        taskbary = taskbarresizegeometry()
+        resizedtaskbar = graphicsbuildscene("taskbar")
+        taskbarwidth, taskbarheight = graphicsdimensions("taskbar")
+        rightmost = max(
+            (
+                int(command.get("x", command.get("rect", [0])[0]))
+                for command in resizedtaskbar
+                if command.get("kind") in ("rectangle", "text")
+            ),
+            default=0,
+        )
+
+        if (
+            (taskbarwidth, taskbarheight) != (DESKTOPW, TASKBARH)
+            or not resizedtaskbar
+            or resizedtaskbar[0].get("rect") != [0, 0, DESKTOPW, TASKBARH]
+            or taskbary + TASKBARH != DESKTOPH
+            or rightmost < DESKTOPW - max(200, TASKBARH * 4)
+        ):
+            raise RuntimeError(
+                "3839x1974 taskbar resize did not retain its complete right edge "
+                f"surface={taskbarwidth}x{taskbarheight} y={taskbary} "
+                f"rightmost={rightmost}"
+            )
+
+        result["checks"]["taskbar_rapid_resize_final_geometry"] = {
+            "display": [DESKTOPW, DESKTOPH],
+            "surface": [taskbarwidth, taskbarheight],
+            "y": taskbary,
+            "rightmost_command": rightmost,
+            "ui_preference": 0.8,
+            "effective_scale": round(float(SCALE), 4),
         }
 
         GRAPHICSSTATES.clear()

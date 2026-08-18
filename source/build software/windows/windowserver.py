@@ -13930,6 +13930,27 @@ def gpuwindowmanagedonly(win):
         return False
 
 
+def gpuwindowretainedsceneallowed(win):
+
+    """Return whether this provider can safely retain a window in an FBO.
+
+    VirtualBox's VMSVGA device exposes working accelerated scan-out and direct
+    OpenGL drawing through vmwgfx, but its SVGA3D render-target lifetime is not
+    coherent with the compositor's retained texture updates.  The driver can
+    report every command as successful while an updated target resolves as a
+    sparse or stale scene.  Keep this provider on the direct GPU command path;
+    this does not select a framebuffer or CPU renderer.
+    """
+
+    state = backendinfo()
+    renderer = str(state.get("renderer", "")).casefold()
+    driver = str(state.get("drm_driver", "")).casefold()
+
+    affectedprovider = "svga3d" in renderer or driver == "vmwgfx"
+    ordinarywindow = str(win.get("role", "")).strip().casefold() == "window"
+    return not (affectedprovider and ordinarywindow)
+
+
 def gpuwindowretainedsystem(win):
 
     # Complete managed system scenes are rendered into their retained texture
@@ -13937,7 +13958,10 @@ def gpuwindowretainedsystem(win):
     # keeping uploads and complex scene work out of the scan-out pass, this
     # makes it unnecessary to copy a just-completed full-screen system frame
     # back into the compositor preservation texture.
-    if not bool(win.get("_managed_only", False)):
+    if (
+        not bool(win.get("_managed_only", False))
+        or not gpuwindowretainedsceneallowed(win)
+    ):
         return False
 
     commands = win.get("gpu_commands", [])
@@ -13969,6 +13993,7 @@ def gpuwindowscenedirty(win):
 
     if (
         not gpuwindowmanagedonly(win)
+        or not gpuwindowretainedsceneallowed(win)
         or gpuwindowdynamicvideo(win)
         or any(str(command.get("kind", "")) == "layer" for command in commands)
     ):
@@ -14108,6 +14133,7 @@ def gpuwindowscenetexture(win):
 
     if (
         not gpuwindowmanagedonly(win)
+        or not gpuwindowretainedsceneallowed(win)
         or any(str(command.get("kind", "")) == "layer" for command in commands)
     ):
         gpuwindowscenerelease(win)
@@ -14179,6 +14205,7 @@ def gpuwindowscenetexture(win):
     except Exception:
 
         gputargetend(targetstate)
+
         gpuwindowscenerelease(win)
         raise
 
@@ -16456,6 +16483,7 @@ def composeloop(cfg):
                             )
 
                     previouswork = (int(WORKX), int(WORKY), int(WORKW), int(WORKH))
+                    previousuiscale = squarerootscale()
 
                     try:
 
@@ -16484,7 +16512,7 @@ def composeloop(cfg):
 
                     setworkarea(cfg)
 
-                    refreshwindows(previouswork)
+                    refreshwindows(previouswork, previousuiscale)
 
                     broadcastworkarea()
 
@@ -18000,7 +18028,7 @@ def fitwindowtoworkarea(wid):
         movewindow(win["cid"], {"winid": wid, "x": nx, "y": ny})
 
 
-def scalewindowtoworkarea(wid, previouswork):
+def scalewindowtoworkarea(wid, previouswork, previousuiscale=None):
 
     if wid not in windows or not previouswork:
         return
@@ -18021,15 +18049,49 @@ def scalewindowtoworkarea(wid, previouswork):
     if isfullscreen(win):
         return
 
-    scalex = float(WORKW) / float(oldw)
-    scaley = float(WORKH) / float(oldh)
+    positionxscale = float(WORKW) / float(oldw)
+    positionyscale = float(WORKH) / float(oldh)
+    try:
+        olduiscale = float(previousuiscale)
+        geometryscale = float(squarerootscale()) / olduiscale
+        if olduiscale <= 0.0 or geometryscale <= 0.0:
+            raise ValueError('invalid UI scale')
+    except (TypeError, ValueError, ZeroDivisionError):
+        geometryscale = min(positionxscale, positionyscale)
+
+    if clientchromemode(win):
+        # Client chrome dimensions are physical-pixel protocol values.  The
+        # client supplied them at creation using the then-current display/UI
+        # scale, so keep them in the same coordinate space as the window when
+        # that global scale changes.  Without this, Chromium's content and
+        # window geometry grew while its drag band stayed at the old height.
+        win["client_chrome_height"] = max(
+            int(BTNWH),
+            min(
+                max(1, int(win.get("h", 1))),
+                max(1, int(round(
+                    int(win.get("client_chrome_height", TITLEH))
+                    * geometryscale
+                ))),
+            ),
+        )
+        win["client_chrome_drag_width"] = max(
+            0,
+            min(
+                max(1, int(win.get("w", 1))),
+                int(round(
+                    int(win.get("client_chrome_drag_width", 0))
+                    * geometryscale
+                )),
+            ),
+        )
 
     def geometry(values):
         return [
-            int(WORKX + round((int(values[0]) - oldx) * scalex)),
-            int(WORKY + round((int(values[1]) - oldy) * scaley)),
-            max(1, int(round(int(values[2]) * scalex))),
-            max(1, int(round(int(values[3]) * scaley))),
+            int(WORKX + round((int(values[0]) - oldx) * positionxscale)),
+            int(WORKY + round((int(values[1]) - oldy) * positionyscale)),
+            max(1, int(round(int(values[2]) * geometryscale))),
+            max(1, int(round(int(values[3]) * geometryscale))),
         ]
 
     restore = win.get("_restore")
@@ -18051,7 +18113,7 @@ def scalewindowtoworkarea(wid, previouswork):
         movewindow(win["cid"], {"winid": wid, "x": nx, "y": ny})
 
 
-def refreshwindows(previouswork=None):
+def refreshwindows(previouswork=None, previousuiscale=None):
 
     for wid in list(windows.keys()):
 
@@ -18096,7 +18158,7 @@ def refreshwindows(previouswork=None):
             continue
 
         if previouswork:
-            scalewindowtoworkarea(wid, previouswork)
+            scalewindowtoworkarea(wid, previouswork, previousuiscale)
 
             win = windows.get(wid)
 
@@ -18788,10 +18850,13 @@ def handleline(cid, line):
             return
 
         try:
+            previouswork = (int(WORKX), int(WORKY), int(WORKW), int(WORKH))
+            previousuiscale = squarerootscale()
             GPUUISCALE = max(
                 0.5, min(3.0, float(msg.get("ui_scale", 1.0))))
             CFG["ui_scale"] = GPUUISCALE
             applyuiscale()
+            refreshwindows(previouswork, previousuiscale)
             adjustment = setdisplayadjustment(
                 msg.get("brightness", 100),
                 msg.get("contrast", 100),
@@ -20698,12 +20763,16 @@ def windowcompositordiagnostic():
             "y": 40,
             "title": "display reflow",
             "role": "window",
+            "decoration": "client",
+            "client_chrome_height": 80,
+            "client_chrome_drag_width": 160,
             "restore_size": False,
         })
         createdpaths.append(windows[reflowwid]["buffer"])
         writecolor(windows[reflowwid]["buffer"], 800, 560, (255, 255, 255, 255))
         mapwindow(1, {"winid": reflowwid})
         previouswork = (WORKX, WORKY, WORKW, WORKH)
+        previousuiscale = squarerootscale()
         SCREENW = 800
         SCREENH = 600
         WORKX = 0
@@ -20711,17 +20780,35 @@ def windowcompositordiagnostic():
         WORKW = 800
         WORKH = 560
         applyuiscale()
-        refreshwindows(previouswork)
+        refreshwindows(previouswork, previousuiscale)
         reflowwin = windows[reflowwid]
         reflowframe = winframerect(reflowwin)
 
-        expectedw = int(round(800 * (WORKW / previouswork[2])))
-        expectedh = int(round(560 * (WORKH / previouswork[3])))
+        geometryscale = squarerootscale() / previousuiscale
+        expectedw = int(round(800 * geometryscale))
+        expectedh = int(round(560 * geometryscale))
+        expectedchromeheight = max(
+            int(BTNWH), int(round(80 * geometryscale)))
+        expecteddragwidth = int(round(160 * geometryscale))
 
         if int(reflowwin["w"]) != expectedw or int(reflowwin["h"]) != expectedh:
             raise RuntimeError(
                 f"display resize did not scale normal window geometry "
                 f"expected={expectedw}x{expectedh} actual={reflowwin['w']}x{reflowwin['h']}"
+            )
+
+        if abs((float(reflowwin["w"]) / float(reflowwin["h"])) - (800.0 / 560.0)) > 0.01:
+            raise RuntimeError("display resize changed a normal window's aspect ratio")
+
+        if (
+            int(reflowwin.get("client_chrome_height", 0)) != expectedchromeheight
+            or int(reflowwin.get("client_chrome_drag_width", 0)) != expecteddragwidth
+        ):
+            raise RuntimeError(
+                "display resize did not scale client chrome metrics "
+                f"expected={expectedchromeheight}x{expecteddragwidth} "
+                f"actual={reflowwin.get('client_chrome_height')}x"
+                f"{reflowwin.get('client_chrome_drag_width')}"
             )
 
         if (
@@ -20744,6 +20831,10 @@ def windowcompositordiagnostic():
             "work_area": [WORKX, WORKY, WORKW, WORKH],
             "window": [reflowwin["x"], reflowwin["y"], reflowwin["w"], reflowwin["h"]],
             "frame": list(reflowframe),
+            "uniform_scale": round(float(geometryscale), 4),
+            "aspect_ratio_preserved": True,
+            "client_chrome_height": int(reflowwin["client_chrome_height"]),
+            "client_chrome_drag_width": int(reflowwin["client_chrome_drag_width"]),
         }
         previouswork = (WORKX, WORKY, WORKW, WORKH)
         destroywindow(reflowwid, note="diagnostic")

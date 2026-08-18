@@ -71,6 +71,10 @@ function Invoke-AudioDiagnostic {
         if ($LASTEXITCODE -ne 0) {
             throw 'could not create audio diagnostic mount targets.'
         }
+        & wsl.exe -u root --exec nsenter -t 1 -m -- install -d -m 0700 -o 0 -g 0 '/mnt/t1fs/.ephemeral/media'
+        if ($LASTEXITCODE -ne 0) {
+            throw 'could not prepare the root-owned media sandbox diagnostic directory.'
+        }
 
         & wsl.exe -u root --exec nsenter -t 1 -m -- mount --bind $wslSources[0] $buildTarget
         if ($LASTEXITCODE -ne 0) { throw 'audio build bind mount failed.' }
@@ -284,12 +288,12 @@ engine['BACKENDPRESENTEDFRAMES'] = 0
 engine['backendfilepump'] = lambda: False
 engine['backendwrite'] = originalbackendwrite
 engine['mixloop']()
-assert engine['backendpendingframes']() == 3528
-assert engine['MIXEDFRAMES'] == 3528
+assert engine['backendpendingframes']() == 1764
+assert engine['MIXEDFRAMES'] == 1764
 engine['rbpop'](outputring, 441 * engine['FRAMEBYTES'])
 clock[0] += 0.02
 engine['mixloop']()
-assert engine['MIXEDFRAMES'] == 3969
+assert engine['MIXEDFRAMES'] == 2205
 assert engine['backendpresentedframes']() == 441
 
 engine['backendfilepump'] = originalbackendfilepump

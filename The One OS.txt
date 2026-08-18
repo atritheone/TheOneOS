@@ -1,17 +1,6 @@
 
 
-
-player does not load audio artwork.
-
-cannot open py files in array.
-
 chromium opens and crashes.
-
-opening text files in write, even if they have content, a blank file is opened.
-
-format python manager log lines.
-
-
 
 
 ## todo

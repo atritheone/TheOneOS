@@ -147,7 +147,7 @@ are:
 * protocol header:
   `11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0`
 * complete source overlay:
-  `597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e`
+  `102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705`
 
 Run the tool twice to verify idempotence:
 

@@ -26,6 +26,8 @@ SKIA_REVISION = MANIFEST["skia_revision"]
 SKIA_ROOT = Path("third_party/skia")
 
 UPSTREAM_SHA256 = {
+    "base/command_line.h": "973770ed8317caccc46dd194a5f705c0721a8b6a5fbc31149cc44ab7dc94645d",
+    "base/command_line.cc": "e02061a9607905df47375abca55e1e7e480c846865d73dcde338b9af98ae48a3",
     "media/media_options.gni": "21a6c0617fd9d86f1b09bce6f808134190d7b098274cc8ba92b934e1fe2eb53f",
     "media/BUILD.gn": "2a7ddbb932cef7366d91b002703f9d6859ccdb71360cd79073dbda56bf0e4a08",
     "media/base/BUILD.gn": "69dd1d25aec36f607c65c7329a0c1f5cc7c98ef24f6260ea99211b2f957474a2",
@@ -40,7 +42,18 @@ UPSTREAM_SHA256 = {
     "content/renderer/render_thread_impl.cc": "2616964affc2dbd53a2092971aff88d865313884501e7f71248dd864fa6eaa46",
     "content/browser/BUILD.gn": "dbf7d74906ccdabec3abd3e52d57f95a581fc40c2158182d7cc7ba3ec22338b8",
     "content/browser/gpu/gpu_process_host.cc": "ba83a2b601dc8f6bc138218ced8ac6da5433612d079c5604b510017cf05a4e85",
+    "content/browser/compositor/viz_process_transport_factory.cc": "711d07bdb75b8eb9e9dd18eb0033a3fc3029ffca826f8223aad8a76b48a7b64d",
+    "content/browser/child_process_launcher_helper.cc": "4a92455ffd7555323ae499eabf147fe6f3d02ab16c1c9481c552ed5f311a4f56",
+    "content/common/zygote/zygote_communication_linux.cc": "f4b6e367bec13cb114286eaa1fc55e25ededeee37159b466b7af19d1fd452e8d",
+    "content/browser/service_host/utility_sandbox_delegate.cc": "3bcd64501e07a0ef1a8aa28d6c8bea938c2017e64c0a186e68e43d0c68aebcab",
     "content/common/gpu_pre_sandbox_hook_linux.cc": "6484df28cc337258695fdcb99b44f4c28e741e2bb229adde75fefc6fd5612f05",
+    "components/viz/service/display_embedder/skia_output_surface_impl_on_gpu.cc": "8ef1c71ed3d610bd5b8841d13c98731b75eba8e1015d0d34b55ca496c9ddfc6e",
+    "components/viz/host/gpu_host_impl.cc": "7294175f1442f99108ec1cc3be1f290be061add734e057188df375ac8472e19c",
+    "components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc": "43d119f352f31ab0912238f4bff6da05fedb01c3b24d5391071a25600b0887eb",
+    "content/child/child_thread_impl.cc": "50f824b28f4306eaefe94b151b41f0cdf29b23ddd5eb6c89eff7ab70d56cecba",
+    "content/gpu/gpu_child_thread.cc": "2372fea4bfcd0f71a3af4f27aa7abea9e12116be4051b0bfa3cdd188f559d5bb",
+    "content/gpu/gpu_main.cc": "f70c0a33fa41fffd0353f08de41748aa83e4b3861e4ae61d78e410e8e38b2db7",
+    "mojo/core/channel_posix.cc": "2bf413d817e986b5d2cace2c298707d512c3fd9abf68df906761c6a8190c13ef",
     "sandbox/policy/linux/bpf_gpu_policy_linux.cc": "0c9c7cc1aae9e2ae16e939f6693608efd7072b0598e93d4bbbe560d863df92c9",
     "sandbox/policy/BUILD.gn": "5d616deb44e55497cfe819e62c11d4e1151a372e36c77d4a835688af2585c267",
     "net/dns/dns_config_service_linux.cc": "5c0d2e1698467d5794c22069bb3618a4cc073bbe5dc079991445271a07d24982",
@@ -88,6 +101,43 @@ PROTOCOL_OVERLAY_PATH = Path("media/gpu/t1os/t1_media_decode_protocol.h")
 # permits an in-place overlay upgrade while continuing to reject arbitrary
 # dirty Chromium source.
 MIGRATABLE_PATCHED_SHA256 = {
+    "mojo/core/channel_posix.cc": {
+        # High-volume transport trace used to prove bidirectional Mojo and fd
+        # passing. Keep only a bounded startup sample in the next pass.
+        "e0aa978859e3abda83fed798d222203de2cc4729d229f5e263fdfbc481e66cbf",
+    },
+    "content/child/child_thread_impl.cc": {
+        # Prior verified child connection-timeout diagnostic. The next bounded
+        # pass probes the inherited Mojo descriptor before accepting it.
+        "f1bd1bcc3f6fe4b96d9f3f87470b4d9b11fb980cf4f8832036eb5dcf6fcf0fe7",
+        # The first descriptor probe used socket introspection that Chromium's
+        # utility/renderer seccomp policy correctly rejects. Migrate it to the
+        # non-invasive descriptor-existence probe below.
+        "21f294f6d0e28448a66e61d76f6bbd3d80b3c79465ecfb2fa0d4985a8071cc11",
+        # Valid endpoint/transport diagnostics before replacing the T1OS-
+        # incompatible Ping watchdog with disconnect-based supervision.
+        "b9c61844946618f4f8b0e6aad486927625a25a0ba96d4ef859a4d9e46ce5b7b0",
+    },
+    "content/browser/gpu/gpu_process_host.cc": {
+        # Previous T1OS broker/presentation host before the GPU-only launcher
+        # bypass kept utility processes on Chromium's supported zygote path.
+        "a3ccad4db6f093ba92b21aade4b0230ac3ded5015ade93a85fdc3e391a4048ac",
+        # GPU-only launcher bypass selected from the rewritten delegate
+        # program rather than the browser's immutable launcher switch.
+        "833d1eed8414ff45059cfe49c161df2ccea15bf0c4abc979a5959cfb2c855e6f",
+        # Direct launch selected from the unquoted launcher value; paths with
+        # spaces were subsequently split by CommandLine::PrependWrapper.
+        "48a844895273b3caa9fa67dd3b90cba8d727c17847906b873c9da1e28ba89313",
+        # Quoted launcher value kept the path together, but Chromium's wrapper
+        # tokenizer retained the quote bytes in argv[0], so execvp rejected it.
+        "636c6f07f8c884a3f0a93c4d2b825c592698bb0ef56b50a6aa1bcd5d6012c5c5",
+        # Exact argv construction preserved the path but lost CommandLine's
+        # switch boundary before BrowserChildProcessHost forwarded switches.
+        "2877ef81ab8cc8d88a105d15224563885f80d643dc1661a89c4958e10ac343dc",
+        # Exact launcher plus the first X11/Viz surface diagnostics. The next
+        # bounded pass adds browser/GPU child bootstrap milestones.
+        "181ec882afb4f4e0fe81507f52ede87bf40ab98a9d57c6acefb5af0c746be90d",
+    },
     "src/gpu/ganesh/gl/GrGLCaps.cpp": {
         "11d1fed87bfa71106fcf4427db0b1e9284ccd4404db6189556370ad17084b685",
         # Same NVIDIA implicit-MSAA workaround with the previous EGLStream
@@ -170,6 +220,11 @@ MIGRATABLE_PATCHED_SHA256 = {
         # EGLNativeDisplayType as an integer, so the invalid-display sentinel
         # is upgraded from a nullptr cast to value initialization.
         "fb9fac45b57312f231efde21dbc4f83e0df1d86cd3f9ced8891636a2a673801f",
+        # Immediately preceding brokered EGL/GBM factory, before bounded
+        # surface-request diagnostics were added.
+        "d4d816c729c169185dece5bd00669a20168caf48d76b86ca9ed1153a2ecaf81d",
+        # Diagnostic factory before gl::Presenter's complete type was included.
+        "4fe5e0fbaebab58d464a81ee03174d24d3837a6a2b67c2737dd0049945aaf4af",
     },
     "media/gpu/chromeos/mailbox_video_frame_converter.cc": {
         "8b0c7f84a6c48f0ba182f3a0b779f0d3933c29b7467dbffcba30e15b63005730",
@@ -221,6 +276,40 @@ def append_once(text: str, block: str, sentinel: str) -> str:
 
 
 def transformations() -> dict[str, tuple[str, callable]]:
+    def command_line_h(text: str) -> str:
+        text = replace_once(
+            text,
+            "  // Insert a command before the current command.\n"
+            "  // Common for debuggers, like \"gdb --args\".\n"
+            "  void PrependWrapper(StringViewType wrapper);\n",
+            "  // Insert a command before the current command.\n"
+            "  // Common for debuggers, like \"gdb --args\".\n"
+            "  void PrependWrapper(StringViewType wrapper);\n\n"
+            "  // Insert one exact wrapper program without parsing its path. This\n"
+            "  // preserves spaces and the existing switch/argument boundary.\n"
+            "  void PrependWrapperPath(const FilePath& wrapper);\n",
+            "base/command_line.h",
+        )
+        return text
+
+    def command_line_cc(text: str) -> str:
+        return replace_once(
+            text,
+            "void CommandLine::PrependWrapper(StringViewType wrapper) {\n",
+            "void CommandLine::PrependWrapperPath(const FilePath& wrapper) {\n"
+            "#if BUILDFLAG(ENABLE_COMMANDLINE_SEQUENCE_CHECKS)\n"
+            "  sequence_checker_.Check();\n"
+            "#endif\n"
+            "  if (wrapper.empty()) {\n"
+            "    return;\n"
+            "  }\n"
+            "  argv_.insert(argv_.begin(), wrapper.value());\n"
+            "  ++begin_args_;\n"
+            "}\n\n"
+            "void CommandLine::PrependWrapper(StringViewType wrapper) {\n",
+            "base/command_line.cc",
+        )
+
     def media_options(text: str) -> str:
         text = replace_once(
             text,
@@ -1376,7 +1465,56 @@ if (enable_t1os_video_decoder) {
             '#endif\n',
             "content/browser/gpu/gpu_process_host.cc",
         )
-        return replace_once(
+        text = replace_once(
+            text,
+            "  ZygoteCommunication* GetZygote() override {\n"
+            "    if (sandbox::policy::IsUnsandboxedSandboxType(GetSandboxType()))\n"
+            "      return nullptr;\n\n"
+            "    // The GPU process needs a specialized sandbox, so fork from the unsandboxed\n",
+            "  ZygoteCommunication* GetZygote() override {\n"
+            "    if (sandbox::policy::IsUnsandboxedSandboxType(GetSandboxType()))\n"
+            "      return nullptr;\n\n"
+            "    // T1OS uses Chromium's GPU-only launcher to install the measured\n"
+            "    // EGL/GBM loader before the GPU sandbox is entered. A wrapper\n"
+            "    // command cannot run inside a fork-only zygote, so use the browser's\n"
+            "    // immutable exact launcher contract to select a direct GPU launch.\n"
+            "    // Utility and renderer processes retain Chromium's normal zygotes.\n"
+            "    const auto t1os_gpu_launcher =\n"
+            "        base::CommandLine::ForCurrentProcess()->GetSwitchValueNative(\n"
+            "            switches::kGpuLauncher);\n"
+            "    if (t1os_gpu_launcher ==\n"
+            "        \"/the one/software/chromium/tools/\"\n"
+            "        \"t1os-chrome-subprocess\") {\n"
+            "      return nullptr;\n"
+            "    }\n\n"
+            "    // The GPU process needs a specialized sandbox, so fork from the unsandboxed\n",
+            "content/browser/gpu/gpu_process_host.cc",
+        )
+        text = replace_once(
+            text,
+            "  // If specified, prepend a launcher program to the command line.\n"
+            "  if (!gpu_launcher.empty())\n"
+            "    cmd_line->PrependWrapper(gpu_launcher);\n\n"
+            "  std::unique_ptr<GpuSandboxedProcessLauncherDelegate> delegate =\n"
+            "      std::make_unique<GpuSandboxedProcessLauncherDelegate>(*cmd_line);\n",
+            "#if BUILDFLAG(IS_LINUX)\n"
+            "  if (gpu_launcher ==\n"
+            "      \"/the one/software/chromium/tools/t1os-chrome-subprocess\") {\n"
+            "    // Preserve this exact path as one argv element and preserve the\n"
+            "    // CommandLine switch boundary. BrowserChildProcessHost can then\n"
+            "    // append forwarded switches without moving them ahead of the\n"
+            "    // wrapped Chrome executable required at argv[1].\n"
+            "    cmd_line->PrependWrapperPath(base::FilePath(gpu_launcher));\n"
+            "  } else\n"
+            "#endif\n"
+            "  if (!gpu_launcher.empty()) {\n"
+            "    cmd_line->PrependWrapper(gpu_launcher);\n"
+            "  }\n\n"
+            "  std::unique_ptr<GpuSandboxedProcessLauncherDelegate> delegate =\n"
+            "      std::make_unique<GpuSandboxedProcessLauncherDelegate>(*cmd_line);\n",
+            "content/browser/gpu/gpu_process_host.cc",
+        )
+        text = replace_once(
             text,
             "  // Do not call process_->Launch() here.\n",
             "  auto file_data = std::make_unique<ChildProcessLauncherFileData>();\n"
@@ -1410,6 +1548,332 @@ if (enable_t1os_video_decoder) {
             "      std::make_unique<ChildProcessLauncherFileData>());",
             "      /*file_data=*/std::move(file_data));",
             1,
+        )
+        text = replace_once(
+            text,
+            "void GpuProcessHost::OnProcessLaunched() {\n"
+            "  process_start_time_ = base::TimeTicks::Now();\n",
+            "void GpuProcessHost::OnProcessLaunched() {\n"
+            "#if BUILDFLAG(ENABLE_T1OS_VIDEO_DECODER)\n"
+            "  if (base::CommandLine::ForCurrentProcess()->HasSwitch(\n"
+            "          media::kT1OSPresentationSocketSwitch)) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU process launched\";\n"
+            "  }\n"
+            "#endif\n"
+            "  process_start_time_ = base::TimeTicks::Now();\n",
+            "content/browser/gpu/gpu_process_host.cc",
+        )
+        return replace_once(
+            text,
+            "    const gfx::GpuExtraInfo& gpu_extra_info) {\n",
+            "    const gfx::GpuExtraInfo& gpu_extra_info) {\n"
+            "#if BUILDFLAG(ENABLE_T1OS_VIDEO_DECODER)\n"
+            "  if (base::CommandLine::ForCurrentProcess()->HasSwitch(\n"
+            "          media::kT1OSPresentationSocketSwitch)) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU DidInitialize\";\n"
+            "  }\n"
+            "#endif\n",
+            "content/browser/gpu/gpu_process_host.cc",
+        )
+
+    def gpu_main_diagnostics(text: str) -> str:
+        return replace_once(
+            text,
+            "  const bool init_success = gpu_init->InitializeAndStartSandbox(\n"
+            "      const_cast<base::CommandLine*>(&command_line), gpu_preferences);\n",
+            "  const bool init_success = gpu_init->InitializeAndStartSandbox(\n"
+            "      const_cast<base::CommandLine*>(&command_line), gpu_preferences);\n"
+            "  if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE GPU init complete success=\"\n"
+            "              << init_success;\n"
+            "  }\n",
+            "content/gpu/gpu_main.cc",
+        )
+
+    def gpu_child_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <stddef.h>\n",
+            "#include <stddef.h>\n#include <cstdlib>\n",
+            "content/gpu/gpu_child_thread.cc",
+        )
+        text = replace_once(
+            text,
+            "void GpuChildThread::Init(const base::TimeTicks& process_start_time) {\n",
+            "void GpuChildThread::Init(const base::TimeTicks& process_start_time) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE GPU child ready\";\n"
+            "  }\n",
+            "content/gpu/gpu_child_thread.cc",
+        )
+        return replace_once(
+            text,
+            "void GpuChildThread::OnGpuServiceConnection(viz::GpuServiceImpl* gpu_service) {\n",
+            "void GpuChildThread::OnGpuServiceConnection(viz::GpuServiceImpl* gpu_service) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE GPU service connected\";\n"
+            "  }\n",
+            "content/gpu/gpu_child_thread.cc",
+        )
+
+    def child_connection_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <signal.h>\n\n#include <memory>\n",
+            "#include <signal.h>\n\n#include <cerrno>\n#include <cstdlib>\n#include <memory>\n",
+            "content/child/child_thread_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "  main_thread_runner_->PostDelayedTask(\n"
+            "      FROM_HERE,\n"
+            "      base::BindOnce(&ChildThreadImpl::EnsureConnected,\n"
+            "                     channel_connected_factory_->GetWeakPtr(),\n"
+            "                     connection_timeout),\n"
+            "      base::Seconds(connection_timeout));\n",
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    // The measured T1OS child has already accepted the browser's\n"
+            "    // invitation and installed its disconnect handler. On T1OS the\n"
+            "    // separate Ping callback is not delivered even though the Mojo\n"
+            "    // transport and attached pipes exchange data successfully. Use\n"
+            "    // the live disconnect monitor as the child-liveness authority.\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child supervision=disconnect\";\n"
+            "    channel_connected_factory_.reset();\n"
+            "  } else {\n"
+            "    main_thread_runner_->PostDelayedTask(\n"
+            "        FROM_HERE,\n"
+            "        base::BindOnce(&ChildThreadImpl::EnsureConnected,\n"
+            "                       channel_connected_factory_->GetWeakPtr(),\n"
+            "                       connection_timeout),\n"
+            "        base::Seconds(connection_timeout));\n"
+            "  }\n",
+            "content/child/child_thread_impl.cc",
+        )
+        text = replace_once(
+            text,
+            '#include "build/build_config.h"\n',
+            '#include "build/build_config.h"\n'
+            '#if BUILDFLAG(IS_POSIX)\n'
+            '#include <fcntl.h>\n'
+            '#endif\n',
+            "content/child/child_thread_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "  if (!endpoint.is_valid()) {\n"
+            "    endpoint =\n"
+            "        mojo::PlatformChannelEndpoint(mojo::PlatformHandle(base::ScopedFD(\n"
+            "            base::GlobalDescriptors::GetInstance()->Get(kMojoIPCChannel))));\n"
+            "  }\n"
+            "#endif\n",
+            "  if (!endpoint.is_valid()) {\n"
+            "    const int descriptor =\n"
+            "        base::GlobalDescriptors::GetInstance()->Get(kMojoIPCChannel);\n"
+            "    if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "      errno = 0;\n"
+            "      const int descriptor_flags = fcntl(descriptor, F_GETFD);\n"
+            "      const int descriptor_errno = descriptor_flags < 0 ? errno : 0;\n"
+            "      const auto* command_line = base::CommandLine::ForCurrentProcess();\n"
+            "      LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child mojo endpoint pid=\"\n"
+            "                << base::GetCurrentProcId() << \" type=\"\n"
+            "                << command_line->GetSwitchValueASCII(switches::kProcessType)\n"
+            "                << \" utility=\"\n"
+            "                << command_line->GetSwitchValueASCII(switches::kUtilitySubType)\n"
+            "                << \" fd=\" << descriptor\n"
+            "                << \" flags=\" << descriptor_flags\n"
+            "                << \" flags_errno=\" << descriptor_errno;\n"
+            "    }\n"
+            "    endpoint = mojo::PlatformChannelEndpoint(\n"
+            "        mojo::PlatformHandle(base::ScopedFD(descriptor)));\n"
+            "  }\n"
+            "#endif\n",
+            "content/child/child_thread_impl.cc",
+        )
+        return replace_once(
+            text,
+            "void ChildThreadImpl::EnsureConnected(int connection_timeout) {\n"
+            "  VLOG(0) << \"Terminating current process after \" << connection_timeout\n"
+            "          << \" seconds with no connection.\";\n",
+            "void ChildThreadImpl::EnsureConnected(int connection_timeout) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    const auto* command_line = base::CommandLine::ForCurrentProcess();\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child connection timeout pid=\"\n"
+            "              << base::GetCurrentProcId() << \" type=\"\n"
+            "              << command_line->GetSwitchValueASCII(switches::kProcessType)\n"
+            "              << \" utility=\"\n"
+            "              << command_line->GetSwitchValueASCII(switches::kUtilitySubType);\n"
+            "  }\n"
+            "  VLOG(0) << \"Terminating current process after \" << connection_timeout\n"
+            "          << \" seconds with no connection.\";\n",
+            "content/child/child_thread_impl.cc",
+        )
+
+    def child_launcher_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <optional>\n",
+            "#include <cstdlib>\n#include <optional>\n",
+            "content/browser/child_process_launcher_helper.cc",
+        )
+        text = replace_once(
+            text,
+            "  // Launch the child process.\n"
+            "  Process process;\n",
+            "  // Launch the child process.\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child launch begin type=\"\n"
+            "              << command_line_->GetSwitchValueASCII(switches::kProcessType);\n"
+            "  }\n"
+            "  Process process;\n",
+            "content/browser/child_process_launcher_helper.cc",
+        )
+        text = replace_once(
+            text,
+            "  if (is_synchronous_launch) {\n"
+            "    // The LastError is set on the launcher thread, but needs to be transferred\n",
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child launch returned type=\"\n"
+            "              << command_line_->GetSwitchValueASCII(switches::kProcessType)\n"
+            "              << \" valid=\" << process.process.IsValid();\n"
+            "  }\n\n"
+            "  if (is_synchronous_launch) {\n"
+            "    // The LastError is set on the launcher thread, but needs to be transferred\n",
+            "content/browser/child_process_launcher_helper.cc",
+        )
+        return replace_once(
+            text,
+            "  client_task_runner_->PostTask(\n"
+            "      FROM_HERE,\n",
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE child invitation sent type=\"\n"
+            "              << command_line_->GetSwitchValueASCII(switches::kProcessType);\n"
+            "  }\n\n"
+            "  client_task_runner_->PostTask(\n"
+            "      FROM_HERE,\n",
+            "content/browser/child_process_launcher_helper.cc",
+        )
+
+    def mojo_channel_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <atomic>\n#include <limits>\n",
+            "#include <atomic>\n#include <cstdlib>\n#include <limits>\n",
+            "mojo/core/channel_posix.cc",
+        )
+        text = replace_once(
+            text,
+            "const size_t kMaxBatchReadCapacity = 256 * 1024;\n",
+            "const size_t kMaxBatchReadCapacity = 256 * 1024;\n"
+            "std::atomic<int> g_t1os_channel_diagnostic_count{0};\n\n"
+            "bool ShouldLogT1OSChannelDiagnostic() {\n"
+            "  return std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr &&\n"
+            "         g_t1os_channel_diagnostic_count.fetch_add(\n"
+            "             1, std::memory_order_relaxed) < 12;\n"
+            "}\n",
+            "mojo/core/channel_posix.cc",
+        )
+        text = replace_once(
+            text,
+            "  read_watcher_ = base::IOWatcher::Get()->WatchFileDescriptor(\n"
+            "      socket_.get(), base::IOWatcher::FdWatchDuration::kPersistent,\n"
+            "      base::IOWatcher::FdWatchMode::kRead, *this);\n"
+            "  DCHECK(!write_watcher_);\n",
+            "  read_watcher_ = base::IOWatcher::Get()->WatchFileDescriptor(\n"
+            "      socket_.get(), base::IOWatcher::FdWatchDuration::kPersistent,\n"
+            "      base::IOWatcher::FdWatchMode::kRead, *this);\n"
+            "  if (ShouldLogT1OSChannelDiagnostic()) {\n"
+            "    LOG(INFO) << \"T1OS_MOJO_CHANNEL start fd=\" << socket_.get()\n"
+            "              << \" watcher=\" << static_cast<bool>(read_watcher_);\n"
+            "  }\n"
+            "  DCHECK(!write_watcher_);\n",
+            "mojo/core/channel_posix.cc",
+        )
+        text = replace_once(
+            text,
+            "    ssize_t read_result =\n"
+            "        SocketRecvmsg(socket_.get(), buffer, buffer_capacity, &incoming_fds);\n"
+            "    for (auto& incoming_fd : incoming_fds) {\n",
+            "    errno = 0;\n"
+            "    ssize_t read_result =\n"
+            "        SocketRecvmsg(socket_.get(), buffer, buffer_capacity, &incoming_fds);\n"
+            "    const int read_errno = read_result < 0 ? errno : 0;\n"
+            "    if (ShouldLogT1OSChannelDiagnostic()) {\n"
+            "      LOG(INFO) << \"T1OS_MOJO_CHANNEL read fd=\" << socket_.get()\n"
+            "                << \" result=\" << read_result\n"
+            "                << \" errno=\" << read_errno\n"
+            "                << \" handles=\" << incoming_fds.size();\n"
+            "    }\n"
+            "    for (auto& incoming_fd : incoming_fds) {\n",
+            "mojo/core/channel_posix.cc",
+        )
+        return replace_once(
+            text,
+            "    if (result < 0) {\n"
+            "      if (errno != EAGAIN &&\n",
+            "    const int write_errno = result < 0 ? errno : 0;\n"
+            "    if (ShouldLogT1OSChannelDiagnostic()) {\n"
+            "      LOG(INFO) << \"T1OS_MOJO_CHANNEL write fd=\" << socket_.get()\n"
+            "                << \" result=\" << result\n"
+            "                << \" errno=\" << write_errno\n"
+            "                << \" handles_total=\" << num_handles\n"
+            "                << \" handles_sent=\" << handles_written;\n"
+            "    }\n"
+            "    if (result < 0) {\n"
+            "      if (errno != EAGAIN &&\n",
+            "mojo/core/channel_posix.cc",
+        )
+
+    def zygote_communication_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <string.h>\n",
+            "#include <string.h>\n#include <cstdlib>\n",
+            "content/common/zygote/zygote_communication_linux.cc",
+        )
+        text = replace_once(
+            text,
+            "    const std::string& process_type) {\n"
+            "  DCHECK(init_);\n\n  base::Pickle pickle;\n",
+            "    const std::string& process_type) {\n"
+            "  DCHECK(init_);\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE zygote fork begin type=\"\n"
+            "              << process_type << \" mappings=\" << mapping.size();\n"
+            "  }\n\n"
+            "  base::Pickle pickle;\n",
+            "content/common/zygote/zygote_communication_linux.cc",
+        )
+        return replace_once(
+            text,
+            "    if (pid <= 0)\n"
+            "      return base::kNullProcessHandle;\n"
+            "  }\n",
+            "    if (pid <= 0)\n"
+            "      return base::kNullProcessHandle;\n"
+            "    if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "      LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE zygote fork reply type=\"\n"
+            "                << process_type << \" pid=\" << pid;\n"
+            "    }\n"
+            "  }\n",
+            "content/common/zygote/zygote_communication_linux.cc",
+        )
+
+    def utility_sandbox_delegate(text: str) -> str:
+        return replace_once(
+            text,
+            "  // TODO(crbug.com/40261714): remove this special case and fork from the\n"
+            "  // zygote. For now, browser tests fail when forking the network service from\n"
+            "  // the unsandboxed zygote, as the forked process only creates the\n"
+            "  // NetworkServiceTestHelper if the process is exec'd.\n"
+            "  if (sandbox_type_ == sandbox::mojom::Sandbox::kNetwork) {\n"
+            "    return nullptr;\n"
+            "  }\n\n",
+            "  // T1OS routes Network Service through Chromium's existing unsandboxed\n"
+            "  // zygote below. The forked child still applies kNetwork before service\n"
+            "  // startup, while preserving the Mojo bootstrap that a direct exec loses\n"
+            "  // under the T1OS process architecture. The removed upstream exception is\n"
+            "  // needed only by NetworkServiceTestHelper in browser-test processes.\n\n",
+            "content/browser/service_host/utility_sandbox_delegate.cc",
         )
 
     def gpu_policy(text: str) -> str:
@@ -1749,6 +2213,7 @@ if (enable_t1os_video_decoder) {
             text,
             '#include "ui/gl/gl_surface_egl.h"\n',
             '#include "ui/gl/gl_surface_egl.h"\n'
+            '#include "ui/gl/presenter.h"\n'
             '#include "ui/gl/scoped_egl_image.h"\n',
             "ui/ozone/platform/x11/x11_surface_factory.cc",
         )
@@ -1898,9 +2363,26 @@ if (enable_t1os_video_decoder) {
             "      gl::GLDisplay* display,\n"
             "      gfx::AcceleratedWidget window) override {\n"
             "    if (is_swiftshader_) {\n",
+            "  scoped_refptr<gl::Presenter> CreateSurfacelessViewGLSurface(\n"
+            "      gl::GLDisplay* display,\n"
+            "      gfx::AcceleratedWidget window) override {\n"
+            "    if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "      LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE surface request \"\n"
+            "                   \"kind=surfaceless window=\"\n"
+            "                << window << \" result=unsupported\";\n"
+            "    }\n"
+            "    return GLOzoneEGL::CreateSurfacelessViewGLSurface(display, window);\n"
+            "  }\n\n"
             "  scoped_refptr<gl::GLSurface> CreateViewGLSurface(\n"
             "      gl::GLDisplay* display,\n"
             "      gfx::AcceleratedWidget window) override {\n"
+            "    if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "      LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE surface request \"\n"
+            "                   \"kind=view window=\"\n"
+            "                << window << \" software=\" << is_swiftshader_\n"
+            "                << \" owner_claimed=\"\n"
+            "                << t1os_presentation_owner_claimed_;\n"
+            "    }\n"
             "    if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr &&\n"
             "        !is_swiftshader_) {\n"
             "      auto* egl_display = display->GetAs<gl::GLDisplayEGL>();\n"
@@ -2444,7 +2926,182 @@ if (enable_t1os_video_decoder) {
             "components/viz/service/display/direct_renderer.cc",
         )
 
+    def t1os_output_surface_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <memory>\n",
+            "#include <cstdlib>\n"
+            "#include <memory>\n",
+            "components/viz/service/display_embedder/"
+            "skia_output_surface_impl_on_gpu.cc",
+        )
+        text = replace_once(
+            text,
+            "  context_state_ = dependency_->GetSharedContextState();\n"
+            "  DCHECK(context_state_);\n",
+            "  context_state_ = dependency_->GetSharedContextState();\n"
+            "  DCHECK(context_state_);\n"
+            "  if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE output initialize \"\n"
+            "                 \"surface_handle=\"\n"
+            "              << dependency_->GetSurfaceHandle()\n"
+            "              << \" offscreen=\" << dependency_->IsOffscreen()\n"
+            "              << \" vulkan=\" << is_using_vulkan()\n"
+            "              << \" dawn=\" << context_state_->IsGraphiteDawn();\n"
+            "  }\n",
+            "components/viz/service/display_embedder/"
+            "skia_output_surface_impl_on_gpu.cc",
+        )
+        return replace_once(
+            text,
+            "bool SkiaOutputSurfaceImplOnGpu::InitializeForGL() {\n"
+            "  if (dependency_->IsOffscreen()) {\n",
+            "bool SkiaOutputSurfaceImplOnGpu::InitializeForGL() {\n"
+            "  if (getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE output branch kind=gl \"\n"
+            "                 \"offscreen=\"\n"
+            "              << dependency_->IsOffscreen();\n"
+            "  }\n"
+            "  if (dependency_->IsOffscreen()) {\n",
+            "components/viz/service/display_embedder/"
+            "skia_output_surface_impl_on_gpu.cc",
+        )
+
+    def t1os_gpu_host_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <utility>\n",
+            "#include <cstdlib>\n#include <utility>\n",
+            "components/viz/host/gpu_host_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "      params_(std::move(params)) {\n"
+            "  // Create a special GPU info collection service if the GPU process is used for\n",
+            "      params_(std::move(params)) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU host constructed\";\n"
+            "  }\n"
+            "  // Create a special GPU info collection service if the GPU process is used for\n",
+            "components/viz/host/gpu_host_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "      use_shader_cache_shm_count_.CloneRegion(), std::move(gpu_service_params));\n"
+            "  MaybeSendFontRenderParams();\n",
+            "      use_shader_cache_shm_count_.CloneRegion(), std::move(gpu_service_params));\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU service requested\";\n"
+            "  }\n"
+            "  MaybeSendFontRenderParams();\n",
+            "components/viz/host/gpu_host_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "  TRACE_EVENT0(\"gpu\", \"GpuHostImpl::ConnectFrameSinkManager\");\n",
+            "  TRACE_EVENT0(\"gpu\", \"GpuHostImpl::ConnectFrameSinkManager\");\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser frame sink manager requested\";\n"
+            "  }\n",
+            "components/viz/host/gpu_host_impl.cc",
+        )
+        return replace_once(
+            text,
+            "  TRACE_EVENT0(\"gpu\", \"GpuHostImpl::DidInitialize\");\n",
+            "  TRACE_EVENT0(\"gpu\", \"GpuHostImpl::DidInitialize\");\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU host initialized\";\n"
+            "  }\n",
+            "components/viz/host/gpu_host_impl.cc",
+        )
+
+    def t1os_viz_transport_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <utility>\n",
+            "#include <cstdlib>\n#include <utility>\n",
+            "content/browser/compositor/viz_process_transport_factory.cc",
+        )
+        text = replace_once(
+            text,
+            "void VizProcessTransportFactory::ConnectHostFrameSinkManager() {\n",
+            "void VizProcessTransportFactory::ConnectHostFrameSinkManager() {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser connect frame sink manager\";\n"
+            "  }\n",
+            "content/browser/compositor/viz_process_transport_factory.cc",
+        )
+        text = replace_once(
+            text,
+            "void VizProcessTransportFactory::CreateLayerTreeFrameSink(\n"
+            "    base::WeakPtr<ui::Compositor> compositor) {\n",
+            "void VizProcessTransportFactory::CreateLayerTreeFrameSink(\n"
+            "    base::WeakPtr<ui::Compositor> compositor) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser layer tree sink requested\";\n"
+            "  }\n",
+            "content/browser/compositor/viz_process_transport_factory.cc",
+        )
+        text = replace_once(
+            text,
+            "    scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {\n"
+            "  ui::Compositor* compositor = compositor_weak_ptr.get();\n",
+            "    scoped_refptr<gpu::GpuChannelHost> gpu_channel_host) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser GPU channel callback valid=\"\n"
+            "              << static_cast<bool>(gpu_channel_host);\n"
+            "  }\n"
+            "  ui::Compositor* compositor = compositor_weak_ptr.get();\n",
+            "content/browser/compositor/viz_process_transport_factory.cc",
+        )
+        return replace_once(
+            text,
+            "  GetHostFrameSinkManager()->CreateRootCompositorFrameSink(\n"
+            "      std::move(root_params));\n",
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE browser root sink submit gpu=\"\n"
+            "              << gpu_compositing << \" widget=\" << compositor->widget();\n"
+            "  }\n"
+            "  GetHostFrameSinkManager()->CreateRootCompositorFrameSink(\n"
+            "      std::move(root_params));\n",
+            "content/browser/compositor/viz_process_transport_factory.cc",
+        )
+
+    def t1os_root_sink_diagnostics(text: str) -> str:
+        text = replace_once(
+            text,
+            "#include <utility>\n",
+            "#include <cstdlib>\n#include <utility>\n",
+            "components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc",
+        )
+        text = replace_once(
+            text,
+            "    HintSessionFactory* hint_session_factory) {\n"
+            "  // First create an output surface.\n",
+            "    HintSessionFactory* hint_session_factory) {\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE service root sink create gpu=\"\n"
+            "              << params->gpu_compositing << \" widget=\" << params->widget;\n"
+            "  }\n"
+            "  // First create an output surface.\n",
+            "components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc",
+        )
+        return replace_once(
+            text,
+            "      display_controller.get(), params->renderer_settings, debug_settings);\n\n"
+            "  // Creating output surface failed. The host can send a new request, possibly\n",
+            "      display_controller.get(), params->renderer_settings, debug_settings);\n"
+            "  if (std::getenv(\"T1OS_PRESENTATION_BRIDGE\") != nullptr) {\n"
+            "    LOG(INFO) << \"T1OS_PRESENTATION_BRIDGE service output surface created=\"\n"
+            "              << static_cast<bool>(output_surface);\n"
+            "  }\n\n"
+            "  // Creating output surface failed. The host can send a new request, possibly\n",
+            "components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc",
+        )
+
     return {
+        "base/command_line.h": ("PrependWrapperPath", command_line_h),
+        "base/command_line.cc": ("PrependWrapperPath", command_line_cc),
         "media/media_options.gni": ("enable_t1os_video_decoder = false", media_options),
         "media/BUILD.gn": ("ENABLE_T1OS_VIDEO_DECODER=", media_build),
         "media/base/BUILD.gn": ('"t1os_media_switches.cc"', media_base_build),
@@ -2542,8 +3199,40 @@ if (enable_t1os_video_decoder) {
             content_build,
         ),
         "content/browser/gpu/gpu_process_host.cc": (
-            "ConnectT1OSMediaDecoderPool(browser_command_line)",
+            "Utility and renderer processes retain Chromium's normal zygotes",
             gpu_host,
+        ),
+        "content/browser/compositor/viz_process_transport_factory.cc": (
+            "T1OS_PRESENTATION_BRIDGE browser root sink submit",
+            t1os_viz_transport_diagnostics,
+        ),
+        "content/gpu/gpu_main.cc": (
+            "T1OS_PRESENTATION_BRIDGE GPU init complete",
+            gpu_main_diagnostics,
+        ),
+        "content/gpu/gpu_child_thread.cc": (
+            "T1OS_PRESENTATION_BRIDGE GPU service connected",
+            gpu_child_diagnostics,
+        ),
+        "content/child/child_thread_impl.cc": (
+            "T1OS_PRESENTATION_BRIDGE child connection timeout",
+            child_connection_diagnostics,
+        ),
+        "mojo/core/channel_posix.cc": (
+            "T1OS_MOJO_CHANNEL start",
+            mojo_channel_diagnostics,
+        ),
+        "content/browser/child_process_launcher_helper.cc": (
+            "T1OS_PRESENTATION_BRIDGE child invitation sent",
+            child_launcher_diagnostics,
+        ),
+        "content/common/zygote/zygote_communication_linux.cc": (
+            "T1OS_PRESENTATION_BRIDGE zygote fork reply",
+            zygote_communication_diagnostics,
+        ),
+        "content/browser/service_host/utility_sandbox_delegate.cc": (
+            "T1OS routes Network Service through Chromium's existing unsandboxed",
+            utility_sandbox_delegate,
         ),
         "content/common/gpu_pre_sandbox_hook_linux.cc": (
             "kT1OSNvidiaPresentationLibraries",
@@ -2622,6 +3311,19 @@ if (enable_t1os_video_decoder) {
         "components/viz/service/display/direct_renderer.cc": (
             "GetT1OSPresentationOutputFormat",
             t1os_presentation_output_format,
+        ),
+        "components/viz/service/display_embedder/"
+        "skia_output_surface_impl_on_gpu.cc": (
+            "T1OS_PRESENTATION_BRIDGE output initialize",
+            t1os_output_surface_diagnostics,
+        ),
+        "components/viz/host/gpu_host_impl.cc": (
+            "T1OS_PRESENTATION_BRIDGE browser GPU host initialized",
+            t1os_gpu_host_diagnostics,
+        ),
+        "components/viz/service/frame_sinks/root_compositor_frame_sink_impl.cc": (
+            "T1OS_PRESENTATION_BRIDGE service root sink create",
+            t1os_root_sink_diagnostics,
         ),
     }
 

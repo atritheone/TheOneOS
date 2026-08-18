@@ -565,6 +565,10 @@ def main() -> int:
 
     overlay_applier = load_overlay_applier()
     required_import_transforms = {
+        "content/browser/gpu/gpu_process_host.cc":
+            "Utility and renderer processes retain Chromium's normal zygotes",
+        "content/browser/service_host/utility_sandbox_delegate.cc":
+            "T1OS routes Network Service through Chromium's existing unsandboxed",
         "gpu/command_buffer/service/shared_image/"
         "ozone_image_backing_factory.cc":
             "An imported NATIVE_PIXMAP already owns its allocation",
@@ -598,6 +602,22 @@ def main() -> int:
         "transformation is absent from the pinned Chromium overlay",
     )
     overlay_source = OVERLAY_APPLIER.read_text(encoding="utf-8")
+    for required in (
+        "/the one/software/chromium/tools/",
+        "t1os-chrome-subprocess",
+        "GetSwitchValueNative(",
+        "switches::kGpuLauncher",
+        "PrependWrapperPath",
+        "BrowserChildProcessHost can then",
+        "Utility and renderer processes retain",
+        "T1OS routes Network Service through Chromium's existing unsandboxed",
+        "return nullptr;",
+    ):
+        require(
+            required in overlay_source,
+            "the T1OS GPU-only launcher no longer bypasses only the GPU "
+            f"zygote: {required}",
+        )
     for required in (
         "const bool explicit_decode_kill_switch =",
         "base::CommandLine::ForCurrentProcess()->HasSwitch(",

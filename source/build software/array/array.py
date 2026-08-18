@@ -9862,7 +9862,7 @@ def opsrequest(payload):
         return None
 
 
-def opsrun(path, args, name, _log, user, mode, await_window=False):
+def opsrun(path, args, name, _log, user, mode, await_window=False, environment=None):
 
     resp = None
 
@@ -9877,6 +9877,11 @@ def opsrun(path, args, name, _log, user, mode, await_window=False):
             "path": path,
             "args": list(args) if args else [],
         }
+
+        if environment:
+            payload["environment"] = {
+                str(key): str(value) for key, value in environment.items()
+            }
 
     except Exception:
 
@@ -16323,7 +16328,16 @@ def runitem(path):
     try:
 
         # run via operations server (foreground)
-        pid = opsrun(prog, arguments, name, None, user, "front", await_window=True)
+        pid = opsrun(
+            prog,
+            arguments,
+            name,
+            None,
+            user,
+            "front",
+            await_window=not ispython,
+            environment={'BRICK_WINDOW': '0'} if ispython else None,
+        )
 
         if pid is None:
             return
@@ -16869,13 +16883,14 @@ def graphicsdiagnostic():
 
         try:
 
-            state["opsrun"] = lambda path, args, name, logpath, user, mode, await_window=False: associationcalls.append({
+            state["opsrun"] = lambda path, args, name, logpath, user, mode, await_window=False, environment=None: associationcalls.append({
                 "path": path,
                 "args": list(args),
                 "name": name,
                 "log": logpath,
                 "mode": mode,
                 "await_window": bool(await_window),
+                "environment": dict(environment or {}),
             }) or 700
             state["getusername"] = lambda: "master"
             audiopath = "/master/music/diagnostic track with spaces.flac"
@@ -16892,6 +16907,7 @@ def graphicsdiagnostic():
                 or associationcalls[0].get("log") is not None
                 or associationcalls[0].get("mode") != "front"
                 or not associationcalls[0].get("await_window")
+                or associationcalls[0].get("environment")
             ):
 
                 raise RuntimeError(
@@ -16915,6 +16931,7 @@ def graphicsdiagnostic():
                 or associationcalls[0].get("log") is not None
                 or associationcalls[0].get("mode") != "front"
                 or not associationcalls[0].get("await_window")
+                or associationcalls[0].get("environment")
             ):
 
                 raise RuntimeError("Array video double-click association is invalid")
@@ -16931,7 +16948,8 @@ def graphicsdiagnostic():
                 or associationcalls[0].get("name") != "diagnostic script with spaces"
                 or associationcalls[0].get("log") is not None
                 or associationcalls[0].get("mode") != "front"
-                or not associationcalls[0].get("await_window")
+                or associationcalls[0].get("await_window")
+                or associationcalls[0].get("environment") != {"BRICK_WINDOW": "0"}
             ):
 
                 raise RuntimeError("Array Python association did not use confined Brick")

@@ -384,7 +384,7 @@ foreach ($requiredText in @(
     'NVIDIAPRESENTATIONVARIABLE = "T1OS_CHROMIUM_NVIDIA_PRESENTATION"',
     'def nvidiapresentationenabled():',
     '"t1os.chromium.nvidia-presentation=0"',
-    'and nvidiapresentationenabled()',
+    'if nvidiapresentationenabled() and graphicsrendernode:',
     'MEDIADECODESOCKETSWITCH = "--t1os-video-decode-socket="',
     'MEDIADECODEOUTPUTVARIABLE = "T1OS_MEDIA_DECODE_OUTPUT"',
     'MEDIADECODEOUTPUTSWITCH = "--t1os-video-decode-output="',
@@ -625,7 +625,10 @@ foreach ($requiredText in @(
     '#define T1OS_CHROMIUM_ENGINE_ID 1000',
     '"/the one/catalogue/graphics/nvidia:"',
     '"/the one/catalogue/graphics"',
-    'child_process_type(argc, argv)',
+    'strcmp(argv[1], T1OS_CHROMIUM_BINARY) != 0',
+    'chrome_arguments = argv + 1',
+    'child_process_type(argc - 1, chrome_arguments)',
+    'strcmp(process_type, "gpu-process") != 0',
     'loader_environment_valid()',
     'unprivileged_identity_valid()',
     'parent_is_chromium(&parent_kind, &parent_rejection)',
@@ -643,14 +646,26 @@ foreach ($requiredText in @(
     'getenv(T1OS_CHROMIUM_GPU_LIBRARY_VARIABLE)',
     'setenv("__EGL_VENDOR_LIBRARY_FILENAMES"',
     'setenv("GBM_BACKENDS_PATH"',
+    'setenv(T1OS_CHROMIUM_MESA_GPU_VARIABLE, "1", 1)',
+    'unsetenv("LIBGL_DRIVERS_PATH")',
     'unsetenv(T1OS_CHROMIUM_GPU_EGL_VENDOR_VARIABLE)',
     'launch_id_valid(launch_id)',
     'setenv("LD_PRELOAD", path_provider, 1)',
     'setenv("LD_LIBRARY_PATH", library_path, 1)',
-    'execve(T1OS_CHROMIUM_BINARY, argv, environ)'
+    'execve(T1OS_CHROMIUM_BINARY, chrome_arguments, environ)'
 )) {
     if (-not $chromiumSubprocessSourceText.Contains($requiredText)) {
         throw "Chromium subprocess bootstrap is missing its confinement behavior: $requiredText"
+    }
+}
+foreach ($providerNeedle in @(
+    'T1OS_CHROMIUM_MESA_GPU_VARIABLE',
+    'mesa_gpu_path_maps',
+    '"/usr/lib/x86_64-linux-gnu/gbm"',
+    '"/the one/catalogue/graphics/gbm"'
+)) {
+    if (-not $chromiumProviderSourceText.Contains($providerNeedle)) {
+        throw "Chromium path provider is missing its GPU-only Mesa GBM route: $providerNeedle"
     }
 }
 foreach ($publicDriveRoot in @(
@@ -855,6 +870,16 @@ foreach ($retiredPresentationNeedle in @(
 if ($chromiumServerText.Contains('runtool("xrandr"')) {
     throw 'Chromium still attempts to shrink the fixed maximum-size Xvfb screen with xrandr.'
 }
+foreach ($gpuOnlyChromiumNeedle in @(
+    'DIRECTBUFFERSTATE = "gpu-pending"',
+    'DIRECTBUFFERSTATE in ("gpu-pending", "gpu")',
+    'except subprocess.TimeoutExpired:',
+    'Chromium GPU presentation authorization could not be queued'
+)) {
+    if (-not $chromiumServerText.Contains($gpuOnlyChromiumNeedle)) {
+        throw "Chromium GPU-only startup lifecycle is missing: $gpuOnlyChromiumNeedle"
+    }
+}
 foreach ($forbiddenPerEventProcess in @(
     'xdotool(["mousemove"',
     'xdotool([verb, str(button)])',
@@ -877,12 +902,14 @@ foreach ($forbiddenSwitch in @(
 }
 foreach ($subprocessNeedle in @(
     'SUBPROCESSEXECUTABLE = TOOLS + "/t1os-chrome-subprocess"',
-    '"--browser-subprocess-path=" + SUBPROCESSEXECUTABLE',
+    '"--browser-subprocess-path=" + CHROMEEXECUTABLE',
+    '"--gpu-launcher=" + SUBPROCESSEXECUTABLE',
     'NVIDIADIRECTVAAPIQUARANTINED = True',
     '"--disable-accelerated-video-decode"',
     'chrome_environment["SANDBOX_LD_PRELOAD"]',
     'chrome_environment["SANDBOX_LD_LIBRARY_PATH"]',
-    'runtime_status.get("utility_runtime_ready")',
+    'gpu_contract_failed = bool(',
+    'not runtime_status.get("gpu_runtime_ready")',
     'status["utility_provider"] or provider'
 )) {
     if (-not $chromiumServerText.Contains($subprocessNeedle)) {

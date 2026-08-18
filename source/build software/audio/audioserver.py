@@ -1572,7 +1572,19 @@ def clamp(x, a, b):
 
 def mastergainmultiplier(gain):
 
-    return clamp(float(gain), 0.0, 1.0)
+    return calibratedmastergain(gain)
+
+
+def calibratedmastergain(gain):
+
+    """Map the desktop volume control onto the useful hardware range."""
+
+    value = clamp(float(gain), 0.0, 1.0)
+
+    if value <= 0.28:
+        return value * 0.90 / 0.28
+
+    return 0.90 + ((value - 0.28) * 0.10 / 0.72)
 
 
 # device functions

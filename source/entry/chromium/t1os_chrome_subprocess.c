@@ -15,6 +15,9 @@
 #define T1OS_CHROMIUM_LIBRARY_PATH_BASE \
 	"/the one/software/chromium/libraries:" \
 	"/the one/catalogue/graphics"
+#define T1OS_CHROMIUM_LIBRARY_PATH_MESA \
+	"/the one/catalogue/graphics:" \
+	"/the one/software/chromium/libraries"
 #define T1OS_CHROMIUM_LIBRARY_PATH_NVIDIA \
 	"/the one/catalogue/graphics/nvidia:" \
 	"/the one/catalogue/graphics:" \
@@ -34,6 +37,10 @@
 #define T1OS_CHROMIUM_NVIDIA_GBM_PATH \
 	"/the one/catalogue/graphics/nvidia/gbm"
 #define T1OS_CHROMIUM_NVIDIA_GBM_BACKEND "nvidia-drm"
+#define T1OS_CHROMIUM_MESA_GBM_PATH \
+	"/the one/catalogue/graphics/gbm"
+#define T1OS_CHROMIUM_PRESENTATION_VARIABLE "T1OS_PRESENTATION_BRIDGE"
+#define T1OS_CHROMIUM_MESA_GPU_VARIABLE "T1OS_CHROMIUM_MESA_GPU"
 #define T1OS_CHROMIUM_LAUNCH_VARIABLE "T1OS_CHROMIUM_LAUNCH_ID"
 #define T1OS_CHROMIUM_PROCESS_ROOT "/the one/drivers/processes"
 #define T1OS_CHROMIUM_ENGINE_ID 1000
@@ -106,7 +113,10 @@ static int loader_environment_valid(void)
 			   "LD_PRELOAD=" T1OS_CHROMIUM_PATH_PROVIDER) != 0 &&
 		    strcmp(entry,
 			   "LD_LIBRARY_PATH="
-			   T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0)
+			   T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0 &&
+		    strcmp(entry,
+			   "LD_LIBRARY_PATH="
+			   T1OS_CHROMIUM_LIBRARY_PATH_MESA) != 0)
 			return 0;
 		if (strncmp(entry, "SANDBOX_LD_", 11) == 0 &&
 		    strcmp(entry,
@@ -114,7 +124,10 @@ static int loader_environment_valid(void)
 			   T1OS_CHROMIUM_PATH_PROVIDER) != 0 &&
 		    strcmp(entry,
 			   "SANDBOX_LD_LIBRARY_PATH="
-			   T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0)
+			   T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0 &&
+		    strcmp(entry,
+			   "SANDBOX_LD_LIBRARY_PATH="
+			   T1OS_CHROMIUM_LIBRARY_PATH_MESA) != 0)
 			return 0;
 		if (strncmp(entry, T1OS_CHROMIUM_GPU_LIBRARY_VARIABLE "=",
 			    strlen(T1OS_CHROMIUM_GPU_LIBRARY_VARIABLE "=")) == 0 &&
@@ -148,7 +161,9 @@ static int loader_environment_valid(void)
 			return 0;
 		if (strncmp(entry, "__EGL_VENDOR_LIBRARY_FILENAMES=", 31) == 0 ||
 		    strncmp(entry, "__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS=", 36) == 0 ||
-		    strncmp(entry, "GBM_BACKENDS_PATH=", 18) == 0 ||
+		    (strncmp(entry, "GBM_BACKENDS_PATH=", 18) == 0 &&
+		     strcmp(entry, "GBM_BACKENDS_PATH="
+			    T1OS_CHROMIUM_MESA_GBM_PATH) != 0) ||
 		    strncmp(entry, "GBM_BACKEND=", 12) == 0)
 			return 0;
 		if (strncmp(entry, "GCONV_PATH=", 11) == 0 ||
@@ -183,6 +198,7 @@ static int parent_is_chromium(const char **parent_kind,
 			      const char **rejection_reason)
 {
 	char command[16384];
+	char domain[64];
 	char executable[PATH_MAX];
 	char process_path[PATH_MAX];
 	char extra;
@@ -203,15 +219,43 @@ static int parent_is_chromium(const char **parent_kind,
 		return 0;
 	length = readlink(process_path, executable, sizeof(executable) - 1);
 	if (length <= 0 || length >= (ssize_t)sizeof(executable)) {
-		if (rejection_reason)
-			*rejection_reason = "executable-read";
-		return 0;
-	}
-	executable[length] = '\0';
-	if (strcmp(executable, T1OS_CHROMIUM_BINARY) != 0) {
-		if (rejection_reason)
-			*rejection_reason = "executable-mismatch";
-		return 0;
+		/* Chrome deliberately becomes non-dumpable after sandbox setup, so
+		 * procfs may hide its executable link from the same uid.  T1OS's LSM
+		 * label is immutable and descriptor-assigned; use that kernel identity
+		 * as the fail-closed fallback, then retain the command-line shape check
+		 * below to distinguish the browser and its one valid zygote parent. */
+		written = snprintf(process_path, sizeof(process_path),
+				   "%s/%ld/attr/current",
+				   T1OS_CHROMIUM_PROCESS_ROOT, (long)getppid());
+		if (written < 0 || written >= (int)sizeof(process_path))
+			return 0;
+		descriptor = open(process_path,
+				  O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+		if (descriptor < 0) {
+			if (rejection_reason)
+				*rejection_reason = "domain-open";
+			return 0;
+		}
+		length = read(descriptor, domain, sizeof(domain) - 1);
+		if (close(descriptor) != 0 || length <= 0 ||
+		    length >= (ssize_t)sizeof(domain)) {
+			if (rejection_reason)
+				*rejection_reason = "domain-read";
+			return 0;
+		}
+		domain[length] = '\0';
+		if (strcmp(domain, "t1os:chromium\n") != 0) {
+			if (rejection_reason)
+				*rejection_reason = "domain-mismatch";
+			return 0;
+		}
+	} else {
+		executable[length] = '\0';
+		if (strcmp(executable, T1OS_CHROMIUM_BINARY) != 0) {
+			if (rejection_reason)
+				*rejection_reason = "executable-mismatch";
+			return 0;
+		}
 	}
 
 	written = snprintf(process_path, sizeof(process_path), "%s/%ld/cmdline",
@@ -302,19 +346,17 @@ static int parent_is_chromium(const char **parent_kind,
 }
 
 /*
- * Chromium's direct subprocess path uses this helper for unprivileged GPU and
- * utility children. The independent SUID-zygote path restores unsafe loader
- * variables inside chrome-sandbox after dropping root. Validate the browser's
- * matching saved values, its exact parent identity, and the child boundary
- * here, then immediately replace this process with the measured Chrome
- * executable. Only a GPU child may select the NVIDIA-specific loader path.
- *
- * Keep argv[0] unchanged. Chromium uses the configured subprocess path for
- * direct utility launches, while the kernel executable identity continues to
- * identify the real Chrome image after execve().
+ * Chromium's GPU-only launcher prepends this helper to the normal Chrome GPU
+ * command line. The independent SUID zygotes continue to launch renderers and
+ * utilities, so their Mojo bootstrap and private dependency closure are not
+ * disturbed. Validate the browser's saved loader values, exact parent
+ * identity, and the wrapped Chrome executable, then immediately enter that
+ * measured executable with its original argument vector. The process still
+ * applies Chromium's kGpu sandbox after startup.
  */
 int main(int argc, char **argv)
 {
+	char **chrome_arguments;
 	char working_directory[PATH_MAX] = "(unavailable)";
 	const char *launch_id;
 	const char *gpu_egl_external;
@@ -329,9 +371,10 @@ int main(int argc, char **argv)
 	const char *path_provider;
 	const char *process_type;
 	int gpu_contract_fields;
+	int use_mesa_gpu;
 	int use_nvidia_gpu;
 
-	if (argc < 1 || !argv || !argv[0]) {
+	if (argc < 2 || !argv || !argv[0] || !argv[1]) {
 		fputs("t1os-chrome-subprocess: invalid argument vector\n", stderr);
 		return 126;
 	}
@@ -340,8 +383,14 @@ int main(int argc, char **argv)
 		strcpy(working_directory, "(unavailable)");
 	if (argc == 2 && strcmp(argv[1], "--t1os-sandbox-probe") == 0)
 		return 0;
-	process_type = child_process_type(argc, argv);
-	if (!process_type) {
+	if (strcmp(argv[1], T1OS_CHROMIUM_BINARY) != 0) {
+		fputs("t1os-chrome-subprocess: invalid wrapped executable\n",
+		      stderr);
+		return 126;
+	}
+	chrome_arguments = argv + 1;
+	process_type = child_process_type(argc - 1, chrome_arguments);
+	if (!process_type || strcmp(process_type, "gpu-process") != 0) {
 		fputs("t1os-chrome-subprocess: invalid child process type\n",
 		      stderr);
 		return 126;
@@ -380,7 +429,8 @@ int main(int argc, char **argv)
 		return 126;
 	}
 	if (!saved_library_path ||
-	    strcmp(saved_library_path, T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0) {
+	    (strcmp(saved_library_path, T1OS_CHROMIUM_LIBRARY_PATH_BASE) != 0 &&
+	     strcmp(saved_library_path, T1OS_CHROMIUM_LIBRARY_PATH_MESA) != 0)) {
 		fputs("t1os-chrome-subprocess: invalid saved library path\n",
 		      stderr);
 		return 126;
@@ -405,9 +455,19 @@ int main(int argc, char **argv)
 	}
 	use_nvidia_gpu = strcmp(process_type, "gpu-process") == 0 &&
 		gpu_contract_fields == 5;
+	/*
+	 * This wrapper accepts only the GPU process. A complete saved vendor
+	 * contract selects NVIDIA; the only other valid GPU contract is the
+	 * canonical T1OS Mesa catalogue. Do not depend on the browser retaining an
+	 * unrelated presentation environment variable after its startup scrub.
+	 */
+	use_mesa_gpu = strcmp(process_type, "gpu-process") == 0 &&
+		gpu_contract_fields == 0;
 	library_path = saved_library_path;
 	if (use_nvidia_gpu)
 		library_path = T1OS_CHROMIUM_LIBRARY_PATH_NVIDIA;
+	else if (use_mesa_gpu)
+		library_path = T1OS_CHROMIUM_LIBRARY_PATH_MESA;
 
 	fprintf(stderr,
 		"t1os-chrome-subprocess: entered uid=%ld euid=%ld cwd=%s "
@@ -416,7 +476,9 @@ int main(int argc, char **argv)
 		(long)getuid(), (long)geteuid(), working_directory,
 		access(T1OS_CHROMIUM_BINARY, F_OK) == 0 ? "yes" : "no",
 		strcmp(library_path, T1OS_CHROMIUM_LIBRARY_PATH_NVIDIA) == 0 ?
-			"nvidia-gpu" : "base",
+			"nvidia-gpu" :
+			(strcmp(library_path, T1OS_CHROMIUM_LIBRARY_PATH_MESA) == 0 ?
+			 "mesa" : "base"),
 		access(T1OS_CHROMIUM_PROCESS_ROOT "/self/fd", F_OK) == 0 ?
 			"yes" : "no",
 		parent_kind,
@@ -446,11 +508,22 @@ int main(int argc, char **argv)
 			strerror(errno));
 		return 126;
 	}
-	if (!use_nvidia_gpu &&
+	if (use_mesa_gpu &&
+	    (setenv("GBM_BACKENDS_PATH", T1OS_CHROMIUM_MESA_GBM_PATH, 1) != 0 ||
+	     setenv(T1OS_CHROMIUM_MESA_GPU_VARIABLE, "1", 1) != 0 ||
+	     unsetenv("GBM_BACKEND") != 0 ||
+	     unsetenv("LIBGL_DRIVERS_PATH") != 0)) {
+		fprintf(stderr,
+			"t1os-chrome-subprocess: could not install Mesa GBM contract: %s\n",
+			strerror(errno));
+		return 126;
+	}
+	if (!use_nvidia_gpu && !use_mesa_gpu &&
 	    (unsetenv("__EGL_VENDOR_LIBRARY_FILENAMES") != 0 ||
 	     unsetenv("__EGL_EXTERNAL_PLATFORM_CONFIG_DIRS") != 0 ||
 	     unsetenv("GBM_BACKENDS_PATH") != 0 ||
-	     unsetenv("GBM_BACKEND") != 0)) {
+	     unsetenv("GBM_BACKEND") != 0 ||
+	     unsetenv(T1OS_CHROMIUM_MESA_GPU_VARIABLE) != 0)) {
 		fprintf(stderr,
 			"t1os-chrome-subprocess: could not clear GPU graphics environment: %s\n",
 			strerror(errno));
@@ -472,7 +545,7 @@ int main(int argc, char **argv)
 		return 126;
 	}
 
-	execve(T1OS_CHROMIUM_BINARY, argv, environ);
+	execve(T1OS_CHROMIUM_BINARY, chrome_arguments, environ);
 	fprintf(stderr, "t1os-chrome-subprocess: execve failed: %s\n",
 		strerror(errno));
 	return 127;

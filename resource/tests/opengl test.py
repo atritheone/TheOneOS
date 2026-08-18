@@ -32,9 +32,10 @@ from graphics.graphics import managedanimate, managednode, managedrectangle, man
 
 # paths
 WINDOWSOCK = "/.ephemeral/windowserver/accept.sock"
-WINDOWPATH = "/software/opengl test.py"
+WINDOWPATH = os.path.abspath(__file__)
 IMAGEBASE = "/.ephemeral/opengl-test"
 IMAGEPATH = os.path.join(IMAGEBASE, "image.raw")
+STATUSPATH = os.path.join(IMAGEBASE, "status.json")
 FONTFILE = "/the one/resources/fonts/atkinsonhyperlegiblenext.ttf"
 
 # window
@@ -202,9 +203,34 @@ def pumpsocket(timeout=SOCKETPOLLINTERVAL):
 
 
 ## image functions
+def writestatus(stage, **detail):
+
+    try:
+        os.makedirs(IMAGEBASE, exist_ok=True)
+        os.chmod(IMAGEBASE, 0o711)
+        payload = {
+            "format": 1,
+            "pid": os.getpid(),
+            "stage": str(stage),
+            "window_id": int(WINID) if WINID is not None else None,
+            "active": bool(GRAPHICSSTATE.get("active")),
+            "available": bool(GRAPHICSSTATE.get("available")),
+            "pending": bool(GRAPHICSSTATE.get("pending")),
+            "failure": str(GRAPHICSSTATE.get("failure") or GRAPHICSERROR),
+        }
+        payload.update(detail)
+        with open(STATUSPATH, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+        os.chmod(STATUSPATH, 0o604)
+    except Exception:
+        pass
+
+
 def createimage():
 
     os.makedirs(IMAGEBASE, exist_ok=True)
+    os.chmod(IMAGEBASE, 0o711)
     width = 64
     height = 64
 
@@ -219,6 +245,12 @@ def createimage():
                 green = 70 + int(130 * y / max(1, height - 1))
                 blue = 225 if tile else 90
                 output.write(bytes((blue, green, red, 255)))
+
+    # WindowServer validates and imports this file in its own process.  The
+    # directory must therefore be traversable and the immutable surface must
+    # be readable without making the application's scratch area writable.
+    os.chmod(IMAGEPATH, 0o604)
+    writestatus("image-ready", image_bytes=os.path.getsize(IMAGEPATH))
 
 
 def removeimage():
@@ -776,38 +808,25 @@ def submitscene():
         SCENEDIRTY = False
         SCENEDAMAGE = []
         managedsubmit(GRAPHICSSTATE, sendmessage, int(WINID), commands)
+        writestatus("scene-submitted", commands=len(commands))
         return bool(GRAPHICSSTATE.get("available"))
 
     except Exception as error:
 
         GRAPHICSERROR = str(error)
         manageddisable(GRAPHICSSTATE, GRAPHICSERROR)
+        writestatus("scene-build-failed", error=GRAPHICSERROR)
         sendmessage({"op": "GRAPHICS_CLEAR", "winid": int(WINID)})
-        renderfallback(GRAPHICSERROR)
         return False
 
 
 
 ## fallback functions
 def renderfallback(reason="managed OpenGL is unavailable"):
-
-    if not WINBUFFER:
-        return
-
-    try:
-
-        clear(BACKGROUND)
-        fillrectfast(20, 20, max(1, int(WINW) - 40), 54, PANEL)
-        drawtextttf(34, 31, WINDOWTITLE, TEXT, 24, fontpath=FONTFILE)
-        drawtextttf(34, 105, "The public GPU compositor is unavailable.", ORANGE, 18, fontpath=FONTFILE)
-        drawtextttf(34, 140, str(reason)[:160], MUTED, 15, fontpath=FONTFILE)
-        drawtextttf(34, 185, "This shared-buffer frame confirms the required CPU fallback path.", TEXT, 15, fontpath=FONTFILE)
-        present()
-        sendmessage({"op": "DAMAGE", "winid": int(WINID), "rect": [0, 0, int(WINW), int(WINH)]})
-
-    except Exception:
-
-        pass
+    # The OpenGL capability test is GPU-only.  A rejected retained scene must
+    # fail closed; drawing a shared-buffer explanation would itself violate
+    # the graphics contract it is intended to test.
+    return False
 
 
 
@@ -1088,25 +1107,21 @@ def handlemessage(message):
         WINBUFFER = str(message.get("buffer", ""))
         WINW = max(1, int(message.get("w", WINDOWWIDTH)))
         WINH = max(1, int(message.get("h", WINDOWHEIGHT)))
-
-        try:
-
-            initbuffer(WINBUFFER, WINW, WINH)
-            renderfallback("preparing managed OpenGL scene")
-
-        except Exception as error:
-
-            GRAPHICSERROR = str(error)
-            manageddisable(GRAPHICSSTATE, GRAPHICSERROR)
+        writestatus("window-created")
 
         if GRAPHICSSTATE.get("available"):
 
             invalidatescene()
             submitscene()
+            # Commit acknowledgements are deliberately tied to a real DRM
+            # presentation.  Mapping only after GRAPHICS_COMMITTED deadlocks:
+            # an unmapped window cannot be presented, so its receipt cannot be
+            # released.  Map the already managed-only scene now; no shared
+            # buffer is exposed while the first GPU frame is pending.
+            mapwindow()
 
         else:
 
-            renderfallback(GRAPHICSSTATE.get("failure", GRAPHICSERROR))
             mapwindow()
 
         return
@@ -1117,6 +1132,12 @@ def handlemessage(message):
 
         if operation == "GRAPHICS_COMMITTED":
 
+            writestatus(
+                "scene-committed",
+                generation=int(message.get("generation", 0) or 0),
+                accelerated=message.get("accelerated") is True,
+                managed_only=message.get("managed_only") is True,
+            )
             mapwindow()
 
         return
@@ -1155,6 +1176,7 @@ def handlemessage(message):
 
             managedresponse(GRAPHICSSTATE, message)
             GRAPHICSERROR = str(GRAPHICSSTATE.get("failure", message.get("detail", code)))
+            writestatus("scene-rejected", code=code, error=GRAPHICSERROR)
             renderfallback(GRAPHICSERROR)
             mapwindow()
 
@@ -1348,6 +1370,7 @@ def cleanup():
 
 def main():
 
+    writestatus("starting")
     createimage()
     connectwindowserver()
     deadline = time.monotonic() + 8.0
@@ -1376,6 +1399,11 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
 
         pass
+
+    except Exception as error:
+
+        writestatus("fatal", error=str(error))
+        raise
 
     finally:
 

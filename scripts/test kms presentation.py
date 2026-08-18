@@ -201,6 +201,7 @@ def validateacceleratedcontentproof(source):
     namespace = {
         "os": os,
         "stat": __import__("stat"),
+        "backendinfo": lambda: {"renderer": "NVK", "drm_driver": "nouveau"},
     }
     loadsourcefunctions(
         source,
@@ -208,6 +209,7 @@ def validateacceleratedcontentproof(source):
             "windowbufferdimensions",
             "windowbuffercontentproof",
             "gpuwindowdynamicvideo",
+            "gpuwindowretainedsceneallowed",
             "gpuwindowretainedsystem",
             "managedcontentproof",
             "acceleratedcontentproof",
@@ -617,6 +619,47 @@ def main():
             "planes": [{"object": 0, "offset": 0, "pitch": 40}],
         }],
     }
+    packedvideo = {
+        "width": 380,
+        "height": 214,
+        "format": "drm_prime",
+        "export_mode": "composed",
+        "objects": [{"size": 129024, "modifier": 0}],
+        "layers": [{
+            "width": 380,
+            "height": 214,
+            "fourcc": graphics.DRM_FORMAT_NV12,
+            "planes": [
+                {"object": 0, "offset": 0, "pitch": 384},
+                {"object": 0, "offset": 86016, "pitch": 384},
+            ],
+        }],
+    }
+    originaldriver = graphics._drmdriver
+
+    try:
+        graphics._drmdriver = "vmwgfx"
+        normalizedvideo = graphics._gpuvideonormalizedescriptor(packedvideo)
+
+        if (
+            normalizedvideo.get("export_mode") != "vmwgfx-planar-views"
+            or normalizedvideo.get("source_export_mode") != "composed"
+            or len(normalizedvideo.get("layers", [])) != 2
+            or normalizedvideo["layers"][0].get("fourcc") != graphics.DRM_FORMAT_R8
+            or normalizedvideo["layers"][1].get("fourcc") != graphics.DRM_FORMAT_GR88
+            or normalizedvideo["layers"][0].get("planes", [{}])[0].get("offset") != 0
+            or normalizedvideo["layers"][1].get("planes", [{}])[0].get("offset") != 86016
+            or normalizedvideo["layers"][1].get("width") != 190
+            or normalizedvideo["layers"][1].get("height") != 107
+        ):
+            raise SystemExit("VMSVGA packed NV12 was not split into bounded GPU plane views")
+
+        graphics._drmdriver = "nouveau"
+
+        if graphics._gpuvideonormalizedescriptor(packedvideo).get("layers") != packedvideo["layers"]:
+            raise SystemExit("VMSVGA video normalization escaped the vmwgfx backend")
+    finally:
+        graphics._drmdriver = originaldriver
     if (
         graphics._gpuvideosurfaceverticalcoordinates({}) != (0.0, 1.0)
         or graphics._gpuvideosurfaceverticalcoordinates({
@@ -4709,10 +4752,11 @@ def main():
         "graphics bounded glyph prewarm skipped for NVK",
         "def gpustartupworkloadgate(",
         "graphics startup representative GPU workload complete",
+        "def gpuwindowretainedsceneallowed(",
         "def gpuwindowretainedsystem(",
         "def gpuprewarmretainedsystemtexts(",
         "graphics retained system glyph uploads complete",
-        'if not bool(win.get("_managed_only", False)):',
+        'not bool(win.get("_managed_only", False))',
         "graphics system scene committed",
         "graphics startup compositor waiting for first mapped scene",
         "graphics first GPU frame begin",

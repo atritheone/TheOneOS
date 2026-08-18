@@ -34,10 +34,10 @@ $mediaBuildMarker = (
     'protocol_sha256=' +
     '11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0;' +
     'source_sha256=' +
-    '597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e'
+    '102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705'
 )
 $protocolHeaderSha256 = '11a319c26e499415cf39a3b6b5c59c3801b2e91859500472b92c6be1fcaceba0'
-$sourceOverlaySha256 = '597ed8a32051a65e12a3582801369c8caa9dabcf8ef7e36720cfaf1be3919f4e'
+$sourceOverlaySha256 = '102cea1fe8eb1358493eb2889579ece701ead0edf917d5edcc276a2d23fc0705'
 $subprocessSource = Join-Path $projectRoot 'source\entry\chromium\t1os_chrome_subprocess.c'
 $subprocessLauncher = Join-Path $destination 'tools\t1os-chrome-subprocess'
 $inputSource = Join-Path $projectRoot 'source\entry\chromium\t1os_xinput.c'
@@ -54,6 +54,10 @@ $upstreamDirectTools = @(
 )
 $fontConfigurationSource = Join-Path $projectRoot 'source\entry\chromium\fonts.conf'
 $fontConfiguration = Join-Path $destination 'resources\fontconfig-configuration\fonts.conf'
+$gsettingsSchemaSource = Join-Path $projectRoot 'source\entry\chromium\org.t1os.chromium.runtime.gschema.xml'
+$gsettingsSchemaDirectory = Join-Path $destination 'resources\gsettings-schemas'
+$gsettingsSchema = Join-Path $gsettingsSchemaDirectory 'org.t1os.chromium.runtime.gschema.xml'
+$gsettingsCompiled = Join-Path $gsettingsSchemaDirectory 'gschemas.compiled'
 $providerSource = Join-Path $projectRoot 'source\entry\chromium\t1os_path_provider.c'
 $providerLibrary = Join-Path $destination 't1os-path-provider.so'
 $sandboxSourceRoot = Join-Path $projectRoot 'source\entry\chromium'
@@ -126,7 +130,7 @@ if (
 ) {
     throw 'Helpers-only mode requires an already packaged Chromium engine.'
 }
-foreach ($sourcePath in @($subprocessSource, $inputSource, $windowManagerSource, $fontConfigurationSource)) {
+foreach ($sourcePath in @($subprocessSource, $inputSource, $windowManagerSource, $fontConfigurationSource, $gsettingsSchemaSource)) {
     if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
         throw "Chromium helper source not found: $sourcePath"
     }
@@ -274,6 +278,13 @@ else {
 
 New-Item -ItemType Directory -Path (Split-Path -Path $fontConfiguration -Parent) -Force | Out-Null
 Copy-Item -LiteralPath $fontConfigurationSource -Destination $fontConfiguration -Force
+New-Item -ItemType Directory -Path $gsettingsSchemaDirectory -Force | Out-Null
+Copy-Item -LiteralPath $gsettingsSchemaSource -Destination $gsettingsSchema -Force
+$wslGsettingsSchemaDirectory = ConvertTo-WslPath -WindowsPath $gsettingsSchemaDirectory
+& wsl.exe -d Ubuntu --exec glib-compile-schemas --strict $wslGsettingsSchemaDirectory
+if ($LASTEXITCODE -ne 0) {
+    throw "Chromium private GSettings schema compilation failed (exit code $LASTEXITCODE)."
+}
 
 $wslSubprocessSource = ConvertTo-WslPath -WindowsPath $subprocessSource
 $wslSubprocessLauncher = ConvertTo-WslPath -WindowsPath $subprocessLauncher
@@ -432,7 +443,9 @@ $required = @(
     $subprocessLauncher,
     (Join-Path $destination 'libraries\ld-linux-x86-64.so.2'),
     $providerLibrary,
-    $fontConfiguration
+    $fontConfiguration,
+    $gsettingsSchema,
+    $gsettingsCompiled
 )
 foreach ($path in $required) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {

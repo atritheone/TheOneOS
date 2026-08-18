@@ -11,6 +11,7 @@ viewer is the image viewer and shared image surface API of The One OS.
 # imports
 import os
 import sys
+import stat
 import time
 import math
 import json
@@ -162,8 +163,11 @@ SURFACENEXT = 0
 # log functions
 def log(message):
 
-    # Persistent viewer logging is intentionally disabled.
-    return
+    # Operations owns the persistent descriptor for this confined process.
+    try:
+        print(f'{time.time():.6f} viewer {message}', file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 
@@ -367,7 +371,12 @@ def store(output, pixels):
             os.fsync(stream.fileno())
 
         os.replace(temporary, output)
-        os.chmod(output, 0o600)
+        # The decoded pixels remain writable only by the application.  The
+        # root-owned WindowServer has deliberately dropped DAC override, so it
+        # needs the read bit to import this ephemeral file as a GPU texture.
+        # All desktop applications already share the same session uid; this
+        # does not widen access beyond the existing session boundary.
+        os.chmod(output, 0o604)
 
     finally:
 
@@ -794,12 +803,21 @@ def statustext():
 # worker functions
 def makedir():
 
-    os.makedirs(VIEWROOT, mode=0o700, exist_ok=True)
+    viewparent = os.path.dirname(VIEWROOT)
+    os.makedirs(viewparent, mode=0o711, exist_ok=True)
+
+    if os.path.islink(viewparent):
+        raise ValueError('image surface parent directory cannot be a symbolic link')
+
+    os.chmod(viewparent, 0o711)
+    os.makedirs(VIEWROOT, mode=0o711, exist_ok=True)
 
     if os.path.islink(VIEWROOT):
         raise ValueError('image surface directory cannot be a symbolic link')
 
-    os.chmod(VIEWROOT, 0o700)
+    # Permit the capability-reduced WindowServer to traverse to managed image
+    # surfaces while keeping directory listing and mutation private.
+    os.chmod(VIEWROOT, 0o711)
 
 
 def bounds():
@@ -852,6 +870,10 @@ def startworker():
         )
         WORKEROUTPUT = output
         WORKERGEN = REQUESTGEN
+        log(
+            f'worker started pid={WORKER.pid} generation={WORKERGEN} '
+            f'source={SOURCE!r} output={output!r} size={width}x{height}'
+        )
         return True
 
     except Exception as error:
@@ -865,6 +887,7 @@ def workererror(error):
     global ERROR, LOADING, WORKER, WORKEROUTPUT, FINISHEDGEN
 
     ERROR = str(error)[:512]
+    log(f'worker failed generation={WORKERGEN} error={ERROR}')
     LOADING = False
     FINISHEDGEN = max(int(FINISHEDGEN), int(WORKERGEN), int(REQUESTGEN))
     WORKER = None
@@ -906,6 +929,10 @@ def pollworker():
     try:
 
         stdout, stderr = process.communicate()
+        log(
+            f'worker exited pid={process.pid} generation={generation} '
+            f'status={returncode} stderr={str(stderr).strip()[:512]!r}'
+        )
         payload = parse(returncode, stdout, stderr, output)
 
         if generation != REQUESTGEN:
@@ -1743,6 +1770,23 @@ def graphicsdiagnostic():
 
         if FINISHEDGEN != REQUESTGEN or ERROR or not IMAGE or not os.path.isfile(str(IMAGE.get('output', ''))):
             raise RuntimeError(f'viewer asynchronous worker did not complete {ERROR}')
+
+        surfacepath = str(IMAGE.get('output', ''))
+        parentmode = stat.S_IMODE(os.stat(os.path.dirname(VIEWROOT)).st_mode)
+        directorymode = stat.S_IMODE(os.stat(VIEWROOT).st_mode)
+        surfacemode = stat.S_IMODE(os.stat(surfacepath).st_mode)
+
+        if parentmode != 0o711 or directorymode != 0o711 or surfacemode != 0o604:
+            raise RuntimeError(
+                'viewer surface is not readable by the unprivileged WindowServer: '
+                f'{parentmode:04o}/{directorymode:04o}/{surfacemode:04o}'
+            )
+
+        result['checks']['surface_permissions'] = {
+            'parent': f'{parentmode:04o}',
+            'directory': f'{directorymode:04o}',
+            'file': f'{surfacemode:04o}',
+        }
 
         surfacecount = SURFACENEXT
 
