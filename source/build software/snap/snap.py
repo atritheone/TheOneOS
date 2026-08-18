@@ -52,7 +52,7 @@ else:
 
 # paths
 APPPATH = '/the one/build/snap/snap.py'
-APPICON = '/the one/resources/expanse/snap/snaplogo.png'
+APPICON = '/the one/resources/logos/snap/snaplogo.png'
 WINDOWSOCK = '/.ephemeral/windowserver/accept.sock'
 LOGFILE = '/the one/logs/snap.py.log'
 FONT = '/the one/resources/fonts/atkinsonhyperlegiblenext.ttf'

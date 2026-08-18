@@ -320,7 +320,7 @@ TTFOPAQUECACHELIMIT = 64 * 1024 * 1024
 
 # cursor
 CURSORS = {}
-CURSORBASE = "/the one/resources/graphics/mouse cursors"
+CURSORBASE = "/the one/resources/cursors"
 IMAGECATALOGUE = "/the one/catalogue/image"
 CURSORTIERS = [
     (1080, "1080"),

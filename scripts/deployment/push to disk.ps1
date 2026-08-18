@@ -421,7 +421,7 @@ $imageCatalogueFileCount = [int]$deploymentSourceState.roots.image_catalogue.fil
 $pythonSoftwareFileCount = @(Get-ChildItem -LiteralPath $pythonSoftwareSource -File -Recurse).Count
 $pythonCatalogueFileCount = @(Get-ChildItem -LiteralPath $pythonCatalogueSource -File -Recurse).Count
 $logoFileCount = @(Get-ChildItem -LiteralPath $logoSource -File -Recurse -Filter '*.png').Count
-Write-Host "Preparing to push $buildFileCount build file(s), $bootFileCount boot file(s), $driversFileCount driver runtime file(s), $graphicsCatalogueFileCount graphics catalogue file(s), $virtualBoxCatalogueFileCount VirtualBox catalogue file(s), $virtualBoxSoftwareFileCount VirtualBox software file(s), $virtualBoxSettingsFileCount VirtualBox settings file(s), $audioCatalogueFileCount audio catalogue file(s), $audioSoftwareFileCount audio software file(s), $networkCatalogueFileCount network catalogue file(s), $networkSoftwareFileCount network software file(s), $networkSettingsFileCount network setting file(s), $chromiumSoftwareFileCount Chromium runtime file(s), $imageCatalogueFileCount image catalogue file(s), $pythonSoftwareFileCount Python runtime file(s), $pythonCatalogueFileCount Python catalogue file(s), $logoFileCount Expanse logo file(s), and the runtime fonts..."
+Write-Host "Preparing to push $buildFileCount build file(s), $bootFileCount boot file(s), $driversFileCount driver runtime file(s), $graphicsCatalogueFileCount graphics catalogue file(s), $virtualBoxCatalogueFileCount VirtualBox catalogue file(s), $virtualBoxSoftwareFileCount VirtualBox software file(s), $virtualBoxSettingsFileCount VirtualBox settings file(s), $audioCatalogueFileCount audio catalogue file(s), $audioSoftwareFileCount audio software file(s), $networkCatalogueFileCount network catalogue file(s), $networkSoftwareFileCount network software file(s), $networkSettingsFileCount network setting file(s), $chromiumSoftwareFileCount Chromium runtime file(s), $imageCatalogueFileCount image catalogue file(s), $pythonSoftwareFileCount Python runtime file(s), $pythonCatalogueFileCount Python catalogue file(s), $logoFileCount logo file(s), and the runtime fonts..."
 
 $operationError = $null
 
@@ -477,7 +477,7 @@ try {
     Write-Host "Comparing image catalogue with $imageCatalogueDestination..."
     Write-Host "Comparing the managed Python runtime with $pythonSoftwareDestination..."
     Write-Host "Comparing the managed Python catalogue with $pythonCatalogueDestination..."
-    Write-Host "Comparing runtime fonts, Expanse artwork, and mouse cursors with /the one/resources..."
+    Write-Host "Comparing runtime fonts, logos, and mouse cursors with /the one/resources..."
 
     $copyCommand = @'
 set -eu
@@ -536,8 +536,8 @@ boot_policy_manifest=${52}
 selected_roots=${53}
 exhaustive_verify=${54}
 skip_chromium_engine=${55}
-expanse_resource_destination="$mount_point/the one/resources/expanse"
-cursor_resource_destination="$mount_point/the one/resources/graphics/mouse cursors"
+logo_resource_destination="$mount_point/the one/resources/logos"
+cursor_resource_destination="$mount_point/the one/resources/cursors"
 system_resource_destination="$mount_point/the one/resources/system"
 system_software_source="$build_source/../software/system"
 system_software_destination="$mount_point/the one/software/system"
@@ -748,8 +748,8 @@ root_map = {
     'python': ('the one/software/python', 'the one/catalogue/python'),
     'resources': (
         'the one/resources/fonts',
-        'the one/resources/expanse',
-        'the one/resources/graphics/mouse cursors',
+        'the one/resources/logos',
+        'the one/resources/cursors',
         'the one/resources/system',
     ),
 }
@@ -879,7 +879,7 @@ then
     make_tree_writable media_settings "$media_settings_destination"
     make_tree_writable chromium "$chromium_software_destination"
     make_tree_writable resources "$font_destination"
-    make_tree_writable resources "$expanse_resource_destination"
+    make_tree_writable resources "$logo_resource_destination"
     make_tree_writable resources "$cursor_resource_destination"
     make_tree_writable resources "$system_resource_destination"
     make_tree_writable resources "$system_software_destination"
@@ -965,8 +965,8 @@ fi
 
 mkdir -p \
     "$stage/resources/fonts" \
-    "$stage/resources/expanse" \
-    "$stage/resources/graphics/mouse cursors" \
+    "$stage/resources/logos" \
+    "$stage/resources/cursors" \
     "$stage/resources/system" \
     "$stage/resources/tests"
 
@@ -1019,25 +1019,25 @@ rsync \
     --include='*/' \
     --include='*.png' \
     --exclude='*' \
-    -- "$logo_source"/ "$stage/resources/expanse"/
+    -- "$logo_source"/ "$stage/resources/logos"/
 
-staged_logo_count=$(find "$stage/resources/expanse" -type f -name '*.png' | wc -l)
+staged_logo_count=$(find "$stage/resources/logos" -type f -name '*.png' | wc -l)
 if [ "$staged_logo_count" -ne "$logo_count" ]; then
     echo "Logo staging copied $staged_logo_count of $logo_count PNG files." >&2
     exit 1
 fi
 
-unexpected_expanse_resources=$(find "$stage/resources/expanse" -type f ! -name '*.png' -print)
-if [ -n "$unexpected_expanse_resources" ]; then
-    echo 'The staged Expanse resources contain non-PNG files:' >&2
-    printf '%s\n' "$unexpected_expanse_resources" >&2
+unexpected_logo_resources=$(find "$stage/resources/logos" -type f ! -name '*.png' -print)
+if [ -n "$unexpected_logo_resources" ]; then
+    echo 'The staged logo resources contain non-PNG files:' >&2
+    printf '%s\n' "$unexpected_logo_resources" >&2
     exit 1
 fi
 
 cursor_source="$resource_source/cursors/extra simple white original"
 stage_cursor() {
     filename=$1
-    destination="$stage/resources/graphics/mouse cursors"
+    destination="$stage/resources/cursors"
 
     if [ ! -f "$cursor_source/$filename" ] || [ -L "$cursor_source/$filename" ] || [ ! -s "$cursor_source/$filename" ]; then
         echo "Mouse cursor source is missing, empty, or symbolic: $filename" >&2
@@ -1170,7 +1170,7 @@ then
     virtualbox_catalogue_destination="$stage/empty-virtualbox-catalogue"
 fi
 
-mkdir -p "$build_destination" "$boot_destination" "$drivers_destination" "$graphics_catalogue_destination" "$virtualbox_catalogue_destination" "$virtualbox_software_destination" "$virtualbox_settings_destination" "$audio_catalogue_destination" "$audio_software_destination" "$network_catalogue_destination" "$network_software_destination" "$network_settings_destination" "$media_settings_destination" "$chromium_software_destination" "$image_catalogue_destination" "$python_software_destination" "$python_catalogue_destination" "$system_software_destination" "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination"
+mkdir -p "$build_destination" "$boot_destination" "$drivers_destination" "$graphics_catalogue_destination" "$virtualbox_catalogue_destination" "$virtualbox_software_destination" "$virtualbox_settings_destination" "$audio_catalogue_destination" "$audio_software_destination" "$network_catalogue_destination" "$network_software_destination" "$network_settings_destination" "$media_settings_destination" "$chromium_software_destination" "$image_catalogue_destination" "$python_software_destination" "$python_catalogue_destination" "$system_software_destination" "$font_destination" "$logo_resource_destination" "$cursor_resource_destination" "$system_resource_destination"
 
 # rsync archive mode is useful for storage.img, whose POSIX metadata is part of
 # the installed image. On the physical NTFS USB only content and topology are
@@ -2789,8 +2789,8 @@ if root_selected resources; then
     sync_file 'Fira Code bold font' "$stage/resources/fonts/firacodebold.ttf" "$font_destination/firacodebold.ttf"
     sync_file 'Fira Code semibold font' "$stage/resources/fonts/firacodesemibold.ttf" "$font_destination/firacodesemibold.ttf"
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
-    sync_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
-    sync_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    sync_resource_tree 'logo resources' "$stage/resources/logos" "$logo_resource_destination"
+    sync_resource_tree 'mouse cursor resources' "$stage/resources/cursors" "$cursor_resource_destination"
     sync_file 'OpenGL test' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
     sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
@@ -2886,8 +2886,12 @@ if [ "$exhaustive_verify" = True ]; then
         echo 'Fatal screen artwork verification found a remaining difference.' >&2
         exit 1
     }
-    verify_resource_tree 'Expanse resources' "$stage/resources/expanse" "$expanse_resource_destination"
-    verify_resource_tree 'mouse cursor resources' "$stage/resources/graphics/mouse cursors" "$cursor_resource_destination"
+    verify_resource_tree 'logo resources' "$stage/resources/logos" "$logo_resource_destination"
+    verify_resource_tree 'mouse cursor resources' "$stage/resources/cursors" "$cursor_resource_destination"
+    rm -rf -- \
+        "$mount_point/the one/resources/expanse" \
+        "$mount_point/the one/resources/graphics/mouse cursors"
+    rmdir -- "$mount_point/the one/resources/graphics" 2>/dev/null || true
     cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
     cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
     cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
@@ -2958,7 +2962,7 @@ find "$python_catalogue_destination" -type f | wc -l
 printf 'system software files on disk: '
 find "$system_software_destination" -type f | wc -l
 printf 'runtime resource files on disk: '
-find "$font_destination" "$expanse_resource_destination" "$cursor_resource_destination" "$system_resource_destination" -type f | wc -l
+find "$font_destination" "$logo_resource_destination" "$cursor_resource_destination" "$system_resource_destination" -type f | wc -l
 printf 'Atkinson Hyperlegible Next SHA-256: '
 sha256sum "$font_destination/atkinsonhyperlegiblenext.ttf" | awk '{print $1}'
 fi
@@ -3082,7 +3086,7 @@ fi
         -TargetIdentity $completedTargetIdentity `
         -FullVerification $fullTargetVerification `
         -PreviousState $previousDeploymentState
-    Write-Host 'Build software, boot files, the managed Python release, drivers, graphics, VirtualBox, audio, network, Chromium, media policy, image catalogue, managed settings, fonts, Expanse artwork, and mouse cursors were incrementally synchronised successfully.'
+    Write-Host 'Build software, boot files, the managed Python release, drivers, graphics, VirtualBox, audio, network, Chromium, media policy, image catalogue, managed settings, fonts, logos, and mouse cursors were incrementally synchronised successfully.'
 }
 catch {
     $operationError = $_

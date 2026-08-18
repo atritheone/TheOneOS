@@ -200,8 +200,8 @@ $managedRoots = @(
     'D:\the one\settings\network',
     'D:\the one\settings\media',
     'D:\the one\resources\fonts',
-    'D:\the one\resources\expanse',
-    'D:\the one\resources\graphics\mouse cursors',
+    'D:\the one\resources\logos',
+    'D:\the one\resources\cursors',
     'D:\the one\resources\system',
     $bootPath
 )

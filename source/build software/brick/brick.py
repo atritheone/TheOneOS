@@ -204,6 +204,11 @@ SHOWHIDDEN = False
 HEADLESS = False
 DRIVENUMBER = 1
 BRICKPATH = os.path.join(SOURCEBUILD, 'brick', 'brick.py')
+SETTINGSAPPPATH = os.path.join(SOURCEBUILD, 'settings', 'settings.py')
+RUNAPPLICATIONALIASES = {
+    'settings': SETTINGSAPPPATH,
+}
+RUNAPPLICATIONPATHS = frozenset(RUNAPPLICATIONALIASES.values())
 AUDIOAPIPATH = '/the one/build/audio/audio.py'
 PLAYBACKSTATUSPREFIX = 'T1OS_AUDIO_STATUS '
 MEDIAAPIPATH = '/the one/build/media/media.py'
@@ -6126,11 +6131,18 @@ def opsrun(path, args, name, log, user, mode):
 
         target = os.path.normpath(str(path))
 
+        if target in RUNAPPLICATIONPATHS:
+            payload = {
+                'op': 'LAUNCH_CATALOGUE',
+                'path': target,
+                'args': [str(value) for value in (args or [])],
+                'environment': {},
+            }
         # Python files outside the immutable application catalogue are data,
         # not executable identities. Ask Operations to launch the measured
         # Brick entry in its no-window runner mode instead of using the retired
         # arbitrary-path RUN protocol.
-        if target.lower().endswith('.py') and (
+        elif target.lower().endswith('.py') and (
             target == '/master' or target.startswith('/master/') or
             target == '/.ephemeral/volumes' or target.startswith('/.ephemeral/volumes/') or
             target == '/software' or target.startswith('/software/')
@@ -16681,13 +16693,14 @@ def run(args):
         return 1
 
     # define target and trailing args
-    prog = None
+    prog = RUNAPPLICATIONALIASES.get(str(args[0]).strip().casefold())
 
-    prog_args = []
+    prog_args = list(args[1:]) if prog else []
 
     probe_error = None
 
-    for i in range(len(args), 0, -1):
+    candidates = range(len(args), 0, -1) if prog is None else ()
+    for i in candidates:
 
         candidate = ' '.join(args[:i])
 
@@ -16739,7 +16752,9 @@ def run(args):
         guiprint(f'> could not run link: {error}', colour=ERRORCOLOUR)
         return
 
-    if str(prog).lower().endswith('.py') and not preparepythonmodules(prog):
+    iscatalogueapplication = prog in RUNAPPLICATIONPATHS
+    if (str(prog).lower().endswith('.py') and not iscatalogueapplication and
+            not preparepythonmodules(prog)):
         return 1
 
     try:
@@ -16787,6 +16802,21 @@ def run(args):
 
     # line above
     guiprint()
+
+    # Catalogue applications need their broker-owned security profile and
+    # session identity whether they were launched by Expanse or by Brick.
+    # They are graphical front applications, so do not attach them to Brick's
+    # pseudo-terminal or execute their protected entrypoints directly.
+    if iscatalogueapplication:
+        pid = opsrun(prog, prog_args, name, logpath, user, 'front')
+        if pid is None:
+            guiprint(f'> error running {prog}', colour=ERRORCOLOUR)
+            guiprint()
+            return 1
+        guiprint(f'> running {name}', colour=TEXTCOLOUR)
+        guiprint(f'> pid {pid} log {logpath}', colour=TEXTCOLOUR)
+        guiprint()
+        return 0
 
     # behind path
     if behind:
@@ -19164,26 +19194,26 @@ DIRECTIVESPECS = [
     makespec('replace', [], 'replace exact text in a file', ['replace "old" "new" <file>', 'replace "old" with "new" in <file>', 'replace all "old" "new" <file>', 'replace all "old" with "new" in <file>'], replace, grammar=makegrammar('file', connectors=['with', 'in'], terms=['all', 'with', 'in']), category='files'),
     makespec('check syntax', [], 'check Python syntax without running code', ['check syntax <file or tier>'], checksyntax, grammar=makegrammar('path', completion='path'), category='development'),
     makespec('check system', [], 'check critical T1OS state', ['check system'], checksystem, category='system'),
-    makespec('python status', [], 'show managed Python health', ['python status'], pythonstatus, category='python'),
-    makespec('check python', [], 'check Python and added modules', ['check python'], checkpython, category='python'),
-    makespec('check python modules', [], 'check added Python modules', ['check python modules'], checkpython, category='python'),
-    makespec('python history', [], 'show Python module changes', ['python history'], pythonhistory, category='python'),
-    makespec('list python modules', [], 'list installed Python modules', ['list python modules'], listpythonmodules, category='python'),
-    makespec('show python module', [], 'show an installed Python module', ['show python module <name>'], showpythonmodule, category='python'),
-    makespec('find python module', [], 'find compatible module versions', ['find python module <name>'], findpythonmodule, category='python'),
-    makespec('list python updates', [], 'list available module updates', ['list python updates'], listpythonupdates, category='python'),
-    makespec('install python module', [], 'install a Python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python', architect=True),
-    makespec('install python wheel', [], 'install a local Python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
-    makespec('remove python module', [], 'remove a Python module', ['remove python module <name>'], removepythonmodule, True, category='python', architect=True),
-    makespec('update python module', [], 'update one Python module', ['update python module <name>'], updatepythonmodule, True, category='python', architect=True),
-    makespec('update python modules', [], 'update added Python modules', ['update python modules'], updatepythonmodules, True, category='python', architect=True),
-    makespec('pin python module', [], 'hold a module version', ['pin python module <name>'], pinpythonmodule, True, category='python', architect=True),
-    makespec('unpin python module', [], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python', architect=True),
-    makespec('repair python modules', [], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python', architect=True),
-    makespec('restore python modules', [], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python', architect=True),
-    makespec('clear python cache', [], 'clear unused module downloads', ['clear python cache'], clearpythoncache, True, category='python', architect=True),
-    makespec('export python lock', [], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
-    makespec('apply python lock', [], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
+    makespec('python status', ['ps'], 'show managed Python health', ['python status'], pythonstatus, category='python'),
+    makespec('check python', ['cp'], 'check Python and added modules', ['check python'], checkpython, category='python'),
+    makespec('check python modules', ['cpm'], 'check added Python modules', ['check python modules'], checkpython, category='python'),
+    makespec('python history', ['ph'], 'show Python module changes', ['python history'], pythonhistory, category='python'),
+    makespec('list python modules', ['lpm'], 'list installed Python modules', ['list python modules'], listpythonmodules, category='python'),
+    makespec('show python module', ['spm'], 'show an installed Python module', ['show python module <name>'], showpythonmodule, category='python'),
+    makespec('find python module', ['fpm'], 'find compatible module versions', ['find python module <name>'], findpythonmodule, category='python'),
+    makespec('list python updates', ['lpu'], 'list available module updates', ['list python updates'], listpythonupdates, category='python'),
+    makespec('install python module', ['ipm'], 'install a Python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python', architect=True),
+    makespec('install python wheel', ['ipw'], 'install a local Python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
+    makespec('remove python module', ['rpm'], 'remove a Python module', ['remove python module <name>'], removepythonmodule, True, category='python', architect=True),
+    makespec('update python module', ['upm'], 'update one Python module', ['update python module <name>'], updatepythonmodule, True, category='python', architect=True),
+    makespec('update python modules', ['upms'], 'update added Python modules', ['update python modules'], updatepythonmodules, True, category='python', architect=True),
+    makespec('pin python module', ['ppm'], 'hold a module version', ['pin python module <name>'], pinpythonmodule, True, category='python', architect=True),
+    makespec('unpin python module', ['unpm'], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python', architect=True),
+    makespec('repair python modules', ['rprm'], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python', architect=True),
+    makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python', architect=True),
+    makespec('clear python cache', ['cpc'], 'clear unused module downloads', ['clear python cache'], clearpythoncache, True, category='python', architect=True),
+    makespec('export python lock', ['epl'], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
+    makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
     makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood']), category='development'),
     makespec('play', [], 'play an audio or video file', ['play <media file>'], play, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('view', [], 'view an image inline', ['view <image file>'], view, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
@@ -19790,6 +19820,45 @@ def diagnosticparsing():
 
         if len(names) != len(set(names)) or set(names) != set(DIRECTIVES):
             raise RuntimeError('directive catalogue and dispatch differ')
+
+        pythonspecs = [
+            spec for spec in DIRECTIVESPECS
+            if spec.get('category') == 'python'
+        ]
+
+        if len(pythonspecs) != 20:
+            raise RuntimeError('Python directive catalogue is incomplete')
+
+        pythonaliases = {
+            'python status': 'ps',
+            'check python': 'cp',
+            'check python modules': 'cpm',
+            'python history': 'ph',
+            'list python modules': 'lpm',
+            'show python module': 'spm',
+            'find python module': 'fpm',
+            'list python updates': 'lpu',
+            'install python module': 'ipm',
+            'install python wheel': 'ipw',
+            'remove python module': 'rpm',
+            'update python module': 'upm',
+            'update python modules': 'upms',
+            'pin python module': 'ppm',
+            'unpin python module': 'unpm',
+            'repair python modules': 'rprm',
+            'restore python modules': 'rspm',
+            'clear python cache': 'cpc',
+            'export python lock': 'epl',
+            'apply python lock': 'apl',
+        }
+
+        for spec in pythonspecs:
+            expectedalias = pythonaliases.get(str(spec.get('name', '')))
+            if expectedalias not in spec.get('aliases', []):
+                raise RuntimeError(
+                    f"Python directive alias missing for {spec.get('name', '')}")
+
+        result['checks']['python_aliases'] = True
 
         categories = [spec.get('category', '') for spec in DIRECTIVESPECS]
 

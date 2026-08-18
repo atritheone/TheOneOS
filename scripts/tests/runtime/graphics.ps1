@@ -36,14 +36,14 @@ function Invoke-GraphicsBaseline {
     $baselinePath = Join-Path $projectRoot 'development\graphics baseline.json'
     $catalogueSource = Join-Path $projectRoot 'source\catalogue\graphics'
     $fontSource = Join-Path $projectRoot 'resource\fonts'
-    $expanseResourceSource = Join-Path $projectRoot 'resource\logos'
+    $logoResourceSource = Join-Path $projectRoot 'resource\logos'
     $mountPoint = '/mnt/t1fs'
     $buildTarget = '/mnt/t1fs/the one/build'
     $bootTarget = '/mnt/t1fs/boot'
     $virtualBoxSoftwareTarget = '/mnt/t1fs/the one/software/virtualbox'
     $catalogueTarget = '/mnt/t1fs/the one/catalogue/graphics'
     $fontTarget = '/mnt/t1fs/the one/resources/fonts'
-    $expanseResourceTarget = '/mnt/t1fs/the one/resources/expanse'
+    $logoResourceTarget = '/mnt/t1fs/the one/resources/logos'
     $ephemeralTarget = '/mnt/t1fs/.ephemeral'
     $logsTarget = '/mnt/t1fs/the one/logs'
     $rubbishTarget = '/mnt/t1fs/.rubbish'
@@ -56,7 +56,7 @@ function Invoke-GraphicsBaseline {
     $virtualBoxSoftwareMounted = $false
     $catalogueMounted = $false
     $fontMounted = $false
-    $expanseResourceMounted = $false
+    $logoResourceMounted = $false
     $ephemeralMounted = $false
     $logsMounted = $false
     $rubbishMounted = $false
@@ -168,25 +168,25 @@ function Invoke-GraphicsBaseline {
         }
 
         if (-not $UseDeployed -and $Mode -eq 'expanse') {
-            Write-Host 'locating and binding the canonical Expanse PNG resources...'
+            Write-Host 'locating and binding the canonical logo resources...'
 
-            $wslExpanseResourceOutput = & wsl.exe --exec wslpath -a $expanseResourceSource
-            if ($LASTEXITCODE -ne 0 -or -not $wslExpanseResourceOutput) {
-                throw 'could not translate the Expanse PNG resource path for WSL.'
+            $wslLogoResourceOutput = & wsl.exe --exec wslpath -a $logoResourceSource
+            if ($LASTEXITCODE -ne 0 -or -not $wslLogoResourceOutput) {
+                throw 'could not translate the logo resource path for WSL.'
             }
 
-            $wslExpanseResourceSource = ([string]($wslExpanseResourceOutput | Select-Object -First 1)).Trim()
-            & wsl.exe -u root --exec nsenter -t 1 -m -- mkdir -p $expanseResourceTarget
+            $wslLogoResourceSource = ([string]($wslLogoResourceOutput | Select-Object -First 1)).Trim()
+            & wsl.exe -u root --exec nsenter -t 1 -m -- mkdir -p $logoResourceTarget
             if ($LASTEXITCODE -ne 0) {
-                throw 'could not create the Expanse PNG resource mount target.'
+                throw 'could not create the logo resource mount target.'
             }
 
-            & wsl.exe -u root --exec nsenter -t 1 -m -- mount --bind $wslExpanseResourceSource $expanseResourceTarget
+            & wsl.exe -u root --exec nsenter -t 1 -m -- mount --bind $wslLogoResourceSource $logoResourceTarget
             if ($LASTEXITCODE -ne 0) {
-                throw "Expanse PNG resource bind mount failed with exit code $LASTEXITCODE."
+                throw "Logo resource bind mount failed with exit code $LASTEXITCODE."
             }
 
-            $expanseResourceMounted = $true
+            $logoResourceMounted = $true
         }
 
         if (-not $UseDeployed -and $Mode -eq 'virtualbox-clipboard') {
@@ -353,12 +353,12 @@ function Invoke-GraphicsBaseline {
         $baselineExitCode = $LASTEXITCODE
     }
     finally {
-        if ($expanseResourceMounted) {
-            Write-Host 'unmounting the canonical Expanse PNG resources...'
+        if ($logoResourceMounted) {
+            Write-Host 'unmounting the canonical logo resources...'
 
-            & wsl.exe -u root --exec nsenter -t 1 -m -- umount $expanseResourceTarget
+            & wsl.exe -u root --exec nsenter -t 1 -m -- umount $logoResourceTarget
             if ($LASTEXITCODE -ne 0) {
-                throw "Expanse PNG resource bind unmount failed with exit code $LASTEXITCODE."
+                throw "Logo resource bind unmount failed with exit code $LASTEXITCODE."
             }
         }
 

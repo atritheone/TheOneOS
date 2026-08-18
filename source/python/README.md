@@ -107,6 +107,9 @@ check python modules
 clear python cache
 ```
 
+Every Python Brick directive also accepts a compact acronym alias, such as
+`ps`, `cp`, and `ipm requests`.
+
 T1OS does not install `pip`, `pip3`, or a `python -m pip` module. Commands added
 by installed wheels use one small locked native launcher, because Linux
 shebangs cannot represent the space in `/the one`; the launcher delegates to

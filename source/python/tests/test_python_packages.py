@@ -191,6 +191,61 @@ def main(argv):
             Path(manager_path).parent.parent / "operations" / "operationsserver.py"
         )
         brick_path = Path(manager_path).parent.parent / "brick" / "brick.py"
+        brick_source = brick_path.read_text(encoding="utf-8")
+        brick_tree = ast.parse(brick_source, filename=os.fspath(brick_path))
+        python_directives = {}
+        for node in ast.walk(brick_tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "makespec"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+            ):
+                continue
+            category = next(
+                (keyword.value.value for keyword in node.keywords
+                 if keyword.arg == "category"
+                 and isinstance(keyword.value, ast.Constant)),
+                None,
+            )
+            if category != "python":
+                continue
+            assert isinstance(node.args[1], (ast.List, ast.Tuple))
+            aliases = [
+                item.value for item in node.args[1].elts
+                if isinstance(item, ast.Constant) and isinstance(item.value, str)
+            ]
+            python_directives[node.args[0].value] = aliases
+        assert len(python_directives) == 20, python_directives
+        python_aliases = {
+            "python status": "ps",
+            "check python": "cp",
+            "check python modules": "cpm",
+            "python history": "ph",
+            "list python modules": "lpm",
+            "show python module": "spm",
+            "find python module": "fpm",
+            "list python updates": "lpu",
+            "install python module": "ipm",
+            "install python wheel": "ipw",
+            "remove python module": "rpm",
+            "update python module": "upm",
+            "update python modules": "upms",
+            "pin python module": "ppm",
+            "unpin python module": "unpm",
+            "repair python modules": "rprm",
+            "restore python modules": "rspm",
+            "clear python cache": "cpc",
+            "export python lock": "epl",
+            "apply python lock": "apl",
+        }
+        assert set(python_directives) == set(python_aliases)
+        for directive, alias in python_aliases.items():
+            assert alias in python_directives[directive], (
+                directive, python_directives[directive]
+            )
         missing_source = function_source(brick_path, "missingpythonmodules")
         prepare_source = function_source(brick_path, "preparepythonmodules")
         detector_namespace = {

@@ -135,7 +135,7 @@ def main():
         "'TIME_SAMPLE_SET': frozenset(('reign',))",
         'zoneinfo.ZoneInfo.from_file(stream, key=name)',
         "if kind == 'brick':",
-        "return ['--run-file', target]",
+        "return ['--run-file', target, *trailing]",
     )
 
     zonepath = ROOT / 'source/software/chromium/resources/zoneinfo/Australia/Sydney'
@@ -164,6 +164,22 @@ def main():
     )
     brick = source('source/build software/brick/brick.py')
     require(function(brick, 'main'), 'if startupfile is not None:', 'run([str(startupfile)])')
+    require(
+        brick,
+        "'settings': SETTINGSAPPPATH",
+        'RUNAPPLICATIONPATHS = frozenset(RUNAPPLICATIONALIASES.values())',
+    )
+    require(
+        function(brick, 'opsrun'),
+        'if target in RUNAPPLICATIONPATHS:',
+        "'op': 'LAUNCH_CATALOGUE'",
+    )
+    require(
+        function(brick, 'run'),
+        'RUNAPPLICATIONALIASES.get',
+        'if iscatalogueapplication:',
+        "opsrun(prog, prog_args, name, logpath, user, 'front')",
+    )
 
     operationscentre = source(
         'source/build software/operations/operationscentre.py')

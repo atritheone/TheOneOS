@@ -50,23 +50,23 @@ LOGFILE = "/the one/logs/expanse.py.log"
 SOCKPATH = "/.ephemeral/windowserver/accept.sock"
 STATEBASE = "/the one/build/state"
 STATEBASE_ALT = "/.ephemeral/windowserver/state"
-ICONRESOURCEROOT = "/the one/resources/expanse"
+ICONRESOURCEROOT = "/the one/resources/logos"
 IMAGECATALOGUE = "/the one/catalogue/image"
 ICONCACHEROOT = f"/.ephemeral/expanse/icons-{os.getpid()}"
 SURFACESTAGINGROOT = f"/.ephemeral/expanse/surfaces-{os.getpid()}"
 SEARCHHANDOFFROOT = "/.ephemeral/expanse/search-handoffs"
-T1OSLOGOPATH = "/the one/resources/expanse/t1os/t1oslogo.png"
-T1OSLOGOMUTEDPATH = "/the one/resources/expanse/t1os/t1oslogomuted.png"
-POWERLOGOPATH = "/the one/resources/expanse/powerbutt/powerbutt.png"
-POWERLOGOMUTEDPATH = "/the one/resources/expanse/powerbutt/powerbuttmuted.png"
-NETWORKICONPATH = "/the one/resources/expanse/network/networkicon.png"
-GREYNETWORKICONPATH = "/the one/resources/expanse/network/greynetworkicon.png"
-AUDIOICONBASE = "/the one/resources/expanse/audio"
-AUDIOZEROICONPATH = "/the one/resources/expanse/audio/audiozero.png"
-AUDIOLOWICONPATH = "/the one/resources/expanse/audio/audiolow.png"
-AUDIOMEDICONPATH = "/the one/resources/expanse/audio/audiomedium.png"
-AUDIOFULLICONPATH = "/the one/resources/expanse/audio/audiofull.png"
-AUDIOUNAVAILICONPATH = "/the one/resources/expanse/audio/audiounavailable.png"
+T1OSLOGOPATH = "/the one/resources/logos/t1os/t1oslogo.png"
+T1OSLOGOMUTEDPATH = "/the one/resources/logos/t1os/t1oslogomuted.png"
+POWERLOGOPATH = "/the one/resources/logos/powerbutt/powerbutt.png"
+POWERLOGOMUTEDPATH = "/the one/resources/logos/powerbutt/powerbuttmuted.png"
+NETWORKICONPATH = "/the one/resources/logos/network/networkicon.png"
+GREYNETWORKICONPATH = "/the one/resources/logos/network/greynetworkicon.png"
+AUDIOICONBASE = "/the one/resources/logos/audio"
+AUDIOZEROICONPATH = "/the one/resources/logos/audio/audiozero.png"
+AUDIOLOWICONPATH = "/the one/resources/logos/audio/audiolow.png"
+AUDIOMEDICONPATH = "/the one/resources/logos/audio/audiomedium.png"
+AUDIOFULLICONPATH = "/the one/resources/logos/audio/audiofull.png"
+AUDIOUNAVAILICONPATH = "/the one/resources/logos/audio/audiounavailable.png"
 AUDIOSOCK = "/.ephemeral/audio/accept.sock"
 NETWORKCONNECTIONSTATE = "/.ephemeral/network/connection.json"
 NETWORKSETTINGS = "/the one/settings/network"
@@ -81,37 +81,37 @@ MASTERSETTINGSFILE = '/the one/settings/master/settings.json'
 # software icons
 SOFTWAREICONS = {
     "array": {
-        "path": "/the one/resources/expanse/array/arraylogo.png"
+        "path": "/the one/resources/logos/array/arraylogo.png"
     },
     "brick": {
-        "path": "/the one/resources/expanse/brick/bricklogo.png"
+        "path": "/the one/resources/logos/brick/bricklogo.png"
     },
     "calculator": {
-        "path": "/the one/resources/expanse/calculator/calculatorlogo.png"
+        "path": "/the one/resources/logos/calculator/calculatorlogo.png"
     },
     "operations centre": {
-        "path": "/the one/resources/expanse/operations centre/operationscentrelogo.png"
+        "path": "/the one/resources/logos/operations centre/operationscentrelogo.png"
     },
     "operations": {
-        "path": "/the one/resources/expanse/operations centre/operationscentrelogo.png"
+        "path": "/the one/resources/logos/operations centre/operationscentrelogo.png"
     },
     "chromium": {
-        "path": "/the one/resources/expanse/chromium/chromiumlogo.png"
+        "path": "/the one/resources/logos/chromium/chromiumlogo.png"
     },
     "player": {
-        "path": "/the one/resources/expanse/player/playerlogo.png"
+        "path": "/the one/resources/logos/player/playerlogo.png"
     },
     "settings": {
-        "path": "/the one/resources/expanse/settings/settingslogo.png"
+        "path": "/the one/resources/logos/settings/settingslogo.png"
     },
     "snap": {
-        "path": "/the one/resources/expanse/snap/snaplogo.png"
+        "path": "/the one/resources/logos/snap/snaplogo.png"
     },
     "viewer": {
-        "path": "/the one/resources/expanse/viewer/viewerlogo.png"
+        "path": "/the one/resources/logos/viewer/viewerlogo.png"
     },
     "write": {
-        "path": "/the one/resources/expanse/write/writelogo.png"
+        "path": "/the one/resources/logos/write/writelogo.png"
     }
 }
 
@@ -12939,13 +12939,13 @@ def graphicsdiagnostic():
             raise RuntimeError(f"Expanse defines {len(masterpaths)} PNG icon masters, expected 21")
 
         dedicatedsoftwareicons = {
-            "calculator": "/the one/resources/expanse/calculator/calculatorlogo.png",
-            "chromium": "/the one/resources/expanse/chromium/chromiumlogo.png",
-            "player": "/the one/resources/expanse/player/playerlogo.png",
-            "settings": "/the one/resources/expanse/settings/settingslogo.png",
-            "snap": "/the one/resources/expanse/snap/snaplogo.png",
-            "viewer": "/the one/resources/expanse/viewer/viewerlogo.png",
-            "operations centre": "/the one/resources/expanse/operations centre/operationscentrelogo.png",
+            "calculator": "/the one/resources/logos/calculator/calculatorlogo.png",
+            "chromium": "/the one/resources/logos/chromium/chromiumlogo.png",
+            "player": "/the one/resources/logos/player/playerlogo.png",
+            "settings": "/the one/resources/logos/settings/settingslogo.png",
+            "snap": "/the one/resources/logos/snap/snaplogo.png",
+            "viewer": "/the one/resources/logos/viewer/viewerlogo.png",
+            "operations centre": "/the one/resources/logos/operations centre/operationscentrelogo.png",
         }
 
         for softwarename, expectedpath in dedicatedsoftwareicons.items():
