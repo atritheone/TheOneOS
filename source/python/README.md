@@ -32,7 +32,7 @@ deployment, image-catalogue, and VirtualBox changes do not alter the Python
 release and must never trigger a Python rebuild or promotion.
 
 Boot-time executable modes and protected inventories are a separate mutable OS
-policy. `scripts/build boot protected roots.py` derives that policy during an
+policy. `scripts/build/build boot protected roots.py` derives that policy during an
 initramfs build or deployment, and the hardware workflows attest it alongside
 the unchanged Python release. Legacy external-root fields still present in the
 3.14.7-t1os.66 manifest are retained as historical release metadata only; they
@@ -41,31 +41,31 @@ are not part of production Python verification.
 Verify the existing production release without building or promoting anything:
 
 ```powershell
-pwsh -File 'scripts/build python runtime.ps1'
+pwsh -File 'scripts/build/build python runtime.ps1'
 ```
 
 Package and promote an already-built Python candidate explicitly:
 
 ```powershell
-pwsh -File 'scripts/build python runtime.ps1' -Promote
+pwsh -File 'scripts/build/build python runtime.ps1' -Promote
 ```
 
 Rebuild CPython before packaging and promotion (also explicit):
 
 ```powershell
-pwsh -File 'scripts/build python runtime.ps1' -Rebuild
+pwsh -File 'scripts/build/build python runtime.ps1' -Rebuild
 ```
 
 Package without promotion:
 
 ```powershell
-pwsh -File 'scripts/build python runtime.ps1' -StageOnly
+pwsh -File 'scripts/build/build python runtime.ps1' -StageOnly
 ```
 
 Verify the complete canonical release:
 
 ```powershell
-pwsh -File 'scripts/test python runtime.ps1'
+pwsh -File 'scripts/tests/test python runtime.ps1'
 ```
 
 The default command is a read-only verification gate, so invoking it from a

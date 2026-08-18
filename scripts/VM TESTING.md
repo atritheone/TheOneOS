@@ -7,11 +7,11 @@ The Codex test appliance uses one immutable VirtualBox template and a disposable
 From the repository root in PowerShell:
 
 ```powershell
-& 'scripts\run monitored vm test.ps1' -Suite Smoke
-& 'scripts\run monitored vm test.ps1' -Suite Brick
-& 'scripts\run monitored vm test.ps1' -Suite Gui
-& 'scripts\run monitored vm test.ps1' -Suite Features
-& 'scripts\run monitored vm test.ps1' -Suite Full
+& 'scripts\vm\run monitored vm test.ps1' -Suite Smoke
+& 'scripts\vm\run monitored vm test.ps1' -Suite Brick
+& 'scripts\vm\run monitored vm test.ps1' -Suite Gui
+& 'scripts\vm\run monitored vm test.ps1' -Suite Features
+& 'scripts\vm\run monitored vm test.ps1' -Suite Full
 ```
 
 Use the monitored wrapper for normal work. It coordinates with the Chromium release-build lock, watches Windows and WSL builders, records their resource/file behaviour, and terminates an uncoordinated pathological build by Linux process group so compiler children are not orphaned.
@@ -19,10 +19,10 @@ Use the monitored wrapper for normal work. It coordinates with the Chromium rele
 The lower-level preparation command is normally automatic:
 
 ```powershell
-& 'scripts\prepare vm test vbox.ps1'
+& 'scripts\vm\prepare vm test vbox.ps1'
 ```
 
-It clones the last validated `environment\t1os-root.vdi`, overlays the current `source\build software`, provisions test-only integration, validates the ext4 filesystem, and creates `T1OS Codex Test Base` with snapshot `codex-clean`. Its signed manifest is `environment\hardware\t1os-vm-test-base.json`. A source, agent, fixture, package-index, ISO, or builder change invalidates the signature and rebuilds the template; otherwise preparation is a quick no-op.
+It clones the last validated `environment\software\t1os-root.vdi`, overlays the current `source\build software`, provisions test-only integration, validates the ext4 filesystem, and creates `T1OS Codex Test Base` with snapshot `codex-clean`. Its signed manifest is `environment\software\t1os-vm-test-base.json`. A source, agent, fixture, package-index, ISO, or builder change invalidates the signature and rebuilds the template; otherwise preparation is a quick no-op.
 
 ## Suites
 
@@ -34,15 +34,15 @@ It clones the last validated `environment\t1os-root.vdi`, overlays the current `
 | `Features` | GUI password prompt, Settings Python manager, interactive Brick PTY/Python program, managed-module import, and Player video. |
 | `Full` | Complete Brick diagnostics plus all GUI and feature coverage. |
 
-Each run creates a linked clone under `environment\hardware\t1os-vm-test-<token>`, starts it headlessly, and removes the clone when finished. The test agent accepts only fixed application/status operations through the explicitly attached VirtualBox exchange share; it is not a general guest shell or network service.
+Each run creates a linked clone under `environment\software\t1os-vm-test-<token>`, starts it headlessly, and removes the clone when finished. The test agent accepts only fixed application/status operations through the explicitly attached VirtualBox exchange share; it is not a general guest shell or network service.
 
 ## GUI and evidence
 
 GUI input is delivered through VirtualBox's keyboard and absolute-pointer interfaces. Screenshots come from the VM framebuffer, not a mocked renderer. The latest evidence is copied to:
 
-- `environment\hardware\t1os-vm-test-gui`
-- `environment\hardware\t1os-vm-test-report.json`
-- `environment\hardware\t1os-vm-test-serial.log`
+- `environment\software\t1os-vm-test-gui`
+- `environment\software\t1os-vm-test-report.json`
+- `environment\software\t1os-vm-test-serial.log`
 
 Important feature frames are `11-password-prompt-empty.png`, `12-password-prompt-filled.png`, `15a-brick-terminal-reply.png`, `16-brick-terminal-pass.png`, `17-player-video-frame-a.png`, and `18-player-video-frame-b.png`. Screenshot stages require the expected 1920x1080 dimensions, nonblank content, sufficient colour variation, and—where an interaction must change the screen—a distinct hash.
 
@@ -70,16 +70,16 @@ Do not bypass the lock simply to gain CPU time. Inspect `.ninja_log`, compiler a
 - Oracle VirtualBox with `VBoxManage` available (the default Program Files installation is detected).
 - WSL distribution `Ubuntu` with `qemu-nbd`, ext4 tools, and permission to load the `nbd` module for offline template preparation.
 - The base VM `The One OS` registered and powered off.
-- The validated base VDI and boot ISO at `environment\t1os-root.vdi` and `environment\t1os-boot.iso`.
+- The validated base VDI and boot ISO at `environment\software\t1os-root.vdi` and `environment\software\t1os-boot.iso`.
 
 The harness deliberately uses the VM's PS/2 keyboard and VMSVGA 1920x1080 scanout because those are the devices T1OS opens and can capture reliably in a headless VirtualBox session.
 
-Validate both supported VM launchers after replacing `environment\storage.img`:
+Validate both supported VM launchers after replacing `environment\software\storage.img`:
 
 ```powershell
-& 'scripts\build vmware.ps1'
-& 'scripts\build vbox.ps1'
-& 'scripts\test vm setup.ps1'
+& 'scripts\vm\build vmware.ps1'
+& 'scripts\vm\build vbox.ps1'
+& 'scripts\tests\test vm setup.ps1'
 ```
 
 The boot scripts create the least-privilege ephemeral media and audio runtime directories before the desktop starts. Player, the decoder, and the audio service validate their ownership and modes rather than silently widening permissions at runtime.

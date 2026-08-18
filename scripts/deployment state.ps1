@@ -198,14 +198,14 @@ function Get-T1OSDeploymentSourceState {
         -NotePropertyValue ([string]$chromiumManifest.engine_sha256)
 
     $contractPaths = @(
-        (Join-Path $ScriptRoot 'push to disk.ps1'),
-        (Join-Path $ScriptRoot 'update t1os usb.ps1'),
+        (Join-Path $ScriptRoot 'deployment\push to disk.ps1'),
+        (Join-Path $ScriptRoot 'deployment\update t1os usb.ps1'),
         (Join-Path $ScriptRoot 'deployment state.ps1'),
         (Join-Path $ScriptRoot 'common.ps1'),
-        (Join-Path $ScriptRoot 'test python runtime.ps1'),
-        (Join-Path $ScriptRoot 'build boot protected roots.py'),
-        (Join-Path $ScriptRoot 'migrate managed python usb acl.ps1'),
-        (Join-Path $ScriptRoot 'push hardware kernel to usb.ps1')
+        (Join-Path $ScriptRoot 'tests\test python runtime.ps1'),
+        (Join-Path $ScriptRoot 'build\build boot protected roots.py'),
+        (Join-Path $ScriptRoot 'deployment\migrate managed python usb acl.ps1'),
+        (Join-Path $ScriptRoot 'deployment\push hardware kernel to usb.ps1')
     )
     $contract = Get-T1OSDeploymentFileRecords `
         -ProjectRoot $ProjectRoot -Path $contractPaths

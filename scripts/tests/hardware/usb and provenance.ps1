@@ -22,12 +22,12 @@ function ConvertTo-T1OSWslPath {
 $wslProjectRoot = ConvertTo-T1OSWslPath -Path $projectRoot
 $initScript = Join-Path $projectRoot 'source\entry\init\init hardware.sh'
 $angelContract = Join-Path $projectRoot 'source\entry\init\ANGEL.md'
-$angelVoiceTest = Join-Path $projectRoot 'scripts\test angel voice.py'
-$angelRecoveryTest = Join-Path $projectRoot 'scripts\test angel recovery.ps1'
-$initramfsBuilder = Join-Path $projectRoot 'scripts\build hardware initramfs.ps1'
-$bootPolicyBuilder = Join-Path $projectRoot 'scripts\build boot protected roots.py'
-$ntfsCheckerBuilder = Join-Path $projectRoot 'scripts\build roothealth.ps1'
-$ntfsCheckerTest = Join-Path $projectRoot 'scripts\test roothealth.ps1'
+$angelVoiceTest = Join-Path $projectRoot 'scripts\tests\test angel voice.py'
+$angelRecoveryTest = Join-Path $projectRoot 'scripts\tests\test angel recovery.ps1'
+$initramfsBuilder = Join-Path $projectRoot 'scripts\build\build hardware initramfs.ps1'
+$bootPolicyBuilder = Join-Path $projectRoot 'scripts\build\build boot protected roots.py'
+$ntfsCheckerBuilder = Join-Path $projectRoot 'scripts\build\build roothealth.ps1'
+$ntfsCheckerTest = Join-Path $projectRoot 'scripts\tests\test roothealth.ps1'
 $ntfsChecker = Join-Path $projectRoot 'environment\hardware\tools\roothealth'
 $ntfsCheckerMetadata = Join-Path $projectRoot 'environment\hardware\tools\roothealth.json'
 $ntfsCheckerLicense = Join-Path $projectRoot 'environment\hardware\tools\roothealth.COPYING'
@@ -40,12 +40,12 @@ $bundleBuilder = Join-Path $projectRoot 'scripts\create hardware usb bundle.ps1'
 $bundleValidator = Join-Path $projectRoot 'scripts\test hardware usb bundle.ps1'
 $flashScript = Join-Path $projectRoot 'scripts\flash hardware usb.ps1'
 $imageValidator = Join-Path $projectRoot 'scripts\validate hardware usb image.ps1'
-$productionPreparer = Join-Path $projectRoot 'scripts\prepare prod build.ps1'
-$hardwareUsbWorkflow = Join-Path $projectRoot 'scripts\build hardware usb.ps1'
-$kernelBuilder = Join-Path $projectRoot 'scripts\build hardware kernel.ps1'
-$graphicsKernelBuilder = Join-Path $projectRoot 'scripts\build graphics kernel.ps1'
-$rootPushScript = Join-Path $projectRoot 'scripts\push to disk.ps1'
-$hardwareKernelPushScript = Join-Path $projectRoot 'scripts\push hardware kernel to usb.ps1'
+$productionPreparer = Join-Path $projectRoot 'scripts\build\prepare prod build.ps1'
+$hardwareUsbWorkflow = Join-Path $projectRoot 'scripts\build\build hardware usb.ps1'
+$kernelBuilder = Join-Path $projectRoot 'scripts\build\build hardware kernel.ps1'
+$graphicsKernelBuilder = Join-Path $projectRoot 'scripts\build\build graphics kernel.ps1'
+$rootPushScript = Join-Path $projectRoot 'scripts\deployment\push to disk.ps1'
+$hardwareKernelPushScript = Join-Path $projectRoot 'scripts\deployment\push hardware kernel to usb.ps1'
 $grubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware 0.2.cfg'
 $encryptedGrubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware encrypted 0.2.cfg'
 $grubTheme = Join-Path $projectRoot 'source\entry\grub\t1os hardware theme.txt'
@@ -74,7 +74,7 @@ $operationsScript = Join-Path $projectRoot 'source\build software\operations\ope
 $moduleLoader = Join-Path $projectRoot 'source\drivers\tools\modprobe'
 $driverPolicy = Join-Path $projectRoot 'source\drivers\settings\policy.json'
 $desktopCompatibility = Join-Path $projectRoot 'source\drivers\settings\desktop compatibility.json'
-$compatibilityValidator = Join-Path $projectRoot 'scripts\validate hardware compatibility.ps1'
+$compatibilityValidator = Join-Path $projectRoot 'scripts\audits\validate hardware compatibility.ps1'
 $driverRuntime = Join-Path $projectRoot 'source\drivers\settings\runtime.json'
 $networkServer = Join-Path $projectRoot 'source\build software\network\network.py'
 $wirelessEngine = Join-Path $projectRoot 'source\software\network\wireless-engine'
@@ -513,12 +513,12 @@ foreach ($requiredText in @(
 }
 foreach ($requiredText in @(
     "Name = 'reset storage.img to verified production defaults'",
-    "Script = 'prepare prod build.ps1'",
-    "'prepare prod build.ps1',",
+    "Script = 'build\prepare prod build.ps1'",
+    "'build\prepare prod build.ps1',",
     "Name = 'build the read-only roothealth'",
-    "Script = 'build roothealth.ps1'",
+    "Script = 'build\build roothealth.ps1'",
     "Name = 'exercise the roothealth against corruption fixtures'",
-    "Script = 'test roothealth.ps1'"
+    "Script = 'tests\test roothealth.ps1'"
 )) {
     if (-not $hardwareUsbWorkflowText.Contains($requiredText)) {
         throw "The hardware USB workflow does not production-clean storage.img before artifact creation: $requiredText"

@@ -53,6 +53,7 @@ desktop.ini
 
 # Python caches and test/tool caches
 **/__pycache__/
+/scripts/tests/.test-state/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/

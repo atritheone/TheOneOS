@@ -400,7 +400,7 @@ int main(int argc, char **argv)
 		return 126;
 	}
 	if (!loader_environment_valid()) {
-		fputs("t1os-chrome-subprocess: unsafe loader environment\n",
+		fputs("t1os-chrome-subprocess: unsafe loader environment\software\n",
 		      stderr);
 		return 126;
 	}

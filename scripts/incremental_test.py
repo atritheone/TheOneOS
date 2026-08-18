@@ -26,7 +26,7 @@ SCHEMA = 1
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 REGISTRY_PATH = SCRIPT_DIR / "incremental tests.json"
-STATE_ROOT = PROJECT_ROOT / "environment" / ".test-state"
+STATE_ROOT = SCRIPT_DIR / "tests" / ".test-state"
 RESULT_ROOT = STATE_ROOT / "results"
 LOCK_ROOT = STATE_ROOT / "locks"
 DIGEST_DB = STATE_ROOT / "digests.sqlite3"
@@ -636,6 +636,15 @@ def audited_scripts() -> set[str]:
         if path.is_file() and path.suffix.casefold() in {".ps1", ".py", ".sh"}:
             if re.match(r"^(test|validate|audit)(?:\s|\.|$)", path.name, re.IGNORECASE):
                 result.add(canonical_relative(path))
+    audits_root = SCRIPT_DIR / "audits"
+    if audits_root.is_dir():
+        for path in audits_root.rglob("*"):
+            if (
+                path.is_file()
+                and path.suffix.casefold() in {".ps1", ".py", ".sh"}
+                and re.match(r"^(validate|audit)(?:\s|\.|$)", path.name, re.IGNORECASE)
+            ):
+                result.add(canonical_relative(path))
     roothealth = SCRIPT_DIR / "roothealth-repair"
     for path in roothealth.rglob("*"):
         if ".journal-integration-v2-work" in path.parts or not path.is_file():
@@ -647,7 +656,11 @@ def audited_scripts() -> set[str]:
     tests_root = SCRIPT_DIR / "tests"
     if tests_root.is_dir():
         for path in tests_root.rglob("*"):
-            if path.is_file() and path.suffix.casefold() in {".ps1", ".py", ".sh"}:
+            if (
+                path.is_file()
+                and path.name.casefold() != "incremental runner selftest.py"
+                and path.suffix.casefold() in {".ps1", ".py", ".sh"}
+            ):
                 result.add(canonical_relative(path))
     return result
 

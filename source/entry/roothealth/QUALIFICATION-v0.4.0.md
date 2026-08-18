@@ -61,12 +61,12 @@ contract, rollout record, failure taxonomy, and this qualification record.
 The following release commands are the authoritative reproducible checks:
 
 ```powershell
-& '.\scripts\build roothealth.ps1'
-& '.\scripts\test roothealth.ps1'
-& '.\scripts\test roothealth repair.ps1'
-& '.\scripts\build hardware initramfs.ps1'
-& '.\scripts\test hardware build.ps1'
-& '.\scripts\build hardware usb.ps1' -PlanOnly -SkipQemu
+& '.\scripts\build\build roothealth.ps1'
+& '.\scripts\tests\test roothealth.ps1'
+& '.\scripts\tests\test roothealth repair.ps1'
+& '.\scripts\build\build hardware initramfs.ps1'
+& '.\scripts\tests\test hardware build.ps1'
+& '.\scripts\build\build hardware usb.ps1' -PlanOnly -SkipQemu
 ```
 
 Final artifact hashes are recorded by

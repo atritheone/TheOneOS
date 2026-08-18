@@ -158,7 +158,7 @@ function Assert-T1OSFilesystemHealthy {
     }
 
     if ($checkExitCode -ne 0) {
-        throw "storage.img failed its read-only filesystem check (e2fsck exit code $checkExitCode). Run scripts/clean disk.ps1 before $Operation."
+        throw "storage.img failed its read-only filesystem check (e2fsck exit code $checkExitCode). Run scripts/deployment/clean disk.ps1 before $Operation."
     }
 }
 

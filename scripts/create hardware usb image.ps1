@@ -55,7 +55,7 @@ if ($PreferredAudioCodec -and $PreferredAudioCodec -notmatch '^[0-9A-Fa-f]{8}$')
     throw 'PreferredAudioCodec must be empty for automatic selection or an eight-digit hexadecimal codec ID.'
 }
 
-$sourceRootImage = Join-Path $projectRoot 'environment\storage.img'
+$sourceRootImage = Join-Path $projectRoot 'environment\software\storage.img'
 $hardwareRoot = Join-Path $projectRoot 'environment\hardware'
 $kernelPath = Join-Path $hardwareRoot 'boot\vmlinuz-hardware'
 $kernelReleasePath = Join-Path $hardwareRoot 'kernel-release.txt'
@@ -310,7 +310,7 @@ if ($secureBoot) {
 }
 
 if (Test-T1OSDiskMounted) {
-    throw 'environment/storage.img is mounted. Unmount it before building a hardware image.'
+    throw 'environment/software/storage.img is mounted. Unmount it before building a hardware image.'
 }
 
 if ((Test-Path -LiteralPath $OutputPath) -and -not $Force) {

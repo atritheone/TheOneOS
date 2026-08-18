@@ -32,7 +32,7 @@ The catalogue currently covers:
 
 The editable current-version field is persisted in the project-root `current_version.txt` file. Source and disk backup names include that version automatically.
 
-`push to disk` mounts `environment/storage.img` when needed and uses checksums
+`push to disk` mounts `environment/software/storage.img` when needed and uses checksums
 to synchronise the managed build, boot, driver, catalogue, runtime-software,
 provisioned-setting, font, Expanse-artwork, and mouse-cursor sources. It
 transfers only new or changed files, removes obsolete files from fully managed
@@ -76,7 +76,7 @@ available window width when Command Centre is maximised, while retaining a
 single-column-safe minimum at narrow widths. Displayed command names are
 normalised to lowercase by the shared catalogue.
 
-`create new disk` creates a blank ext4 raw image matching the size and filesystem geometry of `environment/storage.img`. When `storage.img` exists, the new file is named `storage_new.img`; it never overwrites an existing image.
+`create new disk` creates a blank ext4 raw image matching the size and filesystem geometry of `environment/software/storage.img`. When `storage.img` exists, the new file is named `storage_new.img`; it never overwrites an existing image.
 
 `clean disk` repairs an unmounted ext4 image with `e2fsck`. A temporary
 per-problem policy forces the request to create `/lost+found` to `no`, even
@@ -99,7 +99,7 @@ inventory, and proves with a before/after tree digest that the end-user tests in
 From PowerShell:
 
 ```powershell
-& '.\scripts\run command centre.ps1'
+& '.\scripts\tools\run command centre.ps1'
 ```
 
 For UI development with Vite hot reload:
@@ -134,7 +134,7 @@ to the full t1os project directory first.
 - The renderer has no direct Node.js or PowerShell access.
 - WSL mount status is refreshed every three seconds from WSL's persistent PID
   1 mount namespace. A mount is accepted as `mounted` only when `/mnt/t1fs` is
-  backed by this project's `environment/storage.img`; a different source is
+  backed by this project's `environment/software/storage.img`; a different source is
   reported as unavailable and is never unmounted by the command centre.
 - While the disk is mounted, the disk-user line reads the username before the
   first colon in `/the one/master/master.txt`, or shows `no user` when that
@@ -182,7 +182,7 @@ The t1os PowerShell scripts remain the operational backend. All development scri
 ## Virtual machine workflow
 
 `build for vbox` and `build for vmware` regenerate the boot ISO, derive its
-`root=UUID` from the current `environment/storage.img`, convert a fresh virtual
+`root=UUID` from the current `environment/software/storage.img`, convert a fresh virtual
 disk, and create the VM configuration. The run commands refuse to start stale,
 mis-sized, misconfigured, or incorrectly attached VM artifacts and report the
 build command needed to repair them.
@@ -190,26 +190,26 @@ build command needed to repair them.
 From PowerShell, the corresponding entry points are:
 
 ```powershell
-& '.\scripts\build vbox.ps1'
-& '.\scripts\run vbox.ps1'
+& '.\scripts\vm\build vbox.ps1'
+& '.\scripts\vm\run vbox.ps1'
 
-& '.\scripts\build vmware.ps1'
-& '.\scripts\run vmware.ps1'
+& '.\scripts\vm\build vmware.ps1'
+& '.\scripts\vm\run vmware.ps1'
 ```
 
 To check both installed hypervisors and all generated VM media without starting
 a guest:
 
 ```powershell
-& '.\scripts\test vm setup.ps1'
+& '.\scripts\tests\test vm setup.ps1'
 ```
 
 Release smoke boots use disposable full clones and leave the ready VM disks
 untouched:
 
 ```powershell
-& '.\scripts\test release vbox.ps1'
-& '.\scripts\test release vmware.ps1'
+& '.\scripts\tests\test release vbox.ps1'
+& '.\scripts\tests\test release vmware.ps1'
 ```
 
 For development, use the VirtualBox disposable test harness instead of
@@ -220,10 +220,10 @@ request/response share, while a second read-only share exposes the current
 action and selects only Brick's fixed headless or graphical entry point:
 
 ```powershell
-& '.\scripts\test t1os vm.ps1' -Suite Smoke
-& '.\scripts\test t1os vm.ps1' -Suite Brick
-& '.\scripts\test t1os vm.ps1' -Suite Gui
-& '.\scripts\test t1os vm.ps1' -Suite Full
+& '.\scripts\tests\test t1os vm.ps1' -Suite Smoke
+& '.\scripts\tests\test t1os vm.ps1' -Suite Brick
+& '.\scripts\tests\test t1os vm.ps1' -Suite Gui
+& '.\scripts\tests\test t1os vm.ps1' -Suite Full
 ```
 
 `Brick` is the normal fast development gate. The harness prepares one test-only

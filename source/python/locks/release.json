@@ -18,17 +18,17 @@
       "sha256": "fdb8a760183a05b2def3ef5b9053284314318ebc64389cc86eb355e3696dabf6"
     },
     {
-      "path": "scripts/build python runtime.ps1",
+      "path": "scripts/build/build python runtime.ps1",
       "size": 1822,
       "sha256": "d62efcc1313b9587b9360a7cc494cf476a68922505c0acb74e5e4d1875135341"
     },
     {
-      "path": "scripts/build python 3.14 candidate.ps1",
+      "path": "scripts/build/build python 3.14 candidate.ps1",
       "size": 1088,
       "sha256": "de8407285687932cd679f55492acaabe4ebd18fafab19b83ef0daef6e250c415"
     },
     {
-      "path": "scripts/package python 3.14 candidate.ps1",
+      "path": "scripts/build/package python 3.14 candidate.ps1",
       "size": 984,
       "sha256": "3cce51570307656c92fb0f044eb79093ba9c59da132543f6e9288ae2a283a542"
     },
@@ -48,27 +48,27 @@
       "sha256": "e33a7a625b846aef476ba16bd7246e2810bf643f60892ac032722878cc3779ef"
     },
     {
-      "path": "scripts/build hardware initramfs.ps1",
+      "path": "scripts/build/build hardware initramfs.ps1",
       "size": 30985,
       "sha256": "013f626942cd8a6a51d6fb2c4e764cecb789373592f0c4bbef95818ee32d221b"
     },
     {
-      "path": "scripts/test hardware build.ps1",
+      "path": "scripts/tests/test hardware build.ps1",
       "size": 171660,
       "sha256": "3268865b182137439dbaf3fe93612b09c03f28fb0eadd3a25f0299f2b8dd5272"
     },
     {
-      "path": "scripts/test python runtime.ps1",
+      "path": "scripts/tests/test python runtime.ps1",
       "size": 3950,
       "sha256": "e435b4dfc6d346134e0826d49d6827aea88c06efc6d6cb6f8e313ed273c613a2"
     },
     {
-      "path": "scripts/validate profiled python entrypoints.py",
+      "path": "scripts/audits/validate profiled python entrypoints.py",
       "size": 11869,
       "sha256": "2bd05fc9335f98d91bb5488426674b681ac425fbdd30939f2f3795360351f89c"
     },
     {
-      "path": "scripts/validate profiled python entrypoints.ps1",
+      "path": "scripts/audits/validate profiled python entrypoints.ps1",
       "size": 1006,
       "sha256": "7bcba7181ad659da33aad6ff9628ca10efe9c50f71fd1238e197598bdc11992d"
     },

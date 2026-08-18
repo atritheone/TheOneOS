@@ -30,42 +30,42 @@
       "sha256": "8185407b8c231c6b62b88bb374763690a4742a333f3412fc14f7a846e9d85fc1"
     },
     {
-      "path": "scripts/audit python provenance.ps1",
+      "path": "scripts/audits/audit python provenance.ps1",
       "size": 1055,
       "sha256": "896f9151371ab15197a5ed60e20b2cd5e2d1ed60137ba7bb59c520911c43c158"
     },
     {
-      "path": "scripts/build hardware initramfs.ps1",
+      "path": "scripts/build/build hardware initramfs.ps1",
       "size": 26827,
       "sha256": "22e6d889d02608bd1baa7c97ec2743ccc724d1c136732b9c7a18eb727a8e58ae"
     },
     {
-      "path": "scripts/build python runtime.ps1",
+      "path": "scripts/build/build python runtime.ps1",
       "size": 2875,
       "sha256": "c85bebea8294ca79064c35ceef4d1f82104c70424a403f86f3964538c988484c"
     },
     {
-      "path": "scripts/build python source diagnostic.ps1",
+      "path": "scripts/build/build python source diagnostic.ps1",
       "size": 1096,
       "sha256": "9c755237a90cd70715384a16224b5b02d64693425dcea35cea091ed8e8e06891"
     },
     {
-      "path": "scripts/push managed python to usb.ps1",
+      "path": "scripts/deployment/push managed python to usb.ps1",
       "size": 26967,
       "sha256": "ccdc1f229d03ac855db371e027bed02af93c2af3ab4db7b227c175c09bc81351"
     },
     {
-      "path": "scripts/push to disk.ps1",
+      "path": "scripts/deployment/push to disk.ps1",
       "size": 98775,
       "sha256": "175b7f00f89874767387ed57ef745195e5fe7319c18e82c1e56c25510e249b16"
     },
     {
-      "path": "scripts/test hardware build.ps1",
+      "path": "scripts/tests/test hardware build.ps1",
       "size": 146424,
       "sha256": "95b280bb16ff7aed10ee161e2fdd6514c79005e584df3cfa195a833a13a82c10"
     },
     {
-      "path": "scripts/test python runtime.ps1",
+      "path": "scripts/tests/test python runtime.ps1",
       "size": 1145,
       "sha256": "34e66bf38be48b6d2d0eae26c85e3f602c794365536f6ae006897687bba8cb23"
     },

@@ -48,19 +48,19 @@ but a small window no longer exports and composites a full-size 4K surface.
 Build the combined hardware release:
 
 ```powershell
-& "scripts/build graphics runtime.ps1" -Clean -Profile hardware -EnableNvidia
+& "scripts/build/build graphics runtime.ps1" -Clean -Profile hardware -EnableNvidia
 ```
 
 Validate packaged drivers and runtime dependencies:
 
 ```powershell
-& "scripts/test hardware build.ps1"
+& "scripts/tests/test hardware build.ps1"
 ```
 
 Run the end-to-end VirtualBox gate:
 
 ```powershell
-& "scripts/test video vbox.ps1" -InitialSetup
+& "scripts/tests/test video vbox.ps1" -InitialSetup
 ```
 
 The gate requires VMSVGA/OpenGL hardware operation, a VA-API hardware decoder,

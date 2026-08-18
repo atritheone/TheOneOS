@@ -113,7 +113,7 @@ function resolveProjectRoot() {
 
 const projectRoot = resolveProjectRoot()
 const scriptsRoot = path.join(projectRoot, 'scripts')
-const diskImagePath = path.join(projectRoot, 'environment', 'storage.img')
+const diskImagePath = path.join(projectRoot, 'environment', 'software', 'storage.img')
 const versionFile = path.join(projectRoot, 'current_version.txt')
 const lastPushFile = path.join(projectRoot, 'last_push.txt')
 const defaultVersion = '0.32'

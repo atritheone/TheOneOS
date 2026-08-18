@@ -34,7 +34,7 @@
       "url": "https://files.pythonhosted.org/packages/f7/62/de5bdd77d935331f4f802edc11e4d82950f642caad6cb2f949837b8560e2/pillow-12.3.0-cp313-cp313-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
       "sha256": "0847a763afefb695bc912d7c131e7e0632d4edc1d8698f58ddabec8e46b8b6d3",
       "placement": "/the one/catalogue/image",
-      "managed_by": "scripts/build image catalogue.ps1",
+      "managed_by": "scripts/build/build image catalogue.ps1",
       "native": true
     },
     {

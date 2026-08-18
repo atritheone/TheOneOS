@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compatibility installer for scripts/build chromium runtime.ps1.
+"""Compatibility installer for scripts/build/build chromium runtime.ps1.
 
 The source build itself lives in `development/build chromium source.py`.
 This adapter stages only compiled Chromium outputs into the established T1OS

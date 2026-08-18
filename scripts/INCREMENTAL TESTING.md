@@ -29,15 +29,15 @@ the evidence belonging to an earlier result.
 Run the existing entrypoint as usual:
 
 ```powershell
-& 'scripts/test hardware build.ps1'
-& 'scripts/test t1os vm.ps1' -Suite Full
+& 'scripts/tests/test hardware build.ps1'
+& 'scripts/tests/test t1os vm.ps1' -Suite Full
 ```
 
 Inspect a task key and every input that formed it without running the task:
 
 ```powershell
 python -B scripts/incremental_test.py explain `
-    --script 'scripts/test video compatibility.py'
+    --script 'scripts/tests/test video compatibility.py'
 ```
 
 List registered tasks, show cached passing-key counts, or audit coverage:
@@ -60,7 +60,7 @@ or relevant tools invalidate results automatically.
 
 ## State
 
-Ignored local state is stored in `environment/.test-state/`:
+Ignored local state is stored in `scripts/tests/.test-state/`:
 
 - `digests.sqlite3` memoizes file content digests.
 - `results/<task>/<key>.json` records an atomic passing result.

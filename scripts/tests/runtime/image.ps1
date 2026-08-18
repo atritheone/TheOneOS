@@ -9,14 +9,14 @@ if (Test-Path -LiteralPath $incrementalTestBootstrap -PathType Leaf) {
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..\..')).Path
-$environmentRoot = Join-Path $projectRoot 'environment'
+$environmentRoot = Join-Path $projectRoot 'environment\software'
 . (Join-Path $projectRoot 'scripts\common.ps1')
 Set-Location -LiteralPath $environmentRoot
 
 function Invoke-ImageDiagnostic {
 
-    $mountScript = Join-Path $projectRoot 'scripts/mount.ps1'
-    $unmountScript = Join-Path $projectRoot 'scripts/unmount.ps1'
+    $mountScript = Join-Path $projectRoot 'scripts/deployment/mount.ps1'
+    $unmountScript = Join-Path $projectRoot 'scripts/deployment/unmount.ps1'
     $buildSource = Join-Path $projectRoot 'source\build software'
     $catalogueSource = Join-Path $projectRoot 'source\catalogue\image'
     $mountPoint = '/mnt/t1fs'
@@ -155,7 +155,7 @@ if ($mounted) {
     Write-Host ""
     Write-Host "t1fs is mounted. running unmount..."
 
-    $unmountScript = Join-Path $projectRoot 'scripts/unmount.ps1'
+    $unmountScript = Join-Path $projectRoot 'scripts/deployment/unmount.ps1'
 
     if (-not (Test-Path $unmountScript)) {
         Write-Host "unmount.ps1 not found in this directory."
