@@ -87,6 +87,7 @@
     {"id":"roothealth.repair","script":"scripts/tests/test roothealth repair.ps1","profile":"wsl"},
     {"id":"roothealth.report-classifier","script":"scripts/tests/test roothealth report classifier.py","profile":"pure"},
     {"id":"roothealth.checker","script":"scripts/tests/test roothealth.ps1","profile":"wsl","inputs":["environment/hardware/tools/roothealth*"]},
+    {"id":"scripts.references","script":"scripts/tests/test script references.ps1","profile":"pure","inputs":["scripts/**/*.ps1","software/command centre/electron/commands.ts"]},
     {"id":"vm.t1os","script":"scripts/tests/test t1os vm.ps1","profile":"vm","inputs":["environment/software/t1os-root.vdi","environment/software/t1os-boot.iso","environment/software/t1os-vm-test-base.json","source/build software/**"],"evidence":["environment/software/t1os-vm-test-report.json","environment/software/t1os-vm-test-serial.log","environment/software/t1os-vm-test-gui/**"]},
     {"id":"boot.userspace-recovery","script":"scripts/tests/test userspace boot recovery.py","profile":"pure"},
     {"id":"video.compatibility-wrapper","script":"scripts/tests/test video compatibility.ps1","profile":"wsl"},

@@ -3,7 +3,7 @@ param([switch]$UsbDrive)
 
 $ErrorActionPreference = 'Stop'
 $commonScript = Join-Path $PSScriptRoot '..\common.ps1'
-$mountScript = Join-Path $PSScriptRoot 'mount.ps1'
+$mountScript = Join-Path $PSScriptRoot '..\deployment\mount.ps1'
 $mountPoint = '/mnt/t1fs'
 
 foreach ($requiredScript in @($commonScript, $mountScript)) {

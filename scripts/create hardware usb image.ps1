@@ -243,7 +243,7 @@ if ($kernelRelease -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$') {
 }
 
 if (-not $SkipCompatibilityValidation) {
-    $compatibilityValidator = Join-Path $PSScriptRoot 'validate hardware compatibility.ps1'
+    $compatibilityValidator = Join-Path $PSScriptRoot 'audits\validate hardware compatibility.ps1'
     Write-Host 'Checking complete desktop hardware dependency closure before image creation...'
     & pwsh -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $compatibilityValidator
     if ($LASTEXITCODE -ne 0) {
