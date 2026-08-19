@@ -356,6 +356,7 @@ ACTIONSLOTS = [
     {"id": "cut", "label": "cut"},
     {"id": "paste", "label": "paste"},
     {"id": "delete", "label": "delete"},
+    {"id": "destroy", "label": "destroy"},
     {"id": "rename", "label": "rename"},
     {"id": "run", "label": "run"},
     {"id": "reveal", "label": "reveal"},
@@ -15123,6 +15124,7 @@ def buildactions():
 
     if not isrubbish(SELECTED):
         ACTIONVIS["delete"] = True
+        ACTIONVIS["destroy"] = True
 
     ACTIONVIS["rename"] = (len(SELECTEDSET) == 1)
 

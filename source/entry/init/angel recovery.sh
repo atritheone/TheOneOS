@@ -110,7 +110,12 @@ angel_mount_esp() {
         return 0
     fi
     [ -n "${esp_spec:-}" ] || return 1
-    esp_device=$(angel_resolve_device "$esp_spec") || return 1
+    # Device discovery writes the shared root-discovery transcript.  Once the
+    # ESP has been resolved in this boot, reuse that exact block device instead
+    # of replacing the root-drive evidence or waiting through another scan.
+    if [ -z "${esp_device:-}" ] || [ ! -b "$esp_device" ]; then
+        esp_device=$(angel_resolve_device "$esp_spec") || return 1
+    fi
     "$busybox" mkdir -p "$angel_esp_mount" || return 1
     if ! "$busybox" mount -t vfat \
             -o rw,nodev,nosuid,noexec,umask=0077 \
@@ -119,6 +124,14 @@ angel_mount_esp() {
     fi
     "$busybox" mkdir -p "$angel_esp_mount/T1OS" || return 1
     return 0
+}
+
+angel_unmount_esp() {
+    if ! "$busybox" mountpoint -q "$angel_esp_mount"; then
+        return 0
+    fi
+    "$busybox" sync
+    "$busybox" umount "$angel_esp_mount"
 }
 
 angel_read_key() {

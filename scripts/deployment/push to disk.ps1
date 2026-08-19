@@ -743,7 +743,6 @@ root_map = {
     'network_settings': ('the one/settings/network',),
     'media_settings': ('the one/settings/media',),
     'chromium': ('the one/software/chromium',),
-    'runtime_contract': ('the one/settings',),
     'image_catalogue': ('the one/catalogue/image',),
     'python': ('the one/software/python', 'the one/catalogue/python'),
     'resources': (
@@ -753,13 +752,25 @@ root_map = {
         'the one/resources/system',
     ),
 }
-unknown = selected - set(root_map)
+leaf_map = {
+    # This deployment changes one settings contract, not the application state
+    # beside it. Chromium can leave valid SQLite WAL/journal files that DrvFS
+    # cannot stat after a hardware boot; recursively inspecting the unrelated
+    # profile both exceeds the mutation scope and makes safe updates fail.
+    'runtime_contract': ('the one/settings/runtime paths.json',),
+}
+unknown = selected - set(root_map) - set(leaf_map)
 if unknown:
     raise SystemExit(f'unknown selected deployment roots: {sorted(unknown)}')
 relative_roots = tuple(dict.fromkeys(
     relative
     for name in sorted(selected)
-    for relative in root_map[name]
+    for relative in root_map.get(name, ())
+))
+relative_leaves = tuple(dict.fromkeys(
+    relative
+    for name in sorted(selected)
+    for relative in leaf_map.get(name, ())
 ))
 integrity_roots = frozenset({
     'the one/software/python',
@@ -806,6 +817,32 @@ for relative in relative_roots:
     resolved = os.path.realpath(candidate)
     if resolved != candidate or os.path.commonpath((mount_real, resolved)) != mount_real:
         raise SystemExit(f'mounted-target path resolves outside its canonical root: {candidate}')
+
+for relative in relative_leaves:
+    candidate = os.path.normpath(os.path.join(mount, relative))
+    if os.path.commonpath((mount, candidate)) != mount:
+        raise SystemExit(f'mounted-target leaf escapes its mount: {candidate}')
+    current = mount
+    for component in os.path.dirname(relative).split('/'):
+        current = os.path.join(current, component)
+        if not lstat_directory(current):
+            break
+        if os.lstat(current).st_dev != mount_device:
+            raise SystemExit(f'nested filesystem in mounted-target leaf path: {current}')
+    try:
+        status = os.lstat(candidate)
+    except FileNotFoundError:
+        continue
+    reparse = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0)
+    if (
+        stat.S_ISLNK(status.st_mode)
+        or not stat.S_ISREG(status.st_mode)
+        or (reparse and getattr(status, 'st_file_attributes', 0) & reparse)
+        or status.st_nlink != 1
+        or status.st_dev != mount_device
+        or os.path.realpath(candidate) != os.path.abspath(candidate)
+    ):
+        raise SystemExit(f'unsafe mounted-target leaf: {candidate}')
 
 def inspect_tree(root, require_single_link):
     if not os.path.lexists(root):
@@ -883,17 +920,6 @@ then
     make_tree_writable resources "$cursor_resource_destination"
     make_tree_writable resources "$system_resource_destination"
     make_tree_writable resources "$system_software_destination"
-    if root_selected resources; then
-        for test_file in \
-            "$mount_point/software/opengltest1.py" \
-            "$mount_point/software/opengltest2.py" \
-            "$mount_point/software/opengl 3d test.py" \
-            "$mount_point/software/opengl test.py"
-        do
-            [ ! -f "$test_file" ] || chmod u+rw "$test_file"
-        done
-    fi
-
     if root_selected runtime_contract && [ -f "$runtime_path_contract_destination" ]; then
         chmod u+rw "$runtime_path_contract_destination"
     fi
@@ -967,12 +993,7 @@ mkdir -p \
     "$stage/resources/fonts" \
     "$stage/resources/logos" \
     "$stage/resources/cursors" \
-    "$stage/resources/system" \
-    "$stage/resources/tests"
-
-cp -a -- "$resource_source/tests/opengl test.py" "$stage/resources/tests/opengl test.py"
-cp -a -- "$resource_source/tests/opengl 3d test.py" "$stage/resources/tests/opengl 3d test.py"
-cp -a -- "$resource_source/tests/creep.py" "$stage/resources/tests/creep.py"
+    "$stage/resources/system"
 
 cp -a -- "$resource_source/fonts/atkinsonhyperlegiblenext.ttf" "$stage/resources/fonts/atkinsonhyperlegiblenext.ttf"
 cp -a -- "$resource_source/fonts/cambria.ttf" "$stage/resources/fonts/cambria.ttf"
@@ -2797,27 +2818,10 @@ if root_selected resources; then
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
     sync_resource_tree 'logo resources' "$stage/resources/logos" "$logo_resource_destination"
     sync_resource_tree 'mouse cursor resources' "$stage/resources/cursors" "$cursor_resource_destination"
-    sync_file 'OpenGL test' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
-    sync_file 'OpenGL 3D test' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
-    sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
-    sync_file 'OpenGL test compatibility name' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
-    sync_file 'Creep test utility' "$stage/resources/tests/creep.py" "$mount_point/software/creep.py"
     if [ "$target_mode" = image ]; then
         chown 0:0 "$system_software_destination" "$system_software_destination/patchelf"
         chmod 0755 "$system_software_destination"
         chmod 0555 "$system_software_destination/patchelf"
-        chown 0:0 \
-            "$mount_point/software/opengltest1.py" \
-            "$mount_point/software/opengltest2.py" \
-            "$mount_point/software/opengl 3d test.py" \
-            "$mount_point/software/opengl test.py" \
-            "$mount_point/software/creep.py"
-        chmod 0555 \
-            "$mount_point/software/opengltest1.py" \
-            "$mount_point/software/opengltest2.py" \
-            "$mount_point/software/opengl 3d test.py" \
-            "$mount_point/software/opengl test.py" \
-            "$mount_point/software/creep.py"
     fi
 fi
 # Fonts are immutable shared display resources.  WindowServer renders managed
@@ -2900,11 +2904,6 @@ if [ "$exhaustive_verify" = True ]; then
         "$mount_point/the one/resources/expanse" \
         "$mount_point/the one/resources/graphics/mouse cursors"
     rmdir -- "$mount_point/the one/resources/graphics" 2>/dev/null || true
-    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengltest1.py"
-    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengltest2.py"
-    cmp -s -- "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
-    cmp -s -- "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
-    cmp -s -- "$stage/resources/tests/creep.py" "$mount_point/software/creep.py"
 fi
 
 if root_selected build || [ "$exhaustive_verify" = True ]; then

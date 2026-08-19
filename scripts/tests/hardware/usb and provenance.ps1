@@ -45,6 +45,7 @@ $hardwareUsbWorkflow = Join-Path $projectRoot 'scripts\build\build hardware usb.
 $kernelBuilder = Join-Path $projectRoot 'scripts\build\build hardware kernel.ps1'
 $graphicsKernelBuilder = Join-Path $projectRoot 'scripts\build\build graphics kernel.ps1'
 $rootPushScript = Join-Path $projectRoot 'scripts\deployment\push to disk.ps1'
+$usbUpdateScript = Join-Path $projectRoot 'scripts\deployment\update t1os usb.ps1'
 $hardwareKernelPushScript = Join-Path $projectRoot 'scripts\deployment\push hardware kernel to usb.ps1'
 $grubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware 0.2.cfg'
 $encryptedGrubScript = Join-Path $projectRoot 'source\entry\grub\grub hardware encrypted 0.2.cfg'
@@ -127,6 +128,25 @@ $brickScript = Join-Path $projectRoot 'source\build software\brick\brick.py'
 $chromiumSubprocess = Join-Path $projectRoot 'source\software\chromium\tools\t1os-chrome-subprocess'
 $chromiumSubprocessSource = Join-Path $projectRoot 'source\entry\chromium\t1os_chrome_subprocess.c'
 $runtimePathContract = Join-Path $projectRoot 'source\settings\runtime paths.json'
+$rootPushText = Get-Content -LiteralPath $rootPushScript -Raw
+$usbUpdateText = Get-Content -LiteralPath $usbUpdateScript -Raw
+foreach ($forbiddenDeploymentTest in @(
+    'software/opengltest1.py',
+    'software/opengltest2.py',
+    'software/opengl test.py',
+    'software/opengl 3d test.py',
+    'software/creep.py',
+    'resources/tests/opengl test.py',
+    'resources/tests/opengl 3d test.py',
+    'resources/tests/creep.py'
+)) {
+    if ($rootPushText.Contains($forbiddenDeploymentTest)) {
+        throw "The managed push still deploys a developer test into /software: $forbiddenDeploymentTest"
+    }
+}
+if (-not $usbUpdateText.Contains('& $targetValidator -UsbDrive')) {
+    throw 'The USB update workflow no longer delegates userspace synchronization to the managed push engine.'
+}
 $audioRuntime = Get-Content -LiteralPath $audioRuntimeManifest -Raw |
     ConvertFrom-Json
 $audioProtocol = $audioRuntime.runtime.media_decode_protocol

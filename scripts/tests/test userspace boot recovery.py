@@ -93,8 +93,19 @@ def main():
     assert (
         early.index('normaliseservicesettings()') <
         early.index('normalisedesktopsettings()') <
-        early.index('normalisepersistentdesktoptiers()') <
         early.index('birth(PRESTARTOPS)')
+    )
+    assert 'normalisepersistentdesktoptiers()' not in early
+    require(
+        hardware_init,
+        'ensure_persistent_runtime_permissions() {',
+        "software='/mnt/software'",
+        "rubbish='/mnt/.rubbish'",
+        "logs='/mnt/the one/logs'",
+        'before executing GODDESS activates',
+        'ensure_persistent_runtime_permissions',
+        'expected_software_metadata',
+        'system log tier is not writable',
     )
     require(
         function(goddess, 'normaliseservicesettings'),
@@ -178,6 +189,21 @@ def main():
     assert reign.index("if __name__ == '__main__':") < reign.index('    initialise()')
 
     array = source('source/build software/array/array.py')
+    assert (
+        array.index('{"id": "delete", "label": "delete"}') <
+        array.index('{"id": "destroy", "label": "destroy"}') <
+        array.index('{"id": "rename", "label": "rename"}')
+    )
+    require(
+        function(array, 'buildactions'),
+        'ACTIONVIS["delete"] = True',
+        'ACTIONVIS["destroy"] = True',
+    )
+    require(
+        function(array, 'runaction'),
+        'if actionid == "destroy":',
+        'openconfirm("destroy", selectedpaths())',
+    )
     typedlaunch = function(array, 'opsrun')
     require(typedlaunch, '"op": "LAUNCH_CATALOGUE"', '"args": list(args)')
     assert '"op": "RUN"' not in typedlaunch

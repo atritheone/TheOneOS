@@ -7074,7 +7074,9 @@ def main():
     # those boot-time consumers.
     normaliseservicesettings()
     normalisedesktopsettings()
-    normalisepersistentdesktoptiers()
+    # The initramfs has already repaired and verified /software, /.rubbish and
+    # the log tier before this exec activated the runtime LSM.  GODDESS must not
+    # chmod or chown those protected directory objects after handoff.
     setuppowerserver()
 
     # OperationsServer starts later. The supervisor will hand it a full TASKS

@@ -117,13 +117,13 @@ persist_roothealth_boot_history() {
     history_stage="$history_root/.boot-current.new"
     "$busybox" mkdir -p "$history_root" 2>/dev/null || {
         [ "$history_mounted_here" = 0 ] || \
-            "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+            angel_unmount_esp 2>/dev/null || true
         return 0
     }
     "$busybox" rm -rf "$history_stage" 2>/dev/null || true
     "$busybox" mkdir -p "$history_stage" 2>/dev/null || {
         [ "$history_mounted_here" = 0 ] || \
-            "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+            angel_unmount_esp 2>/dev/null || true
         return 0
     }
 
@@ -198,7 +198,7 @@ persist_roothealth_boot_history() {
         2>/dev/null || true
     "$busybox" sync
     if [ "$history_mounted_here" = 1 ]; then
-        "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+        angel_unmount_esp 2>/dev/null || true
     fi
 }
 
@@ -1037,6 +1037,113 @@ ensure_runtime_permissions() {
     done
 }
 
+ensure_persistent_runtime_permissions() {
+    software='/mnt/software'
+    rubbish='/mnt/.rubbish'
+    logs='/mnt/the one/logs'
+
+    # These writable roots are deliberately protected as directory objects by
+    # the runtime LSM.  Repair their persistent NTFS3 metadata here, while the
+    # verified initramfs is still PID 1 and before executing GODDESS activates
+    # the post-handoff policy.
+    for persistent_directory in "$software" "$rubbish" "$logs"; do
+        if [ -L "$persistent_directory" ]; then
+            rescue "I cannot continue because persistent runtime tier $persistent_directory is redirected."
+        fi
+        "$busybox" mkdir -p "$persistent_directory" || \
+            rescue "I could not prepare persistent runtime tier $persistent_directory."
+        [ -d "$persistent_directory" ] || \
+            rescue "I cannot continue because persistent runtime tier $persistent_directory is not a directory."
+    done
+
+    vm_test_tiers=0
+    if [ "$developer" = 1 ] && \
+            [ -f /mnt/t1os-vm-test-agent ] && \
+            [ "$("$busybox" cat /mnt/t1os-vm-test-agent 2>/dev/null)" = enabled ]; then
+        vm_test_tiers=1
+    fi
+
+    if [ "$vm_test_tiers" = 1 ]; then
+        software_unsafe=$("$busybox" find "$software" -xdev \
+            \( -path "$software/t1os-python" -o \
+               -path "$software/t1os-python-index" \) -prune -o \
+            ! -type d ! -type f -print -quit 2>/dev/null) || \
+            rescue 'I could not inspect the developer software tier.'
+    else
+        software_unsafe=$("$busybox" find "$software" -xdev \
+            ! -type d ! -type f -print -quit 2>/dev/null) || \
+            rescue 'I could not inspect the software tier.'
+    fi
+    [ -z "$software_unsafe" ] || \
+        rescue "I found an unsafe object in the software tier at $software_unsafe."
+
+    rubbish_unsafe=$("$busybox" find "$rubbish" -xdev \
+        ! -type d ! -type f -print -quit 2>/dev/null) || \
+        rescue 'I could not inspect the rubbish tier.'
+    [ -z "$rubbish_unsafe" ] || \
+        rescue "I found an unsafe object in the rubbish tier at $rubbish_unsafe."
+
+    if [ "$vm_test_tiers" = 1 ]; then
+        "$busybox" find "$software" -xdev \
+            \( -path "$software/t1os-python" -o \
+               -path "$software/t1os-python-index" \) -prune -o \
+            -type d -exec "$busybox" chown 1000:1000 {} + \
+            -exec "$busybox" chmod 0755 {} + || \
+            rescue 'I could not repair the developer software directories.'
+        "$busybox" find "$software" -xdev \
+            \( -path "$software/t1os-python" -o \
+               -path "$software/t1os-python-index" \) -prune -o \
+            -type f -exec "$busybox" chown 1000:1000 {} + \
+            -exec "$busybox" chmod 'u+rw,go-w,u-s,g-s' {} + || \
+            rescue 'I could not repair the developer software files.'
+        "$busybox" chown 0:0 "$software" || \
+            rescue 'I could not protect the developer software tier.'
+        "$busybox" chmod 01777 "$software" || \
+            rescue 'I could not set the developer software tier permission.'
+        expected_software_metadata='0:0:1777'
+    else
+        "$busybox" find "$software" -xdev -type d \
+            -exec "$busybox" chown 1000:1000 {} + \
+            -exec "$busybox" chmod 0755 {} + || \
+            rescue 'I could not repair the software directories.'
+        "$busybox" find "$software" -xdev -type f \
+            -exec "$busybox" chown 1000:1000 {} + \
+            -exec "$busybox" chmod 'u+rw,go-w,u-s,g-s' {} + || \
+            rescue 'I could not repair the software files.'
+        expected_software_metadata='1000:1000:755'
+    fi
+
+    "$busybox" find "$rubbish" -xdev -type d \
+        -exec "$busybox" chown 1000:1000 {} + \
+        -exec "$busybox" chmod 0700 {} + || \
+        rescue 'I could not repair the rubbish directories.'
+    "$busybox" find "$rubbish" -xdev -type f \
+        -exec "$busybox" chown 1000:1000 {} + \
+        -exec "$busybox" chmod 0600 {} + || \
+        rescue 'I could not repair the rubbish files.'
+
+    "$busybox" chown 0:0 "$logs" || \
+        rescue 'I could not assign the system log tier to root.'
+    "$busybox" chmod 0755 "$logs" || \
+        rescue 'I could not make the system log tier writable by its broker.'
+
+    [ "$("$busybox" stat -c '%u:%g:%a' "$software")" = \
+            "$expected_software_metadata" ] || \
+        rescue 'I cannot continue because the software tier did not retain its required permission.'
+    [ "$("$busybox" stat -c '%u:%g:%a' "$rubbish")" = '1000:1000:700' ] || \
+        rescue 'I cannot continue because the rubbish tier did not retain its required permission.'
+    [ "$("$busybox" stat -c '%u:%g:%a' "$logs")" = '0:0:755' ] || \
+        rescue 'I cannot continue because the log tier did not retain its required permission.'
+
+    log_probe="$logs/.init-write-probe"
+    "$busybox" rm -f "$log_probe" 2>/dev/null || true
+    if ! : >"$log_probe" 2>/dev/null; then
+        rescue 'I cannot continue because the system log tier is not writable.'
+    fi
+    "$busybox" rm -f "$log_probe" || \
+        rescue 'I could not remove the system log write probe.'
+}
+
 prepare_terminfo_runtime() {
     source='/mnt/the one/settings/terminfo'
     ephemeral='/mnt/.ephemeral'
@@ -1116,7 +1223,9 @@ prepare_terminfo_runtime() {
 mount_recovery_request_store() {
     target='/mnt/.ephemeral/angel-boot'
     [ -n "$esp_spec" ] || return 1
-    esp_device=$(angel_resolve_device "$esp_spec") || return 1
+    if [ -z "${esp_device:-}" ] || [ ! -b "$esp_device" ]; then
+        esp_device=$(angel_resolve_device "$esp_spec") || return 1
+    fi
     "$busybox" mkdir -p "$target" || return 1
     "$busybox" mount -t vfat \
         -o rw,nodev,nosuid,noexec,umask=0077 \
@@ -1595,7 +1704,7 @@ if angel_mount_esp; then
     if [ "$recovery" != 1 ] && [ -z "$angel_shutdown_health_action" ]; then
         # Defined by the sourced Angel recovery engine.
         # shellcheck disable=SC2154
-        "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+        angel_unmount_esp 2>/dev/null || true
     fi
 fi
 
@@ -1624,15 +1733,15 @@ if [ -n "$angel_shutdown_health_action" ]; then
         angel_clear_shutdown_health_request
         if [ "$angel_shutdown_health_action" = poweroff ]; then
             boot_status 'The unmounted shutdown health gate passed. I will power off now.'
-            "$busybox" sync
+            angel_unmount_esp || \
+                rescue 'I could not safely release the boot partition after the shutdown health gate.'
             "$busybox" poweroff -f
             while :; do "$busybox" sleep 60; done
         fi
-        boot_status 'The unmounted shutdown health gate passed. I will restart through firmware boot order now.'
+        boot_status 'The unmounted restart health gate passed. I will continue this clean boot now.'
         angel_shutdown_health_action=
-        "$busybox" sync
-        "$busybox" reboot -f
-        while :; do "$busybox" sleep 60; done
+        angel_unmount_esp || \
+            rescue 'I could not safely release the boot partition after the restart health gate.'
     else
         rescue "The unmounted shutdown health gate failed with RootHealth code $roothealth_refusal_code."
     fi
@@ -1684,6 +1793,7 @@ if [ "$root_mode" = rw ]; then
     verify_t1os_root || rescue "I cannot continue because The One OS root at $root_device changed identity while I reopened it for writing."
     prepare_terminfo_runtime
     ensure_runtime_permissions
+    ensure_persistent_runtime_permissions
     mount_recovery_request_store || \
         log 'I cannot mount the boot recovery request store, so Settings recovery restart will be unavailable.'
 fi
