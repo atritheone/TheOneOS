@@ -61,7 +61,7 @@ Player is launched through the authenticated Operations broker with the fixed me
 
 ## Chromium coordination
 
-`environment\hardware\chromium-release-build.lock` serializes a deliberate release build against VM testing. A VM run refuses to start while another process holds that lock. Once a VM test is running, a new uncoordinated T1OS Chromium runtime/source build is unrelated to the suite and is stopped immediately; generic builders are stopped only after age, CPU, or workspace-file-surge thresholds are exceeded.
+`development\chromium release\chromium-release-build.lock` serializes a deliberate release build against VM testing. A VM run refuses to start while another process holds that lock. Once a VM test is running, a new uncoordinated T1OS Chromium runtime/source build is unrelated to the suite and is stopped immediately; generic builders are stopped only after age, CPU, or workspace-file-surge thresholds are exceeded.
 
 Do not bypass the lock simply to gain CPU time. Inspect `.ninja_log`, compiler activity, staging-file count, and repository file count first. A busy build that is completing objects without growing the project workspace is not pathological; a stalled or repeatedly respawning build, orphaned compiler group, or multi-thousand-file repository surge is.
 

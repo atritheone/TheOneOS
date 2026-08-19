@@ -2342,7 +2342,19 @@ def replace_environment(requested, operation, locked_artifacts=None):
     with TRANSACTION_LOCK:
         old_state = load_state()
         stage = resolve_environment(requested, old_state, locked_artifacts, operation)
-        return commit_environment(stage, operation)
+        state = commit_environment(stage, operation)
+        try:
+            prune_unused_cache()
+        except Exception as error:
+            # Cache housekeeping is deliberately automatic and must not turn
+            # an already committed package transaction into a reported
+            # failure. Preserve the package result and leave diagnostic detail
+            # in the service log for recovery tooling.
+            print(
+                f'> Python automatic cache cleanup failed: {error}',
+                file=sys.stderr,
+            )
+        return state
 
 
 def state_health(state):
@@ -2697,7 +2709,7 @@ def op_apply_lock(arguments, descriptor):
     return operation_result(result, 'Python lock applied.')
 
 
-def op_clear_cache(arguments):
+def prune_unused_cache():
     keep = set()
     for state in (load_state(), load_state(previous_path())):
         for item in state.get('artifacts', []):
@@ -2711,6 +2723,11 @@ def op_clear_cache(arguments):
         if name not in keep:
             safe_remove_tree(path, cache_path())
             removed += 1
+    return removed
+
+
+def op_clear_cache(arguments):
+    removed = prune_unused_cache()
     return {'removed': removed, 'message': 'Unused Python downloads cleared.'}
 
 

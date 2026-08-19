@@ -103,8 +103,7 @@ install python wheel /path/to/package.whl
 remove python module requests
 list python modules
 show python module numpy
-check python modules
-clear python cache
+check python
 ```
 
 Every Python Brick directive also accepts a compact acronym alias, such as
@@ -129,7 +128,6 @@ Brick provides the same operations in plain language:
 ```text
 python status
 check python
-check python modules
 python history
 list python modules
 show python module <name>
@@ -144,14 +142,18 @@ pin python module <name>
 unpin python module <name>
 repair python modules
 restore python modules
-clear python cache
 export python lock <file>
 apply python lock <file>
 ```
 
+The `cpm` acronym is retained as a compatibility alias for `check python`;
+there is no separate module-check directive. Unused package downloads are
+cleaned automatically by the manager rather than through an end-user cache
+command.
+
 Status, inventory, history, search, update checks, and lock export work in
 Master. Installing, removing, updating, pinning,
-repair, restore, cache changes, and lock application require Architect in both
+repair, restore, and lock application require Architect in both
 the frontend and the service. The T1OS LSM is the final runtime write boundary;
 Linux permission bits on an offline NTFS USB are not the authorization model.
 

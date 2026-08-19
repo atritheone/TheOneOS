@@ -18987,10 +18987,6 @@ def restorepythonmodules(args=None):
     return pythonchange('restore_modules', 'restore python modules', args)
 
 
-def clearpythoncache(args=None):
-    return pythonchange('clear_cache', 'clear python cache', args, timeout=120.0)
-
-
 def pythonlockchange(operation, usage, args=None, timeout=900.0):
 
     value = ' '.join(str(item) for item in (args or [])).strip()
@@ -19195,8 +19191,7 @@ DIRECTIVESPECS = [
     makespec('check syntax', [], 'check Python syntax without running code', ['check syntax <file or tier>'], checksyntax, grammar=makegrammar('path', completion='path'), category='development'),
     makespec('check system', [], 'check critical T1OS state', ['check system'], checksystem, category='system'),
     makespec('python status', ['ps'], 'show managed Python health', ['python status'], pythonstatus, category='python'),
-    makespec('check python', ['cp'], 'check Python and added modules', ['check python'], checkpython, category='python'),
-    makespec('check python modules', ['cpm'], 'check added Python modules', ['check python modules'], checkpython, category='python'),
+    makespec('check python', ['cp', 'cpm'], 'check Python and added modules', ['check python'], checkpython, category='python'),
     makespec('python history', ['ph'], 'show Python module changes', ['python history'], pythonhistory, category='python'),
     makespec('list python modules', ['lpm'], 'list installed Python modules', ['list python modules'], listpythonmodules, category='python'),
     makespec('show python module', ['spm'], 'show an installed Python module', ['show python module <name>'], showpythonmodule, category='python'),
@@ -19211,7 +19206,6 @@ DIRECTIVESPECS = [
     makespec('unpin python module', ['unpm'], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python', architect=True),
     makespec('repair python modules', ['rprm'], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python', architect=True),
     makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python', architect=True),
-    makespec('clear python cache', ['cpc'], 'clear unused module downloads', ['clear python cache'], clearpythoncache, True, category='python', architect=True),
     makespec('export python lock', ['epl'], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
     makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
     makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood']), category='development'),
@@ -19826,35 +19820,34 @@ def diagnosticparsing():
             if spec.get('category') == 'python'
         ]
 
-        if len(pythonspecs) != 20:
+        if len(pythonspecs) != 18:
             raise RuntimeError('Python directive catalogue is incomplete')
 
         pythonaliases = {
-            'python status': 'ps',
-            'check python': 'cp',
-            'check python modules': 'cpm',
-            'python history': 'ph',
-            'list python modules': 'lpm',
-            'show python module': 'spm',
-            'find python module': 'fpm',
-            'list python updates': 'lpu',
-            'install python module': 'ipm',
-            'install python wheel': 'ipw',
-            'remove python module': 'rpm',
-            'update python module': 'upm',
-            'update python modules': 'upms',
-            'pin python module': 'ppm',
-            'unpin python module': 'unpm',
-            'repair python modules': 'rprm',
-            'restore python modules': 'rspm',
-            'clear python cache': 'cpc',
-            'export python lock': 'epl',
-            'apply python lock': 'apl',
+            'python status': ('ps',),
+            'check python': ('cp', 'cpm'),
+            'python history': ('ph',),
+            'list python modules': ('lpm',),
+            'show python module': ('spm',),
+            'find python module': ('fpm',),
+            'list python updates': ('lpu',),
+            'install python module': ('ipm',),
+            'install python wheel': ('ipw',),
+            'remove python module': ('rpm',),
+            'update python module': ('upm',),
+            'update python modules': ('upms',),
+            'pin python module': ('ppm',),
+            'unpin python module': ('unpm',),
+            'repair python modules': ('rprm',),
+            'restore python modules': ('rspm',),
+            'export python lock': ('epl',),
+            'apply python lock': ('apl',),
         }
 
         for spec in pythonspecs:
-            expectedalias = pythonaliases.get(str(spec.get('name', '')))
-            if expectedalias not in spec.get('aliases', []):
+            expectedaliases = set(
+                pythonaliases.get(str(spec.get('name', '')), ()))
+            if not expectedaliases.issubset(set(spec.get('aliases', []))):
                 raise RuntimeError(
                     f"Python directive alias missing for {spec.get('name', '')}")
 

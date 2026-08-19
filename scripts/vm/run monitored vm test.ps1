@@ -8,11 +8,11 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $testScript = Join-Path $PSScriptRoot '..\tests\test t1os vm.ps1'
-$hardwareRoot = Join-Path $projectRoot 'environment\hardware'
+$chromiumStateRoot = Join-Path $projectRoot 'development\chromium release'
 $softwareRoot = Join-Path $projectRoot 'environment\software'
 $stdoutPath = Join-Path $softwareRoot 't1os-vm-monitored.stdout.log'
 $stderrPath = Join-Path $softwareRoot 't1os-vm-monitored.stderr.log'
-$chromiumBuildLockPath = Join-Path $hardwareRoot 'chromium-release-build.lock'
+$chromiumBuildLockPath = Join-Path $chromiumStateRoot 'chromium-release-build.lock'
 $builderPattern = '^(chromium|chrome|ninja|autoninja|gn)$'
 $wslBuilderArguments = '(?i)(build chromium (?:runtime|source)\.py|/t1os-chromium/|(?:^|[ /])(autoninja|ninja|gn)(?: |$))'
 
@@ -25,6 +25,7 @@ if (-not (Test-Path -LiteralPath $testScript -PathType Leaf)) {
 # activity.  Hold this exclusive lock for the lifetime of the VM run so either
 # workflow can start first without a check-then-start race.
 $chromiumBuildLock = $null
+New-Item -ItemType Directory -Path $chromiumStateRoot -Force | Out-Null
 try {
     $chromiumBuildLock = [System.IO.File]::Open(
         $chromiumBuildLockPath,

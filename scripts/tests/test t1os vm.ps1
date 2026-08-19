@@ -965,7 +965,6 @@ function Invoke-T1OSBrickPythonMutation {
         '^update python modules$' { 'update_modules'; break }
         '^repair python modules$' { 'repair_modules'; break }
         '^restore python modules$' { 'restore_modules'; break }
-        '^clear python cache$' { 'clear_cache'; break }
         default { throw "No Python manager operation mapping for Brick directive: $Command" }
     }
     $brickPid = [int]$launch.response.pid
@@ -1060,7 +1059,7 @@ function Invoke-T1OSPythonDirectiveTest {
     $queries = [ordered]@{
         python_status = 'python status'
         check_python = 'check python'
-        check_python_modules = 'check python modules'
+        check_python_modules_alias = 'cpm'
         python_history = 'python history'
         list_python_modules = 'list python modules'
         show_python_module = 'show python module requests'
@@ -1127,8 +1126,6 @@ function Invoke-T1OSPythonDirectiveTest {
         -Command 'update python modules'
     Invoke-T1OSBrickPythonMutation -Name repair_python_modules `
         -Command 'repair python modules'
-    Invoke-T1OSBrickPythonMutation -Name clear_python_cache `
-        -Command 'clear python cache'
     Invoke-T1OSBrickPythonMutation -Name remove_python_module `
         -Command 'remove python module humanize'
     [void](Wait-T1OSPythonModule -Name 'humanize' -Present $false)

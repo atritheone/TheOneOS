@@ -126,6 +126,9 @@ def main(argv):
         assert "descriptors.append(os.dup(stream.fileno()))" in receive_source
         apply_source = function_source(manager_path, "op_apply_lock")
         assert "allow_anonymous=True" in apply_source
+        replace_source = function_source(manager_path, "replace_environment")
+        assert "prune_unused_cache()" in replace_source
+        assert "automatic cache cleanup failed" in replace_source
         request_source = function_source(manager_path, "request")
         serve_source = function_source(manager_path, "serve")
         assert "ready = channel.recv(1)" in request_source
@@ -218,32 +221,30 @@ def main(argv):
                 if isinstance(item, ast.Constant) and isinstance(item.value, str)
             ]
             python_directives[node.args[0].value] = aliases
-        assert len(python_directives) == 20, python_directives
+        assert len(python_directives) == 18, python_directives
         python_aliases = {
-            "python status": "ps",
-            "check python": "cp",
-            "check python modules": "cpm",
-            "python history": "ph",
-            "list python modules": "lpm",
-            "show python module": "spm",
-            "find python module": "fpm",
-            "list python updates": "lpu",
-            "install python module": "ipm",
-            "install python wheel": "ipw",
-            "remove python module": "rpm",
-            "update python module": "upm",
-            "update python modules": "upms",
-            "pin python module": "ppm",
-            "unpin python module": "unpm",
-            "repair python modules": "rprm",
-            "restore python modules": "rspm",
-            "clear python cache": "cpc",
-            "export python lock": "epl",
-            "apply python lock": "apl",
+            "python status": ("ps",),
+            "check python": ("cp", "cpm"),
+            "python history": ("ph",),
+            "list python modules": ("lpm",),
+            "show python module": ("spm",),
+            "find python module": ("fpm",),
+            "list python updates": ("lpu",),
+            "install python module": ("ipm",),
+            "install python wheel": ("ipw",),
+            "remove python module": ("rpm",),
+            "update python module": ("upm",),
+            "update python modules": ("upms",),
+            "pin python module": ("ppm",),
+            "unpin python module": ("unpm",),
+            "repair python modules": ("rprm",),
+            "restore python modules": ("rspm",),
+            "export python lock": ("epl",),
+            "apply python lock": ("apl",),
         }
         assert set(python_directives) == set(python_aliases)
-        for directive, alias in python_aliases.items():
-            assert alias in python_directives[directive], (
+        for directive, aliases in python_aliases.items():
+            assert set(aliases).issubset(python_directives[directive]), (
                 directive, python_directives[directive]
             )
         missing_source = function_source(brick_path, "missingpythonmodules")
