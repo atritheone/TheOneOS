@@ -46,6 +46,7 @@ roothealth_refusal_class=
 roothealth_refusal_summary=
 angel_prefix='~ '
 angel_suffix=' ~'
+roothealth_history_limit=5
 
 # The recovery implementation is shipped inside the initramfs. It uses only
 # BusyBox and the small native tools copied beside this init process.
@@ -100,10 +101,112 @@ persist_angel_log_to_root() {
     return 1
 }
 
+persist_roothealth_boot_history() {
+    # RootHealth runs before the root filesystem is trusted or mounted. Keep a
+    # bounded history on the EFI partition so a missing UUID, an NTFS refusal,
+    # or an interrupted shutdown gate cannot erase the preceding evidence.
+    history_mounted_here=0
+    # Defined by the sourced Angel recovery engine.
+    # shellcheck disable=SC2154
+    if ! "$busybox" mountpoint -q "$angel_esp_mount"; then
+        angel_mount_esp || return 0
+        history_mounted_here=1
+    fi
+
+    history_root="$angel_esp_mount/T1OS/diagnostics/roothealth-history"
+    history_stage="$history_root/.boot-current.new"
+    "$busybox" mkdir -p "$history_root" 2>/dev/null || {
+        [ "$history_mounted_here" = 0 ] || \
+            "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+        return 0
+    }
+    "$busybox" rm -rf "$history_stage" 2>/dev/null || true
+    "$busybox" mkdir -p "$history_stage" 2>/dev/null || {
+        [ "$history_mounted_here" = 0 ] || \
+            "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+        return 0
+    }
+
+    roothealth_history_copy() {
+        history_source=$1
+        history_name=$2
+        [ -s "$history_source" ] || return 0
+        if "$busybox" cp "$history_source" \
+                "$history_stage/$history_name" 2>/dev/null; then
+            "$busybox" chmod 0444 "$history_stage/$history_name" \
+                2>/dev/null || true
+        fi
+    }
+
+    roothealth_history_copy "$angel_log" angel.log
+    roothealth_history_copy "$roothealth_report" roothealth.json
+    roothealth_history_copy "$roothealth_stderr" roothealth.stderr
+    roothealth_history_copy "$roothealth_boot_evidence" boot.env
+    roothealth_history_copy "$root_discovery_log" root-discovery.log
+    "$busybox" dmesg | "$busybox" tail -n 2048 \
+        >"$history_stage/dmesg.log" 2>/dev/null || true
+    [ -s "$history_stage/dmesg.log" ] || \
+        "$busybox" rm -f "$history_stage/dmesg.log" 2>/dev/null || true
+
+    history_boot_id=$(
+        "$busybox" cat /proc/sys/kernel/random/boot_id 2>/dev/null || true
+    )
+    case "$history_boot_id" in
+        ????????-????-????-????-????????????) ;;
+        *) history_boot_id=unknown ;;
+    esac
+    history_captured_utc=$(
+        "$busybox" date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || \
+            printf unknown
+    )
+    {
+        printf 'format=1\n'
+        printf 'boot_id=%s\n' "$history_boot_id"
+        printf 'captured_utc=%s\n' "$history_captured_utc"
+        printf 'root_spec=%s\n' "$root_spec"
+        printf 'root_device=%s\n' "$root_device"
+        printf 'root_fstype=%s\n' "$root_fstype"
+        printf 'admission_completed=%s\n' "$roothealth_admission_completed"
+        printf 'admission_status=%s\n' "$roothealth_admission_status"
+        printf 'refusal_code=%s\n' "$roothealth_refusal_code"
+        printf 'refusal_class=%s\n' "$roothealth_refusal_class"
+    } >"$history_stage/manifest.env" 2>/dev/null || true
+    "$busybox" chmod 0444 "$history_stage/manifest.env" 2>/dev/null || true
+
+    newest_boot_id=$(
+        "$busybox" awk -F= "\$1 == \"boot_id\" { print \$2; exit }" \
+            "$history_root/boot-1/manifest.env" 2>/dev/null || true
+    )
+    if [ "$newest_boot_id" = "$history_boot_id" ] && \
+            [ "$history_boot_id" != unknown ]; then
+        # A later failure message from this same boot refreshes its newest slot
+        # without consuming a second position in the five-boot ring.
+        "$busybox" rm -rf "$history_root/boot-1" 2>/dev/null || true
+    else
+        history_slot=$roothealth_history_limit
+        "$busybox" rm -rf "$history_root/boot-$history_slot" \
+            2>/dev/null || true
+        while [ "$history_slot" -gt 1 ]; do
+            history_previous=$((history_slot - 1))
+            [ ! -d "$history_root/boot-$history_previous" ] || \
+                "$busybox" mv "$history_root/boot-$history_previous" \
+                    "$history_root/boot-$history_slot" 2>/dev/null || true
+            history_slot=$history_previous
+        done
+    fi
+    "$busybox" mv "$history_stage" "$history_root/boot-1" \
+        2>/dev/null || true
+    "$busybox" sync
+    if [ "$history_mounted_here" = 1 ]; then
+        "$busybox" umount "$angel_esp_mount" 2>/dev/null || true
+    fi
+}
+
 persist_angel_failure_log() {
     # A failure before the normal log handoff cannot rely on the root drive.
     # Preserve the transcript on the EFI system partition when it is available.
     persist_angel_log_to_root 2>/dev/null || true
+    persist_roothealth_boot_history
     angel_mount_esp || return 0
     # Defined by the sourced Angel recovery engine after angel_mount_esp.
     # shellcheck disable=SC2154
@@ -524,6 +627,7 @@ admit_t1os_ntfs_root() {
     [ -x /sbin/roothealth ] || {
         roothealth_admission_status=127
         log 'RootHealth is unavailable, so I refuse to mount the NTFS root.'
+        persist_roothealth_boot_history
         return 127
     }
 
@@ -532,6 +636,7 @@ admit_t1os_ntfs_root() {
     if run_roothealth_boot_repair; then
         roothealth_admission_status=0
         boot_status 'RootHealth admitted the root.'
+        persist_roothealth_boot_history
         return 0
     else
         roothealth_admission_status=$?
@@ -540,6 +645,7 @@ admit_t1os_ntfs_root() {
     log "$roothealth_refusal_summary"
     log "RootHealth diagnostic code=$roothealth_refusal_code class=$roothealth_refusal_class."
     log "RootHealth refused NTFS admission with status $roothealth_admission_status."
+    persist_roothealth_boot_history
     return "$roothealth_admission_status"
 }
 

@@ -124,8 +124,17 @@ elseif (
 # copied into the initramfs; their unrelated development drift must not block a
 # byte-identical, release-locked Python deployment payload.
 if (-not $Candidate314) {
-    $verificationJson = (& $pythonVerifier -DeploymentPayloadOnly | Out-String)
-    $verificationExitCode = $LASTEXITCODE
+    # This verifier is consumed as machine-readable build input. Bypass the
+    # incremental test wrapper so a cache-status line cannot replace its JSON.
+    $previousIncrementalScript = $env:T1OS_INCREMENTAL_ACTIVE_SCRIPT
+    try {
+        $env:T1OS_INCREMENTAL_ACTIVE_SCRIPT = 'scripts/tests/test python runtime.ps1'
+        $verificationJson = (& $pythonVerifier -DeploymentPayloadOnly | Out-String)
+        $verificationExitCode = $LASTEXITCODE
+    }
+    finally {
+        $env:T1OS_INCREMENTAL_ACTIVE_SCRIPT = $previousIncrementalScript
+    }
     if ($verificationExitCode -ne 0) {
         throw "The canonical Python verifier failed before initramfs construction (exit code $verificationExitCode)."
     }

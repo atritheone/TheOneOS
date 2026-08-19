@@ -917,6 +917,18 @@ def gpucandidateruntimeready(
     )
 
 
+def gpugraphicsmappingsready(mappings, mesa_gpu_contract=False):
+
+    """Confirm the mapped libraries that prove the selected GPU path."""
+
+    required = (
+        ("egl", "gbm", "gallium", "gbm_backend")
+        if mesa_gpu_contract
+        else ("egl_vendor", "egl_core", "egl_gbm")
+    )
+    return all(bool(mappings.get(name)) for name in required)
+
+
 def processdescendantof(process, ancestor):
     """Verify a live process belongs to one bounded Chromium process tree."""
     try:
@@ -1385,8 +1397,9 @@ def zygoteproviderstatus(
                     name: marker in mappings
                     for name, marker in selected_mapping_markers.items()
                 }
-                mapping_graphics_ready = all(
-                    gpu_graphics_mappings.values()
+                mapping_graphics_ready = gpugraphicsmappingsready(
+                    gpu_graphics_mappings,
+                    mesa_gpu_contract,
                 )
                 live_graphics_ready = (
                     live_gpu_graphics["gbm_path"]
@@ -6949,6 +6962,32 @@ def diagnostic():
         and gpucandidateruntimeready(True, True, True, True)
         and CHROMEGPURUNTIMETIMEOUT >= 15.0
         and CHROMEPROBETIMEOUT >= 15.0
+    )
+    checks["mapped_gpu_graphics_runtime"] = (
+        gpugraphicsmappingsready({
+            "egl_vendor": True,
+            "egl_core": True,
+            "egl_gbm": True,
+            "gbm_backend": False,
+        })
+        and not gpugraphicsmappingsready({
+            "egl_vendor": True,
+            "egl_core": True,
+            "egl_gbm": False,
+            "gbm_backend": True,
+        })
+        and gpugraphicsmappingsready({
+            "egl": True,
+            "gbm": True,
+            "gallium": True,
+            "gbm_backend": True,
+        }, mesa_gpu_contract=True)
+        and not gpugraphicsmappingsready({
+            "egl": True,
+            "gbm": True,
+            "gallium": True,
+            "gbm_backend": False,
+        }, mesa_gpu_contract=True)
     )
     try:
         requirevideoacceleration(

@@ -130,6 +130,12 @@ $runtimePathContract = Join-Path $projectRoot 'source\settings\runtime paths.jso
 $kernelPolicyText = Get-Content -LiteralPath $kernelPolicy -Raw
 $rootPushText = Get-Content -LiteralPath $rootPushScript -Raw
 $hardwareKernelPushText = Get-Content -LiteralPath $hardwareKernelPushScript -Raw
+$globalDevicesCheck = $kernelPolicyText.IndexOf('if (!strcmp(relative, "devices"))')
+$flatProcessCheck = $kernelPolicyText.IndexOf("slash = strchr(relative, '/');")
+if ($globalDevicesCheck -lt 0 -or $flatProcessCheck -lt 0 -or
+        $globalDevicesCheck -gt $flatProcessCheck) {
+    throw 'T1OS LSM checks DriverServer global proc inventories after the flat PID parser.'
+}
 if ($hardwareKernelPushText -match '(?m)^\$updateName\s*=\s*''\d{8}-') {
     throw 'The USB update script still requires a manually unique transaction identifier.'
 }

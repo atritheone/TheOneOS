@@ -142,8 +142,10 @@ assert server['pcmpreferencekey']('pcmC3D0p', None, realtek) < server['pcmprefer
 server['ALSACARDINFO'][3] = realtek
 assert server['pcmcandidatediagnostic']('pcmC3D0p', None)['rank'] == 5
 assert server['calibratedmastergain'](0.0) == 0.0
-assert abs(server['calibratedmastergain'](0.20) - (0.20 * 0.90 / 0.28)) < 0.000001
-assert abs(server['calibratedmastergain'](0.28) - 0.90) < 0.000001
+assert server['calibratedmastergain'](0.20) == 0.20
+assert server['calibratedmastergain'](0.28) == 0.28
+assert server['calibratedmastergain'](-1.0) == 0.0
+assert server['calibratedmastergain'](2.0) == 1.0
 assert server['calibratedmastergain'](1.0) == 1.0
 
 engine = server['alsactlpath'].__globals__

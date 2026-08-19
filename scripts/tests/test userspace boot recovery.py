@@ -93,6 +93,7 @@ def main():
     assert (
         early.index('normaliseservicesettings()') <
         early.index('normalisedesktopsettings()') <
+        early.index('normalisepersistentdesktoptiers()') <
         early.index('birth(PRESTARTOPS)')
     )
     require(
@@ -115,6 +116,29 @@ def main():
         "'operations centre'",
         'directorymode=0o700, filemode=0o600',
     )
+    require(
+        function(goddess, '_normaliseownedtree'),
+        'preservednames=()',
+        'if name in preservednames:',
+    )
+    require(
+        function(goddess, 'normalisepersistentdesktoptiers'),
+        "softwaretier='/software'",
+        "rubbishtier='/.rubbish'",
+        "('t1os-python', 't1os-python-index') if developertest else ()",
+        '(rubbishtier, 0o700, 0o600, ())',
+        'os.lstat(path)',
+        'os.mkdir(path, mode=directorymode)',
+        "getattr(os, 'O_NOFOLLOW', 0)",
+        'directorymode=directorymode',
+        'filemode=filemode',
+        'preservednames=preservednames',
+        'os.fchown(descriptor, 0, 0)',
+        'os.fchmod(descriptor, 0o1777)',
+    )
+    architect = source('source/build software/architect/architect.py')
+    require(architect, "'/software'", "'/.rubbish'")
+    require(lsm, '"/software"', '"/.rubbish"')
     require(goddess, "('python', PYTHONSCRIPT, 'behind')")
     assert "('Python', PYTHONSCRIPT" not in goddess
 

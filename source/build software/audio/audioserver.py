@@ -1577,14 +1577,12 @@ def mastergainmultiplier(gain):
 
 def calibratedmastergain(gain):
 
-    """Map the desktop volume control onto the useful hardware range."""
+    """Return the normalized gain used by the system software mixer."""
 
-    value = clamp(float(gain), 0.0, 1.0)
-
-    if value <= 0.28:
-        return value * 0.90 / 0.28
-
-    return 0.90 + ((value - 0.28) * 0.10 / 0.72)
+    # AudioServer keeps the hardware mixer at unity and applies this value to
+    # every stream in software. Preserve the desktop control's normalized
+    # level instead of expanding the first 28 percent to 90 percent amplitude.
+    return clamp(float(gain), 0.0, 1.0)
 
 
 # device functions

@@ -2024,7 +2024,6 @@ def handlesettingsmasterupdate(request):
     """Authenticated account/profile transaction; no password hash escapes."""
 
     try:
-        current = boundedpassword(request, 'current_password')
         requested = authbroker.canonicalize_username(request.get('username'))
         newpassword = request.get('new_password', '')
         if not isinstance(newpassword, str):
@@ -2035,6 +2034,7 @@ def handlesettingsmasterupdate(request):
         oldname, oldhash = authbroker.read_credentials(MASTERFILE)
         accountchanged = requested != oldname or bool(newpassword)
         if accountchanged:
+            current = boundedpassword(request, 'current_password')
             result = authbroker.authenticate_master(
                 MASTERFILE, current,
                 scope='settings:master-update', migrate=False)

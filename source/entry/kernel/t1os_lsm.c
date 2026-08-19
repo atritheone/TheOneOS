@@ -1230,6 +1230,19 @@ static bool t1os_process_read_allowed(const char *path)
 	    !strcmp(relative, "sys/fs/inotify/max_user_watches"))
 		return true;
 
+	/* These are global procfs inventories, not PID directories. Check them
+	 * before the single-component PID parser below. DriverServer needs devices
+	 * to materialize NVIDIA's frontend nodes before WindowServer starts. */
+	if (!strcmp(relative, "modules"))
+		return t1os_is_goddess_process() ||
+		       t1os_is_driverserver_process();
+	if (!strcmp(relative, "devices"))
+		return t1os_is_driverserver_process();
+	if (!strcmp(relative, "asound") || !strncmp(relative, "asound/", 7))
+		return t1os_is_goddess_process() ||
+		       t1os_is_driverserver_process() ||
+		       t1os_is_audioserver_process();
+
 	slash = strchr(relative, '/');
 	if (!slash) {
 		if (!strcmp(relative, "self") ||
@@ -1262,18 +1275,6 @@ static bool t1os_process_read_allowed(const char *path)
 	if (!t1os_process_reader_domain())
 		return false;
 
-	/* DriverServer reconstructs the NVIDIA nodes normally created by udev from
-	 * these two read-only kernel inventories. GODDESS reads modules only when it
-	 * captures a bounded graphics-failure diagnostic. */
-	if (!strcmp(relative, "modules"))
-		return t1os_is_goddess_process() ||
-		       t1os_is_driverserver_process();
-	if (!strcmp(relative, "devices"))
-		return t1os_is_driverserver_process();
-	if (!strcmp(relative, "asound") || !strncmp(relative, "asound/", 7))
-		return t1os_is_goddess_process() ||
-		       t1os_is_driverserver_process() ||
-		       t1os_is_audioserver_process();
 	if (!strcmp(leaf, "/stat") || !strcmp(leaf, "/status") ||
 	    !strcmp(leaf, "/cmdline") || !strcmp(leaf, "/comm") ||
 	    !strcmp(leaf, "/wchan") || !strcmp(leaf, "/attr") ||

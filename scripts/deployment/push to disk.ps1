@@ -2166,7 +2166,13 @@ verify_tree_without_permissions() {
     source=$2
     destination=$3
 
-    differences=$(rsync -a --no-whole-file --no-perms --no-owner --no-group --checksum --delete --itemize-changes --dry-run -- "$source"/ "$destination"/)
+    # Physical NTFS targets deliberately do not preserve POSIX ownership,
+    # modes, or timestamps.  Reuse the same target-specific metadata options
+    # as the corresponding sync so exhaustive verification measures content
+    # and topology instead of reporting copy-time mtimes as payload drift.
+    # storage.img leaves this variable empty and therefore retains archive
+    # metadata verification.
+    differences=$(rsync -a --no-whole-file $usb_rsync_metadata_options --no-perms --no-owner --no-group --checksum --delete --itemize-changes --dry-run -- "$source"/ "$destination"/)
     if [ -n "$differences" ]; then
         echo "$label verification found remaining differences:" >&2
         printf '%s\n' "$differences" >&2
@@ -2796,10 +2802,10 @@ if root_selected resources; then
     sync_file 'OpenGL 3D test compatibility name' "$stage/resources/tests/opengl 3d test.py" "$mount_point/software/opengl 3d test.py"
     sync_file 'OpenGL test compatibility name' "$stage/resources/tests/opengl test.py" "$mount_point/software/opengl test.py"
     sync_file 'Creep test utility' "$stage/resources/tests/creep.py" "$mount_point/software/creep.py"
-    chmod 0555 "$system_software_destination/patchelf"
     if [ "$target_mode" = image ]; then
         chown 0:0 "$system_software_destination" "$system_software_destination/patchelf"
         chmod 0755 "$system_software_destination"
+        chmod 0555 "$system_software_destination/patchelf"
         chown 0:0 \
             "$mount_point/software/opengltest1.py" \
             "$mount_point/software/opengltest2.py" \
@@ -2869,7 +2875,9 @@ if [ "$exhaustive_verify" = True ]; then
     verify_managed_python_release
     verify_tree_without_permissions 'system software' "$system_software_source" "$system_software_destination"
     readelf -h "$system_software_destination/patchelf" >/dev/null
-    [ -x "$system_software_destination/patchelf" ]
+    if [ "$target_mode" = image ]; then
+        [ -x "$system_software_destination/patchelf" ]
+    fi
     for runtime_font in atkinsonhyperlegiblenext.ttf cambria.ttf firacode.ttf firacodebold.ttf firacodesemibold.ttf; do
         cmp -s -- "$stage/resources/fonts/$runtime_font" "$font_destination/$runtime_font" || {
             echo "Runtime font verification found a remaining difference: $runtime_font" >&2

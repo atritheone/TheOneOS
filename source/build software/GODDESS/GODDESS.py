@@ -77,7 +77,7 @@ SESSIONIDENTITY = '/the one/settings/session/identity.json'
 
 def _normaliseownedtree(
         descriptor, *, directorymode=0o700, filemode=None,
-        rootownedfiles=()):
+        rootownedfiles=(), preservednames=()):
 
     """Normalize an existing tree without following links or flattening modes."""
 
@@ -86,6 +86,11 @@ def _normaliseownedtree(
     for name in os.listdir(descriptor):
         if name in ('.', '..') or '/' in name or '\x00' in name:
             raise OSError('unsafe owned-tree entry')
+        if name in preservednames:
+            # A caller may reserve an exact top-level entry for a different
+            # security domain. Do not traverse it or change any metadata below
+            # it; the parent tier's mode must enforce that boundary.
+            continue
         status = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
         if statmodule.S_ISDIR(status.st_mode):
             child = os.open(
@@ -130,6 +135,58 @@ def _normaliseownedtree(
             os.chown(
                 name, T1OS_DESKTOP_UID, T1OS_DESKTOP_GID,
                 dir_fd=descriptor, follow_symlinks=False)
+
+
+def normalisepersistentdesktoptiers(
+        softwaretier='/software', rubbishtier='/.rubbish'):
+
+    """Repair persistent user-write tiers on an NTFS root mount."""
+
+    developertest = (
+        os.environ.get('T1OS_DEVELOPER') == '1' and
+        os.environ.get('T1OS_ENABLE_VM_TEST_AGENT') == '1'
+    )
+    for path, directorymode, filemode, preservednames in (
+        (
+            softwaretier,
+            0o755,
+            None,
+            ('t1os-python', 't1os-python-index') if developertest else (),
+        ),
+        (rubbishtier, 0o700, 0o600, ()),
+    ):
+        try:
+            status = os.lstat(path)
+        except FileNotFoundError:
+            os.mkdir(path, mode=directorymode)
+            status = os.lstat(path)
+        if not statmodule.S_ISDIR(status.st_mode):
+            raise OSError(f'persistent desktop tier is not a directory: {path}')
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+            getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            opened = os.fstat(descriptor)
+            if not statmodule.S_ISDIR(opened.st_mode):
+                raise OSError(
+                    f'persistent desktop tier changed type while opening: {path}')
+            _normaliseownedtree(
+                descriptor,
+                directorymode=directorymode,
+                filemode=filemode,
+                preservednames=preservednames,
+            )
+            if developertest and path == softwaretier:
+                # The disposable VM has root-owned package fixtures below this
+                # otherwise user-write tier. A root-owned sticky parent lets
+                # uid 1000 create and remove its own files without gaining the
+                # ability to rename or remove those reserved fixtures.
+                os.fchown(descriptor, 0, 0)
+                os.fchmod(descriptor, 0o1777)
+        finally:
+            os.close(descriptor)
 
 
 def normaliseservicesettings():
@@ -7017,6 +7074,7 @@ def main():
     # those boot-time consumers.
     normaliseservicesettings()
     normalisedesktopsettings()
+    normalisepersistentdesktoptiers()
     setuppowerserver()
 
     # OperationsServer starts later. The supervisor will hand it a full TASKS
