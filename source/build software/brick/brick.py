@@ -3452,14 +3452,9 @@ def completeonce():
         segment = rawsegment.lstrip(' ')
         segmentstart = chainstart + leading
 
-        # complete help arguments from the directive catalogue
+        # Help has no argument form, so do not offer argument completion.
         if segment.startswith('help '):
-
-            prefix = segment[5:]
-            choices = set(DIRECTIVECATEGORIES)
-            cands = sorted([name for name in choices if name.startswith(prefix)])
-            wstart = segmentstart + 5
-            mode = 'cmd'
+            return
 
         else:
 
@@ -13598,41 +13593,12 @@ def timedir(args=None):
 def help(args=None):
 
     try:
-        requested = ' '.join(
-            str(arg) for arg in (args or [])).strip().casefold()
-        categories = list(DIRECTIVECATEGORIES)
-        if requested:
-            category = next((
-                name for name in categories
-                if requested == str(name).casefold()
-            ), None)
-            if category is None:
-                guiprint('> help accepts a directive category',
-                         colour=ERRORCOLOUR)
-                return 1
-            records = []
-            for spec in DIRECTIVESPECS:
-                if spec.get('category') != category:
-                    continue
-                aliases = ', '.join(spec.get('aliases', []))
-                usage = spec.get('usages', [''])
-                records.append([
-                    str(spec.get('name', '')),
-                    aliases,
-                    str(spec.get('description', '')),
-                    str(usage[0] if usage else ''),
-                ])
-            guiprint()
-            guiprint(f'{category} directives', colour=TEXTCOLOUR, bold=True)
-            guiprint()
-            showtable(
-                ['directive', 'aliases', 'description', 'usage'], records)
-            guiprint()
-            return 0
+        if args:
+            guiprint('> help does not take an argument', colour=ERRORCOLOUR)
+            return 1
 
+        categories = list(DIRECTIVECATEGORIES)
         guiprint('> available directives', colour=TEXTCOLOUR)
-        guiprint('> use help <category> to show one category',
-                 colour=TEXTCOLOUR)
         for category in categories:
             records = []
             for spec in DIRECTIVESPECS:
@@ -20540,7 +20506,7 @@ DIRECTIVESPECS = [
     makespec('clear history', ['ch'], 'erase persisted brick history', ['clear history'], clearhistory, True, category='system'),
     makespec('clear', ['cl'], 'clear output', ['clear'], cleardir, category='system'),
     makespec('version', ['v'], 'show the t1os version', ['version'], version, category='system'),
-    makespec('help', [], 'show directive categories', ['help', 'help <category>'], help, grammar=makegrammar(terms=DIRECTIVECATEGORIES), category='system'),
+    makespec('help', [], 'show all directives', ['help'], help, category='system'),
     makespec('log out', [], 'log out of t1os', ['log out'], logout, headless=False, category='system'),
     makespec('shut down', [], 'shut down the terminal', ['shut down'], shutdown, headless=False, category='system'),
     makespec('restart', [], 'restart the terminal', ['restart'], restart, headless=False, category='system'),
@@ -21214,25 +21180,17 @@ def diagnosticparsing():
         STYLES.clear()
         categoryresult = rundirective('help inspection', echo=False)
         categorytext = '\n'.join(str(line) for line in SCROLL)
-
-        if not categoryresult.get('ok') or 'inspection directives' not in categorytext or 'show details' not in categorytext:
-            raise RuntimeError('focused category help failed')
-
-        SCROLL.clear()
-        STYLES.clear()
-        directiveresult = rundirective('help run', echo=False)
-        directivetext = '\n'.join(str(line) for line in SCROLL)
-        if directiveresult.get('ok') or 'help accepts a directive category' not in directivetext:
-            raise RuntimeError('per-directive help was not retired')
+        if categoryresult.get('ok') or 'help does not take an argument' not in categorytext:
+            raise RuntimeError('help accepted a category argument')
 
         INPUTBUF = 'help oper'
         CURSORPOS = len(INPUTBUF)
         completeonce()
 
-        if not INPUTBUF.startswith('help operations'):
-            raise RuntimeError('help category completion failed')
+        if INPUTBUF != 'help oper':
+            raise RuntimeError('help argument completion remains active')
 
-        result['checks']['catalogue_categories'] = True
+        result['checks']['help_single_form'] = True
 
         expected = {
             'rename': ('file', 'to'),

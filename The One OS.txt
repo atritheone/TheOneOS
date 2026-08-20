@@ -5,8 +5,6 @@
 
 add native rar compression and extraction.
 
-add expanse.
-
 add environment variables to settings.
 
 lock the identity folder.

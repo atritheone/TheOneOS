@@ -347,10 +347,15 @@ TASKMENURECT = None
 TASKMENUANCHOR = None
 TASKMENUGROUP = None
 TASKMENUCONTEXT = None
+TASKMENUTASKBAR = False
+TASKMENUDESKTOP = None
+TASKMENUDESKTOPVIEW = False
 TASKMENUITEMRECTS = []
 TASKMENUPENDINGGROUP = None
 TASKMENUPENDINGANCHOR = None
 TASKMENUPENDINGCONTEXT = None
+TASKMENUPENDINGTASKBAR = False
+TASKMENUPENDINGDESKTOP = None
 BASE_TASKMENUW = 240
 BASE_TASKMENUITEMH = 34
 BASE_TASKMENUPAD = 12
@@ -366,6 +371,8 @@ TASKBARPINS = []
 TASKBARSEEN = []
 TASKBARORDERFILE = "/the one/settings/expanse/taskbarorder.json"
 TASKBARORDER = []
+TASKBARSETTINGSFILE = "/the one/settings/expanse/taskbar.json"
+TASKBARSEARCHVISIBLE = True
 DRAGTASKGROUP = None
 DRAGTASKACTIVE = False
 DRAGTASKMOVED = False
@@ -375,6 +382,26 @@ DRAGTASKX = 0
 DRAGTASKY = 0
 DRAGTASKOFFSETX = 0
 DRAGTASKTHRESH = 6
+
+# desktop tier
+DESKTOPROOT = ""
+DESKTOPSETTINGSFILE = "/the one/settings/expanse/desktop.json"
+DESKTOPSHOW = True
+DESKTOPITEMSIZE = "medium"
+DESKTOPORDER = []
+DESKTOPEXPANDED = set()
+DESKTOPITEMS = []
+DESKTOPITEMRECTS = []
+DESKTOPSELECTED = None
+DESKTOPHOVER = None
+DESKTOPLASTCLICKPATH = None
+DESKTOPLASTCLICKAT = 0.0
+DESKTOPDOUBLECLICK = 0.45
+DESKTOPNEXTSCAN = 0.0
+DESKTOPSCANSIGNATURE = None
+DESKTOPDRAGPATH = None
+DESKTOPDRAGSTART = None
+DESKTOPDRAGACTIVE = False
 
 # network
 NETICONX = 0
@@ -1158,10 +1185,7 @@ def graphicsbuildscene(role):
 
         if role == "desktop":
 
-            commands = []
-            width, height = graphicsdimensions(role)
-            graphicsrect(commands, role, 0, 0, width, height, DESKTOPBG)
-            return commands
+            return graphicscapture(role, desktoppaintcontent)
 
         if role == "taskbar":
 
@@ -2994,6 +3018,394 @@ def getusername():
     return username
 
 
+# desktop tier functions
+def desktopsecurepath(path):
+
+    if not DESKTOPROOT:
+        return None
+
+    try:
+        root = os.path.abspath(DESKTOPROOT)
+        candidate = os.path.abspath(str(path))
+        if os.path.commonpath((root, candidate)) != root:
+            return None
+        return candidate
+    except Exception:
+        return None
+
+
+def desktoprelative(path):
+
+    candidate = desktopsecurepath(path)
+    if candidate is None:
+        return None
+
+    relative = os.path.relpath(candidate, DESKTOPROOT).replace("\\", "/")
+    return "" if relative == "." else relative
+
+
+def desktoppath(relative):
+
+    value = str(relative or "").replace("\\", "/").strip("/")
+    return desktopsecurepath(os.path.join(DESKTOPROOT, value))
+
+
+def desktophidden(path, name):
+
+    if str(name).startswith("."):
+        return True
+
+    try:
+        os.getxattr(path, "user.hidden", follow_symlinks=False)
+        return True
+    except (AttributeError, OSError, TypeError):
+        return False
+
+
+def desktopnaturalkey(value):
+
+    return tuple(
+        int(part) if part.isdigit() else part
+        for part in re.split(r"([0-9]+)", str(value).casefold())
+    )
+
+
+def desktopvisiblechildren(path):
+
+    children = []
+
+    try:
+        with os.scandir(path) as entries:
+            for entry in entries:
+                if desktophidden(entry.path, entry.name):
+                    continue
+                children.append(entry)
+    except OSError:
+        return []
+
+    children.sort(key=lambda entry: desktopnaturalkey(entry.name))
+    children.sort(key=lambda entry: not entry.is_dir(follow_symlinks=False))
+    return children
+
+
+def desktopwalk(path, depth, output):
+
+    for entry in desktopvisiblechildren(path):
+        entrypath = desktopsecurepath(entry.path)
+        if entrypath is None:
+            continue
+
+        try:
+            isdirectory = bool(entry.is_dir(follow_symlinks=False))
+            information = entry.stat(follow_symlinks=False)
+            stamp = (
+                int(getattr(information, "st_mtime_ns", 0)),
+                int(getattr(information, "st_size", 0)),
+                int(getattr(information, "st_mode", 0)),
+            )
+        except OSError:
+            isdirectory = False
+            stamp = (0, 0, 0)
+
+        children = desktopvisiblechildren(entrypath) if isdirectory else []
+        expanded = bool(isdirectory and entrypath in DESKTOPEXPANDED)
+        output.append({
+            "name": str(entry.name),
+            "path": entrypath,
+            "isdir": isdirectory,
+            "haskids": bool(children),
+            "expanded": expanded,
+            "depth": int(depth),
+            "stamp": stamp,
+        })
+
+        if expanded:
+            desktopwalk(entrypath, depth + 1, output)
+
+
+def desktopsortroots(items):
+
+    roots = []
+    children = {}
+
+    for item in items:
+        if int(item.get("depth", 0)) == 0:
+            roots.append(item)
+            children[item["path"]] = []
+            current = item["path"]
+        elif roots:
+            children[current].append(item)
+
+    order = {name: index for index, name in enumerate(DESKTOPORDER)}
+    roots.sort(key=lambda item: (
+        order.get(str(item.get("name", "")), len(order)),
+        desktopnaturalkey(item.get("name", "")),
+    ))
+
+    flattened = []
+    for root in roots:
+        flattened.append(root)
+        flattened.extend(children.get(root["path"], []))
+    return flattened
+
+
+def desktopbuildtree():
+
+    items = []
+
+    if DESKTOPROOT and os.path.isdir(DESKTOPROOT):
+        desktopwalk(DESKTOPROOT, 0, items)
+
+    return desktopsortroots(items)
+
+
+def desktopmetrics():
+
+    modes = {
+        "small": (190, 30, 12, 7, 16),
+        "medium": (250, 38, 14, 9, 19),
+        "large": (320, 48, 18, 11, 24),
+    }
+    width, height, fontsize, padding, indent = modes.get(
+        DESKTOPITEMSIZE, modes["medium"])
+    return {
+        "width": s(width, 120),
+        "height": s(height, 22),
+        "font": s(fontsize, 9),
+        "padding": s(padding, 4),
+        "indent": s(indent, 11),
+        "gap": s(8, 4),
+        "margin": s(12, 6),
+    }
+
+
+def desktoplayout():
+
+    global DESKTOPITEMRECTS
+
+    DESKTOPITEMRECTS = []
+    if not DESKTOPSHOW:
+        return DESKTOPITEMRECTS
+
+    metrics = desktopmetrics()
+    available = max(1, int(DESKTOPH - TASKBARH - metrics["margin"] * 2))
+    rows = max(1, available // int(metrics["height"]))
+
+    for index, item in enumerate(DESKTOPITEMS):
+        column = index // rows
+        row = index % rows
+        x = metrics["margin"] + column * metrics["width"]
+        y = metrics["margin"] + row * metrics["height"]
+        width = max(1, metrics["width"] - metrics["gap"])
+
+        if x >= DESKTOPW:
+            break
+
+        width = min(width, max(1, DESKTOPW - x))
+        arrowx = x + metrics["padding"] + int(item.get("depth", 0)) * metrics["indent"]
+        arrowwidth = metrics["indent"]
+        record = dict(item)
+        record.update({
+            "rect": [x, y, width, metrics["height"]],
+            "arrowrect": [arrowx, y, arrowwidth, metrics["height"]],
+        })
+        DESKTOPITEMRECTS.append(record)
+
+    return DESKTOPITEMRECTS
+
+
+def desktopitemat(x, y):
+
+    for item in reversed(DESKTOPITEMRECTS):
+        rx, ry, rw, rh = item["rect"]
+        if rx <= x < rx + rw and ry <= y < ry + rh:
+            return item
+    return None
+
+
+def desktoptoplevelitem(path):
+
+    target = desktopsecurepath(path)
+    if target is None:
+        return None
+
+    for item in DESKTOPITEMS:
+        if int(item.get("depth", 0)) != 0:
+            continue
+        root = item.get("path")
+        try:
+            if os.path.commonpath((root, target)) == root:
+                return item
+        except Exception:
+            continue
+    return None
+
+
+def desktopreorder(sock, sourcepath, targetpath=None):
+
+    source = desktoptoplevelitem(sourcepath)
+    target = desktoptoplevelitem(targetpath) if targetpath else None
+    if source is None:
+        return False
+    if target is not None and target.get("path") == source.get("path"):
+        return False
+
+    roots = [
+        str(item.get("name", ""))
+        for item in DESKTOPITEMS
+        if int(item.get("depth", 0)) == 0
+    ]
+    source_name = str(source.get("name", ""))
+    target_name = str(target.get("name", "")) if target else None
+    roots = [name for name in roots if name != source_name]
+
+    if target_name in roots:
+        roots.insert(roots.index(target_name), source_name)
+    else:
+        roots.append(source_name)
+
+    globals()["DESKTOPORDER"] = roots
+    savedesktopsettings()
+    desktoprefresh(sock, force=True)
+    return True
+
+
+def desktoparrowat(item, x, y):
+
+    if not item or not item.get("isdir"):
+        return False
+
+    rx, ry, rw, rh = item.get("arrowrect", [0, 0, 0, 0])
+    return rx <= x < rx + rw and ry <= y < ry + rh
+
+
+def desktopscanstate(items):
+
+    return tuple(
+        (
+            desktoprelative(item.get("path")),
+            bool(item.get("isdir")),
+            bool(item.get("haskids")),
+            bool(item.get("expanded")),
+            int(item.get("depth", 0)),
+            tuple(item.get("stamp", ())),
+        )
+        for item in items
+    )
+
+
+def desktoprefresh(sock=None, force=False):
+
+    global DESKTOPITEMS, DESKTOPSCANSIGNATURE, DESKTOPNEXTSCAN, DESKTOPSELECTED
+
+    now = time.monotonic()
+    if not force and now < DESKTOPNEXTSCAN:
+        return False
+
+    DESKTOPNEXTSCAN = now + 1.0
+    items = desktopbuildtree()
+    signature = desktopscanstate(items)
+    changed = bool(force or signature != DESKTOPSCANSIGNATURE)
+
+    if changed:
+        DESKTOPITEMS = items
+        DESKTOPSCANSIGNATURE = signature
+        visiblepaths = {item["path"] for item in items}
+        if DESKTOPSELECTED not in visiblepaths:
+            DESKTOPSELECTED = None
+        desktoplayout()
+        if sock is not None and DESKTOPID is not None and DESKTOPBUF is not None:
+            paintdesktop(sock)
+
+    return changed
+
+
+def loaddesktopsettings():
+
+    global DESKTOPSHOW, DESKTOPITEMSIZE, DESKTOPORDER, DESKTOPEXPANDED
+
+    DESKTOPSHOW = True
+    DESKTOPITEMSIZE = "medium"
+    DESKTOPORDER = []
+    DESKTOPEXPANDED = set()
+
+    try:
+        with open(DESKTOPSETTINGSFILE, "r") as stream:
+            data = json.load(stream)
+    except FileNotFoundError:
+        return
+    except Exception as error:
+        log(f"load desktop settings error {error}")
+        return
+
+    if not isinstance(data, dict):
+        return
+    if isinstance(data.get("show"), bool):
+        DESKTOPSHOW = bool(data["show"])
+    if data.get("size") in ("large", "medium", "small"):
+        DESKTOPITEMSIZE = str(data["size"])
+    if isinstance(data.get("order"), list):
+        DESKTOPORDER = [
+            str(name) for name in data["order"]
+            if isinstance(name, str) and name and "/" not in name and "\\" not in name
+        ]
+    if isinstance(data.get("expanded"), list):
+        for relative in data["expanded"]:
+            if not isinstance(relative, str):
+                continue
+            path = desktoppath(relative)
+            if path is not None and path != DESKTOPROOT:
+                DESKTOPEXPANDED.add(path)
+
+
+def savedesktopsettings():
+
+    temporary = ""
+
+    try:
+        directory = os.path.dirname(DESKTOPSETTINGSFILE)
+        os.makedirs(directory, exist_ok=True)
+        temporary = f"{DESKTOPSETTINGSFILE}.{os.getpid()}.temporary"
+        expanded = sorted(
+            relative for relative in (
+                desktoprelative(path) for path in DESKTOPEXPANDED
+            )
+            if relative
+        )
+        data = {
+            "show": bool(DESKTOPSHOW),
+            "size": str(DESKTOPITEMSIZE),
+            "order": list(DESKTOPORDER),
+            "expanded": expanded,
+        }
+        with open(temporary, "w") as stream:
+            json.dump(data, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, DESKTOPSETTINGSFILE)
+    except Exception as error:
+        log(f"save desktop settings error {error}")
+        try:
+            if temporary and os.path.exists(temporary):
+                os.remove(temporary)
+        except Exception:
+            pass
+
+
+def initdesktop(username):
+
+    global DESKTOPROOT
+
+    DESKTOPROOT = os.path.abspath(f"/master/{username}/expanse")
+    try:
+        os.makedirs(DESKTOPROOT, exist_ok=True)
+    except OSError as error:
+        log(f"create desktop tier error {error}")
+    loaddesktopsettings()
+    desktoprefresh(force=True)
+
+
 # taskbar functions
 def taskbarbegin():
 
@@ -3227,6 +3639,10 @@ def updatesearchcaret(sock):
 def taskbarpaintsearch():
 
     try:
+
+        if not TASKBARSEARCHVISIBLE:
+            globals()["SEARCHRECT"] = None
+            return
 
         gap = int(WINDOWGAP)
         boxx = int(LAUNCHX + LAUNCHW + gap)
@@ -4119,7 +4535,7 @@ def taskbarpaintwindowicons():
         if SEARCHRECT and len(SEARCHRECT) == 4:
             startx = int(SEARCHRECT[0] + SEARCHRECT[2] + WINDOWGAP)
         else:
-            startx = LAUNCHX + LAUNCHW + WINDOWGAP + SEARCHW + WINDOWGAP
+            startx = LAUNCHX + LAUNCHW + WINDOWGAP
 
         try:
 
@@ -5794,6 +6210,58 @@ def savetaskbarorder():
         log(f"savetaskbarorder error {e}")
 
 
+def loadtaskbarsettings():
+
+    global TASKBARSEARCHVISIBLE
+
+    TASKBARSEARCHVISIBLE = True
+
+    try:
+
+        if not os.path.exists(TASKBARSETTINGSFILE):
+            return
+
+        with open(TASKBARSETTINGSFILE, "r") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict) and isinstance(data.get("search"), bool):
+            TASKBARSEARCHVISIBLE = bool(data["search"])
+
+    except Exception as e:
+
+        TASKBARSEARCHVISIBLE = True
+        log(f"loadtaskbarsettings error {e}")
+
+
+def savetaskbarsettings():
+
+    temporary = ""
+
+    try:
+
+        directory = os.path.dirname(TASKBARSETTINGSFILE)
+        os.makedirs(directory, exist_ok=True)
+        temporary = f"{TASKBARSETTINGSFILE}.{os.getpid()}.temporary"
+
+        with open(temporary, "w") as f:
+            json.dump({"search": bool(TASKBARSEARCHVISIBLE)}, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+
+        os.replace(temporary, TASKBARSETTINGSFILE)
+
+    except Exception as e:
+
+        log(f"savetaskbarsettings error {e}")
+
+        try:
+            if temporary and os.path.exists(temporary):
+                os.remove(temporary)
+        except Exception:
+            pass
+
+
 def grouppinned(group):
 
     try:
@@ -7095,7 +7563,85 @@ def searchcontextmenuitems(result):
     return items
 
 
+def desktopcontextmenuitems(context):
+
+    if TASKMENUDESKTOPVIEW:
+        return [
+            {
+                "label": "show expanse",
+                "action": "desktop-show",
+                "checked": bool(DESKTOPSHOW),
+            },
+            {
+                "label": "large",
+                "action": "desktop-size-large",
+                "checked": DESKTOPITEMSIZE == "large",
+            },
+            {
+                "label": "medium",
+                "action": "desktop-size-medium",
+                "checked": DESKTOPITEMSIZE == "medium",
+            },
+            {
+                "label": "small",
+                "action": "desktop-size-small",
+                "checked": DESKTOPITEMSIZE == "small",
+            },
+        ]
+
+    kind = str((context or {}).get("kind", "empty"))
+    target = desktopsecurepath((context or {}).get("path", DESKTOPROOT))
+
+    if kind == "row" and target is not None:
+        result = {
+            "kind": "tier" if os.path.isdir(target) else "file",
+            "value": target,
+        }
+        return [
+            item for item in searchcontextmenuitems(result)
+            if item.get("action") != "filelocation"
+        ]
+
+    items = [{"label": "view >", "action": "desktop-view"}]
+    if target is not None and os.path.isdir(target):
+        items.extend([
+            {"label": "new file", "action": "newfile"},
+            {"label": "new tier", "action": "newtier"},
+        ])
+        try:
+            clipboardok, clipboard = exmeta()
+            if (
+                clipboardok
+                and str(clipboard.get("type", "")) == "files"
+                and int(clipboard.get("bytes", 0)) > 0
+            ):
+                items.append({"label": "paste", "action": "paste"})
+        except Exception:
+            pass
+        items.append({
+            "label": "pin current tier to sidebar",
+            "action": "sidebarpin",
+        })
+    items.append({"label": "settings", "action": "desktop-settings"})
+    return items
+
+
 def taskmenuitems():
+
+    if TASKMENUTASKBAR:
+        return [
+            {
+                "label": "search",
+                "action": "taskbar-search",
+                "checked": bool(TASKBARSEARCHVISIBLE),
+            },
+            {"label": "show expanse", "action": "show-expanse"},
+            {"label": "settings", "action": "settings"},
+            {"label": "operations centre", "action": "operations-centre"},
+        ]
+
+    if TASKMENUDESKTOP is not None:
+        return desktopcontextmenuitems(TASKMENUDESKTOP)
 
     if TASKMENUCONTEXT is not None:
         return searchcontextmenuitems(TASKMENUCONTEXT)
@@ -7116,16 +7662,28 @@ def taskmenuitems():
     return items
 
 
+def taskmenucompactfontsize():
+
+    return s(12, 8)
+
+
+def taskmenucompactpad():
+
+    return s(10, 6)
+
+
 def taskmenuitemheight():
 
-    if TASKMENUCONTEXT is not None:
-        return max(s(22, 11), int(TASKMENUFONTSIZE) + s(8, 4))
+    if TASKMENUCONTEXT is not None or TASKMENUTASKBAR or TASKMENUDESKTOP is not None:
+        return max(s(22, 11), taskmenucompactfontsize() + s(6, 3))
     return int(TASKMENUITEMH)
 
 
 def closetaskmenu(sock):
 
-    global TASKMENUMAPPED, TASKMENURECT, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUITEMRECTS, TASKMENUHOVER
+    global TASKMENUMAPPED, TASKMENURECT, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
+    global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW
+    global TASKMENUITEMRECTS, TASKMENUHOVER
 
     try:
 
@@ -7138,6 +7696,12 @@ def closetaskmenu(sock):
             TASKMENUGROUP = None
 
             TASKMENUCONTEXT = None
+
+            TASKMENUTASKBAR = False
+
+            TASKMENUDESKTOP = None
+
+            TASKMENUDESKTOPVIEW = False
 
             TASKMENUITEMRECTS = []
 
@@ -7156,6 +7720,12 @@ def closetaskmenu(sock):
         TASKMENUGROUP = None
 
         TASKMENUCONTEXT = None
+
+        TASKMENUTASKBAR = False
+
+        TASKMENUDESKTOP = None
+
+        TASKMENUDESKTOPVIEW = False
 
         TASKMENUITEMRECTS = []
 
@@ -7205,7 +7775,12 @@ def painttaskmenu(sock):
         if TASKMENUID is None or TASKMENUBUF is None:
             return
 
-        if not TASKMENUGROUP and TASKMENUCONTEXT is None:
+        if (
+            not TASKMENUGROUP
+            and TASKMENUCONTEXT is None
+            and not TASKMENUTASKBAR
+            and TASKMENUDESKTOP is None
+        ):
             return
 
         items = taskmenuitems()
@@ -7237,9 +7812,19 @@ def painttaskmenu(sock):
 
         y = 0
 
-        pad = int(TASKMENUPAD)
+        compact = (
+            TASKMENUCONTEXT is not None
+            or TASKMENUTASKBAR
+            or TASKMENUDESKTOP is not None
+        )
 
-        fsz = int(TASKMENUFONTSIZE)
+        pad = taskmenucompactpad() if compact else int(TASKMENUPAD)
+
+        fsz = taskmenucompactfontsize() if compact else int(TASKMENUFONTSIZE)
+
+        checkboxsize = max(s(12, 6), min(itemheight - s(6, 3), s(16, 8)))
+
+        checkboxgap = s(8, 4)
 
         for it in items:
 
@@ -7251,11 +7836,47 @@ def painttaskmenu(sock):
                     y,
                     max(1, w - 2),
                     itemheight,
-                    (36, 36, 36) if TASKMENUCONTEXT is not None else (96, 96, 96),
+                    (36, 36, 36) if compact else (96, 96, 96),
                 )
 
+            textx = pad
+
+            checkcolumn = bool(
+                TASKMENUTASKBAR
+                or (TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW)
+            )
+
+            if checkcolumn:
+                textx += checkboxsize + checkboxgap
+
+                if "checked" in it:
+                    checkboxx = pad
+                    checkboxy = y + (itemheight - checkboxsize) // 2
+                    fillbufferfile(
+                        TASKMENUBUF,
+                        w,
+                        checkboxx,
+                        checkboxy,
+                        checkboxsize,
+                        checkboxsize,
+                        (239, 239, 239) if it.get("checked") else (0, 0, 0),
+                    )
+                    drawrect(checkboxx, checkboxy, checkboxsize, checkboxsize, (58, 58, 58))
+
+                    if it.get("checked"):
+                        inset = max(2, checkboxsize // 4)
+                        fillbufferfile(
+                            TASKMENUBUF,
+                            w,
+                            checkboxx + inset,
+                            checkboxy + inset,
+                            max(1, checkboxsize - inset * 2),
+                            max(1, checkboxsize - inset * 2),
+                            (0, 0, 0),
+                        )
+
             drawtextttf(
-                pad,
+                textx,
                 y + (itemheight - fsz) // 2,
                 str(it["label"]),
                 0xEFEFEF,
@@ -7265,12 +7886,12 @@ def painttaskmenu(sock):
 
             TASKMENUITEMRECTS.append([0, y, w, itemheight, it["action"]])
 
-            if TASKMENUCONTEXT is not None and y + itemheight < h:
+            if compact and y + itemheight < h:
                 fillbufferfile(TASKMENUBUF, w, 0, y + itemheight - 1, w, 1, (58, 58, 58))
 
             y += itemheight
 
-        if TASKMENUCONTEXT is not None:
+        if compact:
             drawrect(0, 0, w, h, (58, 58, 58))
 
         present()
@@ -7286,8 +7907,9 @@ def painttaskmenu(sock):
 
 def showtaskmenu(sock, group, anchorrect):
 
-    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT
-    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT
+    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
+    global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW
+    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT, TASKMENUPENDINGTASKBAR
 
     try:
 
@@ -7299,7 +7921,12 @@ def showtaskmenu(sock, group, anchorrect):
 
         closeinstancelist(sock)
         TASKMENUCONTEXT = None
+        TASKMENUTASKBAR = False
+        TASKMENUDESKTOP = None
+        TASKMENUDESKTOPVIEW = False
         TASKMENUPENDINGCONTEXT = None
+        TASKMENUPENDINGTASKBAR = False
+        globals()["TASKMENUPENDINGDESKTOP"] = None
         globals()["TASKMENUHOVER"] = None
 
         ax, ay, aw, ah = anchorrect
@@ -7426,8 +8053,9 @@ def showtaskmenu(sock, group, anchorrect):
 
 def showsearchcontextmenu(sock, result, anchorrect):
 
-    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT
-    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT
+    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
+    global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW
+    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT, TASKMENUPENDINGTASKBAR
 
     try:
         if result is None or anchorrect is None or len(anchorrect) != 4:
@@ -7436,13 +8064,18 @@ def showsearchcontextmenu(sock, result, anchorrect):
         closeinstancelist(sock)
         TASKMENUGROUP = None
         TASKMENUCONTEXT = dict(result)
+        TASKMENUTASKBAR = False
+        TASKMENUDESKTOP = None
+        TASKMENUDESKTOPVIEW = False
+        TASKMENUPENDINGTASKBAR = False
+        globals()["TASKMENUPENDINGDESKTOP"] = None
         globals()["TASKMENUHOVER"] = None
         items = taskmenuitems()
         if not items:
             return
 
-        pad = int(TASKMENUPAD)
-        size = int(TASKMENUFONTSIZE)
+        pad = taskmenucompactpad()
+        size = taskmenucompactfontsize()
         w = max(
             measurettffile(str(item.get("label", "")), size)
             for item in items
@@ -7480,6 +8113,272 @@ def showsearchcontextmenu(sock, result, anchorrect):
 
     except Exception as e:
         log(f"show search context menu error {e}")
+
+
+def showtaskbarcontextmenu(sock, anchorrect):
+
+    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
+    global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW
+    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT, TASKMENUPENDINGTASKBAR
+
+    try:
+
+        if anchorrect is None or len(anchorrect) != 4:
+            return
+
+        closeinstancelist(sock)
+        TASKMENUGROUP = None
+        TASKMENUCONTEXT = None
+        TASKMENUTASKBAR = True
+        TASKMENUDESKTOP = None
+        TASKMENUDESKTOPVIEW = False
+        TASKMENUPENDINGGROUP = None
+        TASKMENUPENDINGCONTEXT = None
+        globals()["TASKMENUPENDINGDESKTOP"] = None
+        globals()["TASKMENUHOVER"] = None
+
+        items = taskmenuitems()
+        pad = taskmenucompactpad()
+        size = taskmenucompactfontsize()
+        itemheight = taskmenuitemheight()
+        checkboxsize = max(s(12, 6), min(itemheight - s(6, 3), s(16, 8)))
+        checkboxgap = s(8, 4)
+        w = max(
+            measurettffile(str(item.get("label", "")), size)
+            for item in items
+        ) + (pad * 2) + checkboxsize + checkboxgap
+        w = max(pad * 2 + checkboxsize + checkboxgap + 1, min(w, int(MENUMAXW)))
+        h = itemheight * len(items)
+
+        ax, ay, _, _ = [int(value) for value in anchorrect]
+        x = max(0, min(ax, int(DESKTOPW) - w))
+        y = max(0, min(ay - h, int(DESKTOPH) - h))
+
+        if TASKMENUID is None:
+            TASKMENUPENDINGANCHOR = list(anchorrect)
+            TASKMENUPENDINGTASKBAR = True
+            sendline(sock, {
+                "op": "CREATE_WINDOW",
+                "w": w,
+                "h": h,
+                "x": x,
+                "y": y,
+                "title": "taskmenu",
+                "role": "taskmenu",
+            })
+            return
+
+        TASKMENUPENDINGTASKBAR = False
+        sendline(sock, {"op": "RESIZE", "winid": TASKMENUID, "w": w, "h": h})
+        sendline(sock, {"op": "MOVE", "winid": TASKMENUID, "x": x, "y": y})
+        TASKMENURECT = [x, y, w, h]
+        TASKMENUANCHOR = list(anchorrect)
+        graphicsupdategeometry("taskmenu", w, h, TASKMENUBUF)
+        painttaskmenu(sock)
+        sendline(sock, {"op": "MAP", "winid": TASKMENUID})
+        globals()["TASKMENUMAPPED"] = True
+
+    except Exception as e:
+
+        log(f"show taskbar context menu error {e}")
+
+
+def showdesktopcontextmenu(sock, context, anchorrect, view=False):
+
+    global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
+    global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW, TASKMENUPENDINGDESKTOP
+    global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT, TASKMENUPENDINGTASKBAR
+
+    try:
+        if context is None or anchorrect is None or len(anchorrect) != 4:
+            return
+
+        closeinstancelist(sock)
+        TASKMENUGROUP = None
+        TASKMENUCONTEXT = None
+        TASKMENUTASKBAR = False
+        TASKMENUDESKTOP = dict(context)
+        TASKMENUDESKTOPVIEW = bool(view)
+        TASKMENUPENDINGGROUP = None
+        TASKMENUPENDINGCONTEXT = None
+        TASKMENUPENDINGTASKBAR = False
+        globals()["TASKMENUHOVER"] = None
+
+        items = taskmenuitems()
+        if not items:
+            return
+
+        pad = taskmenucompactpad()
+        size = taskmenucompactfontsize()
+        itemheight = taskmenuitemheight()
+        checkboxsize = max(s(12, 6), min(itemheight - s(6, 3), s(16, 8)))
+        checkboxgap = s(8, 4)
+        checkcolumn = bool(TASKMENUDESKTOPVIEW)
+        w = max(
+            measurettffile(str(item.get("label", "")), size)
+            for item in items
+        ) + (pad * 2)
+        if checkcolumn:
+            w += checkboxsize + checkboxgap
+        w = max(pad * 2 + 1, min(w, int(MENUMAXW)))
+        h = itemheight * len(items)
+
+        ax, ay, _, _ = [int(value) for value in anchorrect]
+        x = max(0, min(ax, int(DESKTOPW) - w))
+        y = max(0, min(ay, int(DESKTOPH - TASKBARH) - h))
+
+        if TASKMENUID is None:
+            TASKMENUPENDINGANCHOR = list(anchorrect)
+            TASKMENUPENDINGDESKTOP = {
+                "context": dict(context),
+                "view": bool(view),
+            }
+            sendline(sock, {
+                "op": "CREATE_WINDOW",
+                "w": w,
+                "h": h,
+                "x": x,
+                "y": y,
+                "title": "taskmenu",
+                "role": "taskmenu",
+            })
+            return
+
+        TASKMENUPENDINGDESKTOP = None
+        sendline(sock, {"op": "RESIZE", "winid": TASKMENUID, "w": w, "h": h})
+        sendline(sock, {"op": "MOVE", "winid": TASKMENUID, "x": x, "y": y})
+        TASKMENURECT = [x, y, w, h]
+        TASKMENUANCHOR = list(anchorrect)
+        graphicsupdategeometry("taskmenu", w, h, TASKMENUBUF)
+        painttaskmenu(sock)
+        sendline(sock, {"op": "MAP", "winid": TASKMENUID})
+        globals()["TASKMENUMAPPED"] = True
+
+    except Exception as error:
+        log(f"show desktop context menu error {error}")
+
+
+def launcharrayopen(path):
+
+    target = desktopsecurepath(path)
+    if target is None:
+        return False
+    launchsoftware({
+        "label": "array",
+        "name": "array",
+        "path": "/the one/build/array/array.py",
+        "args": ["--open-item", target],
+    })
+    return True
+
+
+def launcharraycontext(action, path):
+
+    target = desktopsecurepath(path)
+    if target is None:
+        return False
+    launchsoftware({
+        "label": "array",
+        "name": "array",
+        "path": "/the one/build/array/array.py",
+        "args": ["--context-action", str(action), target],
+    })
+    return True
+
+
+def rundesktopcontextaction(sock, context, action):
+
+    action = str(action or "").strip().lower()
+    target = desktopsecurepath((context or {}).get("path", DESKTOPROOT))
+
+    if action == "desktop-show":
+        globals()["DESKTOPSHOW"] = not bool(DESKTOPSHOW)
+        savedesktopsettings()
+        desktoprefresh(sock, force=True)
+        return
+
+    if action.startswith("desktop-size-"):
+        size = action.removeprefix("desktop-size-")
+        if size in ("large", "medium", "small"):
+            globals()["DESKTOPITEMSIZE"] = size
+            savedesktopsettings()
+            desktoplayout()
+            if DESKTOPID is not None and DESKTOPBUF is not None:
+                paintdesktop(sock)
+        return
+
+    if action == "desktop-settings":
+        launchstartsoftware("settings")
+        return
+
+    if target is None:
+        return
+
+    if action == "open":
+        launcharrayopen(target)
+        return
+
+    launcharraycontext(action, target)
+
+
+def desktopactivate(path):
+
+    return launcharrayopen(path)
+
+
+def desktoptoggleexpanded(sock, path):
+
+    target = desktopsecurepath(path)
+    if target is None or not os.path.isdir(target):
+        return
+    if target in DESKTOPEXPANDED:
+        DESKTOPEXPANDED.remove(target)
+    else:
+        DESKTOPEXPANDED.add(target)
+    savedesktopsettings()
+    desktoprefresh(sock, force=True)
+
+
+def launchstartsoftware(name):
+
+    wanted = str(name or "").strip().lower()
+
+    for software in STARTSOFTITEMS:
+
+        if str(software.get("name", software.get("label", ""))).strip().lower() == wanted:
+            launchsoftware(software)
+            return True
+
+    log(f"taskbar context software not found {wanted}")
+    return False
+
+
+def runtaskbarcontextaction(sock, action):
+
+    action = str(action or "").strip().lower()
+
+    if action == "taskbar-search":
+        globals()["TASKBARSEARCHVISIBLE"] = not bool(TASKBARSEARCHVISIBLE)
+
+        if not TASKBARSEARCHVISIBLE:
+            closesearch(sock)
+
+        savetaskbarsettings()
+
+        if TASKBARID is not None and TASKBARBUF is not None:
+            painttaskbar(sock)
+        return
+
+    if action == "show-expanse":
+        showdesktop(sock)
+        return
+
+    if action == "settings":
+        launchstartsoftware("settings")
+        return
+
+    if action == "operations-centre":
+        launchstartsoftware("operations centre")
 
 
 def runsearchcontextaction(sock, result, action):
@@ -8055,6 +8954,146 @@ def hidevolumebar(sock):
 
 
 # input functions
+def handledesktopmotion(sock, msg):
+
+    x = int(msg.get("x", 0))
+    y = int(msg.get("y", 0))
+    item = desktopitemat(x, y)
+    hover = item.get("path") if item else None
+
+    if DESKTOPDRAGPATH is not None and DESKTOPDRAGSTART is not None:
+        startx, starty = DESKTOPDRAGSTART
+        if abs(x - startx) >= s(6, 4) or abs(y - starty) >= s(6, 4):
+            globals()["DESKTOPDRAGACTIVE"] = True
+
+    if hover != DESKTOPHOVER:
+        globals()["DESKTOPHOVER"] = hover
+        if DESKTOPBUF is not None:
+            paintdesktop(sock)
+
+
+def handledesktopbutton(sock, msg):
+
+    state = str(msg.get("state", "down"))
+    button = int(msg.get("button", 1))
+    x = int(msg.get("x", msg.get("absx", 0)))
+    y = int(msg.get("y", msg.get("absy", 0)))
+    item = desktopitemat(x, y)
+
+    if state == "down" and DESKTOPID is not None:
+        sendline(sock, {"op": "FOCUS_SET", "winid": DESKTOPID})
+
+    if button in (2, 3):
+        globals()["DESKTOPDRAGPATH"] = None
+        globals()["DESKTOPDRAGSTART"] = None
+        globals()["DESKTOPDRAGACTIVE"] = False
+        if state == "down":
+            globals()["DESKTOPSELECTED"] = item.get("path") if item else None
+            if DESKTOPBUF is not None:
+                paintdesktop(sock)
+            return
+        if state == "up":
+            context = {
+                "kind": "row" if item else "empty",
+                "path": item.get("path") if item else DESKTOPROOT,
+            }
+            showdesktopcontextmenu(sock, context, [
+                int(msg.get("absx", x)),
+                int(msg.get("absy", y)),
+                1,
+                1,
+            ])
+        return
+
+    if button != 1:
+        return
+
+    if state == "down":
+        globals()["DESKTOPSELECTED"] = item.get("path") if item else None
+        globals()["DESKTOPHOVER"] = item.get("path") if item else None
+        rootitem = desktoptoplevelitem(item.get("path")) if item else None
+        if (
+            rootitem is not None
+            and rootitem.get("path") == item.get("path")
+            and not desktoparrowat(item, x, y)
+        ):
+            globals()["DESKTOPDRAGPATH"] = item.get("path")
+            globals()["DESKTOPDRAGSTART"] = (x, y)
+        else:
+            globals()["DESKTOPDRAGPATH"] = None
+            globals()["DESKTOPDRAGSTART"] = None
+        globals()["DESKTOPDRAGACTIVE"] = False
+        if DESKTOPBUF is not None:
+            paintdesktop(sock)
+        return
+
+    if state != "up":
+        return
+
+    dragpath = DESKTOPDRAGPATH
+    dragactive = bool(DESKTOPDRAGACTIVE)
+    globals()["DESKTOPDRAGPATH"] = None
+    globals()["DESKTOPDRAGSTART"] = None
+    globals()["DESKTOPDRAGACTIVE"] = False
+
+    if dragpath is not None and dragactive:
+        desktopreorder(sock, dragpath, item.get("path") if item else None)
+        globals()["DESKTOPLASTCLICKPATH"] = None
+        globals()["DESKTOPLASTCLICKAT"] = 0.0
+        return
+
+    if item is None:
+        globals()["DESKTOPLASTCLICKPATH"] = None
+        globals()["DESKTOPLASTCLICKAT"] = 0.0
+        return
+
+    if desktoparrowat(item, x, y):
+        globals()["DESKTOPLASTCLICKPATH"] = None
+        globals()["DESKTOPLASTCLICKAT"] = 0.0
+        desktoptoggleexpanded(sock, item.get("path"))
+        return
+
+    now = time.monotonic()
+    path = item.get("path")
+    if (
+        path == DESKTOPLASTCLICKPATH
+        and now - float(DESKTOPLASTCLICKAT) <= float(DESKTOPDOUBLECLICK)
+    ):
+        globals()["DESKTOPLASTCLICKPATH"] = None
+        globals()["DESKTOPLASTCLICKAT"] = 0.0
+        desktopactivate(path)
+        return
+
+    globals()["DESKTOPLASTCLICKPATH"] = path
+    globals()["DESKTOPLASTCLICKAT"] = now
+
+
+def handledesktopkey(sock, msg):
+
+    try:
+        if DESKTOPID is None or int(msg.get("winid", 0)) != int(DESKTOPID):
+            return
+        if str(msg.get("state", "down")) not in ("down", "repeat"):
+            return
+        target = desktopsecurepath(DESKTOPSELECTED)
+        if target is None:
+            return
+        key = str(msg.get("key", "")).strip().upper()
+        if key in ("ENTER", "RETURN", "SPACE"):
+            desktopactivate(target)
+        elif key in ("DELETE", "DEL"):
+            launcharraycontext("delete", target)
+        elif key == "F2":
+            launcharraycontext("rename", target)
+        elif key == "RIGHT" and os.path.isdir(target):
+            if target not in DESKTOPEXPANDED:
+                desktoptoggleexpanded(sock, target)
+        elif key == "LEFT" and target in DESKTOPEXPANDED:
+            desktoptoggleexpanded(sock, target)
+    except Exception as error:
+        log(f"desktop key error {error}")
+
+
 def settaskbarcursor(sock, mode):
 
     global TASKBARCURSORMODE
@@ -8103,6 +9142,14 @@ def handlepointermotion(sock, msg):
         except Exception:
 
             wid = 0
+
+        if DESKTOPID is not None and wid == DESKTOPID:
+            settaskbarcursor(sock, "arrow")
+            settaskbarwindowhover(sock, None)
+            if HOVERRECT is not None or TOOLTIPMAPPED or LISTMAPPED:
+                clearhovertooltip(sock)
+            handledesktopmotion(sock, msg)
+            return
 
         try:
 
@@ -10362,6 +11409,71 @@ def updatenetworkicon(sock):
 
 
 # painting
+def desktoppaintcontent():
+
+    fillbufferfile(DESKTOPBUF, DESKTOPW, 0, 0, DESKTOPW, DESKTOPH, DESKTOPBG)
+    rows = desktoplayout()
+    metrics = desktopmetrics()
+
+    for item in rows:
+        x, y, width, height = item["rect"]
+        selected = item.get("path") == DESKTOPSELECTED
+        hovered = item.get("path") == DESKTOPHOVER
+
+        if selected:
+            fillbufferfile(DESKTOPBUF, DESKTOPW, x, y, width, height, (36, 36, 36))
+            fillbufferfile(DESKTOPBUF, DESKTOPW, x, y, width, 1, (239, 239, 239))
+        elif hovered:
+            fillbufferfile(DESKTOPBUF, DESKTOPW, x, y, width, height, (18, 18, 18))
+
+        fillbufferfile(
+            DESKTOPBUF, DESKTOPW, x, y + height - 1, width, 1, (58, 58, 58))
+
+        arrowx, _, arrowwidth, _ = item["arrowrect"]
+        texty = y + (height - metrics["font"]) // 2
+
+        if item.get("isdir"):
+            if item.get("expanded"):
+                middlex = arrowx + arrowwidth // 2
+                middley = y + height // 2 + max(1, metrics["font"] // 6)
+                span = max(2, metrics["font"] // 4)
+                drawline(
+                    arrowx + max(1, arrowwidth // 5),
+                    middley - span,
+                    middlex,
+                    middley,
+                    (239, 239, 239),
+                )
+                drawline(
+                    middlex,
+                    middley,
+                    arrowx + arrowwidth - max(2, arrowwidth // 5),
+                    middley - span,
+                    (239, 239, 239),
+                )
+            else:
+                drawtextttf(
+                    arrowx,
+                    texty,
+                    ">",
+                    0xEFEFEF if item.get("haskids") else 0x8A8A8A,
+                    metrics["font"],
+                    fontpath=FONTPATH,
+                )
+
+        namex = arrowx + arrowwidth
+        available = max(1, x + width - metrics["padding"] - namex)
+        label = searchfittext(str(item.get("name", "")), available, metrics["font"])
+        drawtextttf(
+            namex,
+            texty,
+            label,
+            0xEFEFEF,
+            metrics["font"],
+            fontpath=FONTPATH,
+        )
+
+
 def paintdesktop(sock):
 
     if graphicsmanagedpaint(sock, "desktop"):
@@ -10372,7 +11484,7 @@ def paintdesktop(sock):
         if DESKTOPBUF is None or fillbufferfile is None:
             return
 
-        fillbufferfile(DESKTOPBUF, DESKTOPW, 0, 0, DESKTOPW, DESKTOPH, DESKTOPBG)
+        desktoppaintcontent()
 
         graphicsupdategeometry("desktop", DESKTOPW, DESKTOPH, DESKTOPBUF)
         graphicscpudamage(sock, "desktop", [0, 0, DESKTOPW, DESKTOPH])
@@ -11656,7 +12768,25 @@ def handlecreated(sock, msg):
 
             log(f"taskmenu created id={wid}")
 
-            if TASKMENUPENDINGGROUP is not None and TASKMENUPENDINGANCHOR is not None:
+            if TASKMENUPENDINGDESKTOP is not None and TASKMENUPENDINGANCHOR is not None:
+                pending = dict(TASKMENUPENDINGDESKTOP)
+                anchor = list(TASKMENUPENDINGANCHOR)
+                globals()["TASKMENUPENDINGDESKTOP"] = None
+                globals()["TASKMENUPENDINGANCHOR"] = None
+                showdesktopcontextmenu(
+                    sock,
+                    pending.get("context", {}),
+                    anchor,
+                    view=bool(pending.get("view")),
+                )
+
+            elif TASKMENUPENDINGTASKBAR and TASKMENUPENDINGANCHOR is not None:
+                anchor = list(TASKMENUPENDINGANCHOR)
+                globals()["TASKMENUPENDINGTASKBAR"] = False
+                globals()["TASKMENUPENDINGANCHOR"] = None
+                showtaskbarcontextmenu(sock, anchor)
+
+            elif TASKMENUPENDINGGROUP is not None and TASKMENUPENDINGANCHOR is not None:
                 g = TASKMENUPENDINGGROUP
 
                 a = TASKMENUPENDINGANCHOR
@@ -12148,12 +13278,31 @@ def handlebutton(sock, msg):
                 return
 
             context = dict(TASKMENUCONTEXT) if TASKMENUCONTEXT is not None else None
+            taskbarcontext = bool(TASKMENUTASKBAR)
+            desktopcontext = dict(TASKMENUDESKTOP) if TASKMENUDESKTOP is not None else None
             group = TASKMENUGROUP
+
+            if desktopcontext is not None and action == "desktop-view":
+                showdesktopcontextmenu(
+                    sock,
+                    desktopcontext,
+                    TASKMENUANCHOR or [ax, ay, 1, 1],
+                    view=True,
+                )
+                return
 
             closetaskmenu(sock)
 
             if context is not None:
                 runsearchcontextaction(sock, context, action)
+                return
+
+            if taskbarcontext:
+                runtaskbarcontextaction(sock, action)
+                return
+
+            if desktopcontext is not None:
+                rundesktopcontextaction(sock, desktopcontext, action)
                 return
 
             if not group:
@@ -12220,6 +13369,16 @@ def handlebutton(sock, msg):
 
     try:
 
+        if DESKTOPID is not None and wid == DESKTOPID:
+            handledesktopbutton(sock, msg)
+            return
+
+    except Exception as e:
+
+        log(f"desktop click dispatch error {e}")
+
+    try:
+
         if TASKBARID is not None and wid != TASKBARID:
             return
 
@@ -12233,6 +13392,16 @@ def handlebutton(sock, msg):
         ax = int(msg.get("absx", 0))
 
         ay = int(msg.get("absy", 0))
+
+        try:
+            taskbartarget = findtaskbargroupat(ax, ay)
+        except Exception:
+            taskbartarget = None
+
+        if btn in (2, 3) and taskbartarget is None:
+            if st == "up":
+                showtaskbarcontextmenu(sock, [ax, ay, 1, 1])
+            return
 
         # The search field owns the band between Start and the window buttons.
         try:
@@ -12349,7 +13518,7 @@ def handlebutton(sock, msg):
 
         try:
 
-            target = findtaskbargroupat(ax, ay)
+            target = taskbartarget
 
         except Exception:
 
@@ -12384,7 +13553,7 @@ def handlebutton(sock, msg):
                 return
 
             # right click DOWN: if instancelist is open, close it immediately
-            if btn == 2 and st == "down":
+            if btn in (2, 3) and st == "down":
 
                 if LISTMAPPED:
                     clearhovertooltip(sock)
@@ -12392,7 +13561,7 @@ def handlebutton(sock, msg):
                 return
 
             # right click UP opens task menu (and list stays closed)
-            if btn == 2 and st == "up":
+            if btn in (2, 3) and st == "up":
 
                 anchorrect = TASKBARGROUPRECTS.get(target)
 
@@ -12590,13 +13759,19 @@ def main():
 
         initttffont(FONTPATH, BRICKFONTSIZE)
 
-        initstartitems()
+        username = getusername()
+
+        initstartitems(username)
+
+        initdesktop(username)
 
         s = opensocket()
 
         loadtaskbarpins()
 
         loadtaskbarorder()
+
+        loadtaskbarsettings()
 
         loadmasterimagesettings(force=True)
 
@@ -12707,6 +13882,8 @@ def main():
 
                             handlesearchkey(s, m)
 
+                            handledesktopkey(s, m)
+
                         elif op == "TEXT":
 
                             handlesearchtext(s, m)
@@ -12767,6 +13944,8 @@ def main():
             updatesearchcaret(s)
 
             masterimagesettingstick(s)
+
+            desktoprefresh(s)
 
             reapchildren()
 
@@ -12909,6 +14088,7 @@ def graphicsdiagnostic():
 
     originalnetwork = globals().get("readnetworkstatus")
     originaltime = globals().get("readatreyantime")
+    desktopdiagnosticroot = None
 
     try:
 
@@ -13055,6 +14235,73 @@ def graphicsdiagnostic():
 
         result["checks"]["operations_centre_software"] = True
 
+        original_launchsoftware = globals().get("launchsoftware")
+        original_showdesktop = globals().get("showdesktop")
+        original_closesearch = globals().get("closesearch")
+        original_savetaskbarsettings = globals().get("savetaskbarsettings")
+        taskbarcontextevents = []
+
+        try:
+            globals()["launchsoftware"] = lambda software: taskbarcontextevents.append(
+                ("launch", str(software.get("name", "")))
+            )
+            globals()["showdesktop"] = lambda sock: taskbarcontextevents.append(("show", "expanse"))
+            globals()["closesearch"] = lambda sock: taskbarcontextevents.append(("close", "search"))
+            globals()["savetaskbarsettings"] = lambda: taskbarcontextevents.append(
+                ("save", bool(TASKBARSEARCHVISIBLE))
+            )
+            globals()["TASKBARSEARCHVISIBLE"] = True
+            runtaskbarcontextaction(None, "taskbar-search")
+            runtaskbarcontextaction(None, "show-expanse")
+            runtaskbarcontextaction(None, "settings")
+            runtaskbarcontextaction(None, "operations-centre")
+        finally:
+            globals()["launchsoftware"] = original_launchsoftware
+            globals()["showdesktop"] = original_showdesktop
+            globals()["closesearch"] = original_closesearch
+            globals()["savetaskbarsettings"] = original_savetaskbarsettings
+
+        expectedtaskbarcontextevents = [
+            ("close", "search"),
+            ("save", False),
+            ("show", "expanse"),
+            ("launch", "settings"),
+            ("launch", "operations centre"),
+        ]
+
+        if taskbarcontextevents != expectedtaskbarcontextevents:
+            raise RuntimeError(f"taskbar context actions failed {taskbarcontextevents}")
+
+        globals()["TASKBARSEARCHVISIBLE"] = True
+        result["checks"]["taskbar_context_actions"] = True
+
+        originaltaskbarsettingsfile = TASKBARSETTINGSFILE
+        diagnostictaskbarsettings = "/.ephemeral/expanse/taskbar-context-diagnostic.json"
+        globals()["TASKBARSETTINGSFILE"] = diagnostictaskbarsettings
+        globals()["TASKBARSEARCHVISIBLE"] = False
+        savetaskbarsettings()
+        globals()["TASKBARSEARCHVISIBLE"] = True
+        loadtaskbarsettings()
+
+        if TASKBARSEARCHVISIBLE:
+            raise RuntimeError("taskbar search visibility did not persist its disabled state")
+
+        globals()["TASKBARSEARCHVISIBLE"] = True
+        savetaskbarsettings()
+        globals()["TASKBARSEARCHVISIBLE"] = False
+        loadtaskbarsettings()
+
+        if not TASKBARSEARCHVISIBLE:
+            raise RuntimeError("taskbar search visibility did not persist its enabled state")
+
+        try:
+            os.remove(diagnostictaskbarsettings)
+        except FileNotFoundError:
+            pass
+
+        globals()["TASKBARSETTINGSFILE"] = originaltaskbarsettingsfile
+        result["checks"]["taskbar_search_persistence"] = True
+
         mixedcasename = "MyHomeWiFi-AX"
 
         if networkdisplayname(mixedcasename) != mixedcasename:
@@ -13086,6 +14333,158 @@ def graphicsdiagnostic():
 
         globals()["readnetworkstatus"] = lambda: ("online", "eth0", "10.0.2.15/24", "10.0.2.2", "00:11:22:33:44:55")
         globals()["readatreyantime"] = lambda: ("10:27 pm", "17:07:6AE")
+
+        desktopdiagnosticroot = f"/.ephemeral/expanse/desktop-diagnostic-{os.getpid()}"
+        desktopdiagnosticsettings = os.path.join(desktopdiagnosticroot, ".settings.json")
+        alphatier = os.path.join(desktopdiagnosticroot, "alpha tier")
+        betatier = os.path.join(desktopdiagnosticroot, "beta tier")
+        childfile = os.path.join(alphatier, "child.txt")
+        testfile = os.path.join(desktopdiagnosticroot, "test.txt")
+        os.makedirs(alphatier, exist_ok=True)
+        os.makedirs(betatier, exist_ok=True)
+        with open(childfile, "w") as stream:
+            stream.write("child")
+        with open(testfile, "w") as stream:
+            stream.write("desktop")
+
+        globals()["DESKTOPROOT"] = desktopdiagnosticroot
+        globals()["DESKTOPSETTINGSFILE"] = desktopdiagnosticsettings
+        globals()["DESKTOPSHOW"] = True
+        globals()["DESKTOPITEMSIZE"] = "medium"
+        globals()["DESKTOPORDER"] = []
+        globals()["DESKTOPEXPANDED"] = {alphatier}
+        globals()["DESKTOPSCANSIGNATURE"] = None
+        globals()["DESKTOPSELECTED"] = testfile
+        desktoprefresh(force=True)
+
+        expecteddesktoprows = [
+            ("alpha tier", 0, True),
+            ("child.txt", 1, False),
+            ("beta tier", 0, True),
+            ("test.txt", 0, False),
+        ]
+        actualdesktoprows = [
+            (
+                str(item.get("name", "")),
+                int(item.get("depth", -1)),
+                bool(item.get("isdir")),
+            )
+            for item in DESKTOPITEMS
+        ]
+        if actualdesktoprows != expecteddesktoprows:
+            raise RuntimeError(f"desktop tier expansion is incorrect {actualdesktoprows}")
+
+        if desktopsecurepath(os.path.join(desktopdiagnosticroot, "..", "outside")) is not None:
+            raise RuntimeError("desktop path confinement accepted a path outside the expanse tier")
+
+        metrics = desktopmetrics()
+        layouts = desktoplayout()
+        if len(layouts) != 4 or any(
+            (int(item["rect"][0]) - metrics["margin"]) % metrics["width"] != 0
+            or (int(item["rect"][1]) - metrics["margin"]) % metrics["height"] != 0
+            for item in layouts
+        ):
+            raise RuntimeError("desktop items did not snap to the active grid")
+
+        originaldesktopsettingsfile = DESKTOPSETTINGSFILE
+        globals()["DESKTOPSHOW"] = False
+        globals()["DESKTOPITEMSIZE"] = "small"
+        savedesktopsettings()
+        globals()["DESKTOPSHOW"] = True
+        globals()["DESKTOPITEMSIZE"] = "large"
+        globals()["DESKTOPEXPANDED"] = set()
+        loaddesktopsettings()
+        if DESKTOPSHOW or DESKTOPITEMSIZE != "small" or alphatier not in DESKTOPEXPANDED:
+            raise RuntimeError("desktop visibility, size, or expansion did not persist")
+
+        globals()["DESKTOPSHOW"] = True
+        globals()["DESKTOPITEMSIZE"] = "medium"
+        globals()["DESKTOPEXPANDED"] = {alphatier}
+        globals()["DESKTOPSETTINGSFILE"] = originaldesktopsettingsfile
+        desktoprefresh(force=True)
+        result["checks"]["desktop_filesystem_and_grid"] = {
+            "root": "/master/<username>/expanse",
+            "rows": [item[0] for item in expecteddesktoprows],
+            "expanded_depth": 1,
+            "grid": "medium",
+        }
+        result["checks"]["desktop_settings_persistence"] = True
+        result["checks"]["desktop_path_confinement"] = True
+
+        globals()["TASKMENUDESKTOP"] = {
+            "kind": "empty",
+            "path": desktopdiagnosticroot,
+        }
+        globals()["TASKMENUDESKTOPVIEW"] = False
+        desktopmainmenu = taskmenuitems()
+        desktopmainactions = [str(item.get("action", "")) for item in desktopmainmenu]
+        requiredmainactions = [
+            "desktop-view", "newfile", "newtier", "sidebarpin", "desktop-settings",
+        ]
+        if any(action not in desktopmainactions for action in requiredmainactions):
+            raise RuntimeError(f"desktop context menu is incomplete {desktopmainactions}")
+        if desktopmainactions[0] != "desktop-view" or desktopmainactions[-1] != "desktop-settings":
+            raise RuntimeError("desktop view and settings actions are out of order")
+
+        globals()["TASKMENUDESKTOPVIEW"] = True
+        desktopviewmenu = taskmenuitems()
+        expectedviewactions = [
+            "desktop-show",
+            "desktop-size-large",
+            "desktop-size-medium",
+            "desktop-size-small",
+        ]
+        if [str(item.get("action", "")) for item in desktopviewmenu] != expectedviewactions:
+            raise RuntimeError("desktop view choices are missing or out of order")
+        if not desktopviewmenu[0].get("checked") or not desktopviewmenu[2].get("checked"):
+            raise RuntimeError("desktop view choices did not mark show expanse and medium")
+
+        globals()["TASKMENUDESKTOP"] = {"kind": "row", "path": testfile}
+        globals()["TASKMENUDESKTOPVIEW"] = False
+        desktopfileactions = [
+            str(item.get("action", "")) for item in taskmenuitems()
+        ]
+        if (
+            "open" not in desktopfileactions
+            or "delete" not in desktopfileactions
+            or "properties" not in desktopfileactions
+            or "filelocation" in desktopfileactions
+        ):
+            raise RuntimeError(f"desktop file actions differ from Array {desktopfileactions}")
+
+        desktopactionevents = []
+        originallaunchsoftware = globals().get("launchsoftware")
+        try:
+            globals()["launchsoftware"] = lambda software: desktopactionevents.append({
+                "name": str(software.get("name", "")),
+                "args": list(software.get("args", [])),
+            })
+            rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "open")
+            rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "properties")
+            rundesktopcontextaction(
+                None,
+                {"kind": "empty", "path": desktopdiagnosticroot},
+                "desktop-settings",
+            )
+        finally:
+            globals()["launchsoftware"] = originallaunchsoftware
+
+        if (
+            len(desktopactionevents) != 3
+            or desktopactionevents[0].get("args") != ["--open-item", testfile]
+            or desktopactionevents[1].get("args") != ["--context-action", "properties", testfile]
+            or desktopactionevents[2].get("name") != "settings"
+        ):
+            raise RuntimeError(f"desktop Array and Settings dispatch failed {desktopactionevents}")
+
+        globals()["TASKMENUDESKTOP"] = None
+        globals()["TASKMENUDESKTOPVIEW"] = False
+        result["checks"]["desktop_context_menu"] = {
+            "view": [str(item.get("label", "")) for item in desktopviewmenu],
+            "array_file_actions": True,
+            "settings": True,
+        }
+        result["checks"]["desktop_array_dispatch"] = True
 
         capabilities = {
             "version": 2,
@@ -13257,8 +14656,35 @@ def graphicsdiagnostic():
             "total_limit": capabilities["total_command_limit"],
         }
 
-        if set(command.get("kind") for command in scenes["desktop"]) != {"rectangle"}:
+        if set(command.get("kind") for command in scenes["desktop"]) != {"rectangle", "text"}:
             raise RuntimeError("desktop scene contains unexpected commands")
+
+        desktoptexts = {
+            str(command.get("text", "")): command
+            for command in scenes["desktop"]
+            if command.get("kind") == "text"
+        }
+        if any(name not in desktoptexts for name in ("alpha tier", "child.txt", "beta tier", "test.txt", ">")):
+            raise RuntimeError(f"desktop scene did not render tiers, carets, and files {sorted(desktoptexts)}")
+        if int(desktoptexts["child.txt"].get("x", 0)) <= int(desktoptexts["alpha tier"].get("x", 0)):
+            raise RuntimeError("expanded desktop child was not indented under its tier")
+
+        selecteddesktop = next(
+            item for item in DESKTOPITEMRECTS if item.get("path") == testfile
+        )
+        if not any(
+            command.get("kind") == "rectangle"
+            and command.get("rect") == selecteddesktop.get("rect")
+            and command.get("color") == graphicscolour((36, 36, 36))
+            for command in scenes["desktop"]
+        ):
+            raise RuntimeError("desktop selected row did not use Array's selection treatment")
+        result["checks"]["desktop_managed_scene"] = {
+            "tiers": 2,
+            "files": 2,
+            "selected": "test.txt",
+            "gpu_managed": True,
+        }
 
         if not any(command.get("kind") == "image" for command in scenes["taskbar"]):
             raise RuntimeError("taskbar scene did not preserve prepared PNG icon surfaces")
@@ -13310,6 +14736,89 @@ def graphicsdiagnostic():
 
         if not any(command.get("kind") == "text" and "pin" in str(command.get("text", "")) for command in scenes["taskmenu"]):
             raise RuntimeError("task-menu scene did not preserve actions")
+
+        globals()["TASKMENUGROUP"] = None
+        globals()["TASKMENUCONTEXT"] = None
+        globals()["TASKMENUTASKBAR"] = True
+        globals()["TASKMENUHOVER"] = "settings"
+        taskbarcontextitems = taskmenuitems()
+        expectedtaskbarcontext = [
+            ("search", "taskbar-search"),
+            ("show expanse", "show-expanse"),
+            ("settings", "settings"),
+            ("operations centre", "operations-centre"),
+        ]
+
+        if [
+            (str(item.get("label", "")), str(item.get("action", "")))
+            for item in taskbarcontextitems
+        ] != expectedtaskbarcontext:
+            raise RuntimeError("taskbar context menu options are missing or out of order")
+
+        if not taskbarcontextitems[0].get("checked"):
+            raise RuntimeError("taskbar context menu search checkbox is not enabled by default")
+
+        contextheight = taskmenuitemheight() * len(taskbarcontextitems)
+        contextpad = taskmenucompactpad()
+        contextfont = taskmenucompactfontsize()
+        contextcheckbox = max(s(12, 6), min(taskmenuitemheight() - s(6, 3), s(16, 8)))
+        contextgap = s(8, 4)
+        contextwidth = max(
+            measurettffile(str(item.get("label", "")), contextfont)
+            for item in taskbarcontextitems
+        ) + (contextpad * 2) + contextcheckbox + contextgap
+        contextwidth = max(
+            contextpad * 2 + contextcheckbox + contextgap + 1,
+            min(contextwidth, int(MENUMAXW)),
+        )
+        globals()["TASKMENURECT"] = [300, 300, contextwidth, contextheight]
+        graphicsupdategeometry("taskmenu", contextwidth, contextheight, TASKMENUBUF)
+        taskbarcontextscene = graphicsbuildscene("taskmenu")
+        contexttexts = [
+            command for command in taskbarcontextscene
+            if command.get("kind") == "text"
+            and command.get("text") in {item[0] for item in expectedtaskbarcontext}
+        ]
+
+        if len(contexttexts) != 4 or len({int(command.get("x", -1)) for command in contexttexts}) != 1:
+            raise RuntimeError("taskbar context menu labels are not aligned")
+
+        checkboxrect = [
+            contextpad,
+            (taskmenuitemheight() - contextcheckbox) // 2,
+            contextcheckbox,
+            contextcheckbox,
+        ]
+
+        if not any(
+            command.get("kind") == "rectangle"
+            and command.get("rect") == checkboxrect
+            and command.get("color") == graphicscolour((239, 239, 239))
+            for command in taskbarcontextscene
+        ):
+            raise RuntimeError("taskbar context menu did not render the enabled search checkbox")
+
+        settingsrow = taskmenuitemheight() * 2
+
+        if not any(
+            command.get("kind") == "rectangle"
+            and command.get("color") == graphicscolour((36, 36, 36))
+            and int(command.get("rect", [0, -1])[1]) == settingsrow
+            for command in taskbarcontextscene
+        ):
+            raise RuntimeError("taskbar context menu did not render the Array hover treatment")
+
+        globals()["TASKMENUTASKBAR"] = False
+        globals()["TASKMENUGROUP"] = "array"
+        globals()["TASKMENUHOVER"] = "pin"
+        globals()["TASKMENURECT"] = [300, 300, menuwidth, menuheight]
+        graphicsupdategeometry("taskmenu", menuwidth, menuheight, TASKMENUBUF)
+        result["checks"]["taskbar_context_menu"] = {
+            "options": [item[0] for item in expectedtaskbarcontext],
+            "search_checked": True,
+            "array_hover": True,
+            "aligned": True,
+        }
 
         if not any(command.get("kind") == "text" and command.get("text") == "58" for command in scenes["volumebar"]):
             raise RuntimeError("volume scene did not preserve its value")
@@ -13555,6 +15064,13 @@ def graphicsdiagnostic():
 
         if originaltime is not None:
             globals()["readatreyantime"] = originaltime
+
+        if desktopdiagnosticroot:
+            try:
+                if os.path.isdir(desktopdiagnosticroot):
+                    shutil.rmtree(desktopdiagnosticroot)
+            except Exception:
+                pass
 
     print(json.dumps(result, separators=(",", ":"), sort_keys=True))
     return bool(result["passed"])
