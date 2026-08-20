@@ -776,19 +776,19 @@ def openlog():
 
     try:
 
-        readpath = '/the one/build/read/read.py'
-        readlog = softwarelogpath(readpath)
+        brickpath = '/the one/build/brick/brick.py'
+        bricklog = softwarelogpath(brickpath)
         process = popenisolated(
-            [sys.executable, readpath, path],
-            softwarepath=readpath,
-            logpath=readlog,
+            [sys.executable, brickpath, '--directive', 'read', path],
+            softwarepath=brickpath,
+            logpath=bricklog,
         )
         opsrequest({
             'op': 'REGISTER_PID',
             'pid': int(process.pid),
-            'name': 'read log',
-            'script': readpath,
-            'log': readlog,
+            'name': 'brick',
+            'script': brickpath,
+            'log': bricklog,
             'user': str(entry.get('user', 'master')),
             'mode': 'front',
             'state': 'starting',
@@ -2209,7 +2209,7 @@ def graphicsdiagnostic():
 
     global WINW, WINH, BUF, SNAPSHOT, VIEW, SELECTED, HISTORYCPU, HISTORYGPU, HISTORYMEMORY
     global SETTINGSPATH, SORTCOLUMN, SORTREVERSE, COLUMNRESIZING, COLUMNRESIZENEXT
-    global COLUMNCURSORMODE
+    global COLUMNCURSORMODE, popenisolated, opsrequest
 
     result = {'version': VERSION, 'passed': False, 'checks': {}, 'errors': []}
     root = f'/.ephemeral/operations-centre-diagnostic-{os.getpid()}'
@@ -2231,6 +2231,8 @@ def graphicsdiagnostic():
         'COLUMNRESIZENEXT': COLUMNRESIZENEXT,
         'COLUMNCURSORMODE': COLUMNCURSORMODE,
         'OUTBUF': bytes(OUTBUF),
+        'popenisolated': popenisolated,
+        'opsrequest': opsrequest,
     }
 
     try:
@@ -2324,6 +2326,35 @@ def graphicsdiagnostic():
             },
             'completed': {},
         }
+
+        diagnosticlog = os.path.join(root, 'diagnostic.log')
+        with open(diagnosticlog, 'w', encoding='utf-8') as stream:
+            stream.write('diagnostic log\n')
+        SNAPSHOT['operations']['101']['log'] = diagnosticlog
+        launches = []
+        registrations = []
+
+        class DiagnosticProcess:
+            pid = 909
+
+        def diagnosticlaunch(command, softwarepath=None, logpath=None):
+            launches.append((list(command), softwarepath, logpath))
+            return DiagnosticProcess()
+
+        def diagnosticrequest(payload, timeout=1.0):
+            registrations.append(dict(payload))
+            return {'status': 'ok'}
+
+        popenisolated = diagnosticlaunch
+        opsrequest = diagnosticrequest
+        if not openlog():
+            raise RuntimeError('operations centre could not route a log to brick')
+        expected = [sys.executable, '/the one/build/brick/brick.py', '--directive', 'read', diagnosticlog]
+        if not launches or launches[0][0] != expected:
+            raise RuntimeError('operations centre did not use brick for the log')
+        if not registrations or registrations[0].get('script') != '/the one/build/brick/brick.py':
+            raise RuntimeError('operations centre registered the old reader')
+        result['checks']['brick_log_reader'] = True
 
         with open(bufferpath, 'wb') as stream:
             stream.truncate(WINW * WINH * 4)
@@ -2542,6 +2573,8 @@ def graphicsdiagnostic():
         COLUMNRESIZING = original['COLUMNRESIZING']
         COLUMNRESIZENEXT = original['COLUMNRESIZENEXT']
         COLUMNCURSORMODE = original['COLUMNCURSORMODE']
+        popenisolated = original['popenisolated']
+        opsrequest = original['opsrequest']
         OUTBUF.clear()
         OUTBUF.extend(original['OUTBUF'])
         shutil.rmtree(root, ignore_errors=True)

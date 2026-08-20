@@ -16305,200 +16305,169 @@ def write(args=None):
 
 def writein(args=None):
 
-    # if no arguments given
     if not args or len(args) < 2:
-
         guiprint("> missing message andor file", colour=TEXTCOLOUR)
-
-        return
+        return 1
 
     try:
-
-        # preserve the literal as one argument and the complete file path as another
         literal = args[0]
-
+        if len(literal) >= 2 and literal[0] in ('|', '"', "'") and literal[-1] == literal[0]:
+            literal = literal[1:-1]
         fullpath = followarraylink(resolvepath(' '.join(args[1:])))
 
         if not allowpaths([fullpath]):
-            return
+            return 1
 
-        # run write in and capture output
-        res = subprocess.run(
-            [sys.executable, "/the one/build/writein/write in.py", literal, fullpath],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        flags |= getattr(os, 'O_CLOEXEC', 0)
+        flags |= getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(fullpath, flags, 0o600)
 
-        # track if we've already shown a permission denied line
-        permissionprinted = False
-
-        # decode and print stdout
         try:
+            with os.fdopen(descriptor, 'a', encoding='utf-8', newline='\n') as stream:
+                descriptor = -1
+                stream.write(str(literal) + '\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
 
-            if res.stdout:
-
-                out = res.stdout.decode('utf-8', errors='replace')
-
-                for line in out.splitlines():
-
-                    text = line.strip().lower()
-
-                    # permission denied in stdout
-                    if 'permission denied' in text:
-
-                        if not permissionprinted:
-
-                            guiprint(f'> {line}', colour=ERRORCOLOUR)
-
-                            permissionprinted = True
-
-                        # skip duplicate printing
-                        continue
-
-                    # normal stdout line
-                    guiprint(line, colour=TEXTCOLOUR)
-
-        except Exception as e:
-
-            guiprint(f'> error decoding output {e}', colour=ERRORCOLOUR)
-
-        # decode and print stderr
-        try:
-
-            if res.stderr:
-
-                err = res.stderr.decode('utf-8', errors='replace')
-
-                for line in err.splitlines():
-
-                    text = line.strip().lower()
-
-                    # permission denied in stderr
-                    if 'permission denied' in text:
-
-                        if not permissionprinted:
-
-                            guiprint(f'> {line}', colour=ERRORCOLOUR)
-
-                            permissionprinted = True
-
-                        # skip duplicate printing
-                        continue
-
-                    # normal stderr line
-                    guiprint(f'> {line}', colour=TEXTCOLOUR)
-
-        except Exception as e:
-
-            guiprint(f'> error decoding errors {e}', colour=ERRORCOLOUR)
-
-    except FileNotFoundError:
-
-        guiprint('> write in software missing', colour=ERRORCOLOUR)
-
-        return
+        guiprint(f'> {lowertext(formatlocation(fullpath))} written in', colour=TEXTCOLOUR)
+        return 0
 
     except PermissionError:
-
         guiprint('> permission denied', colour=ERRORCOLOUR)
+        return 1
 
-        return
+    except OSError as e:
+        guiprint(f'> error writing in {lowertext(e.strerror or e)}', colour=ERRORCOLOUR)
+        return 1
 
     except Exception as e:
+        guiprint(f'> error writing in {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
 
-        guiprint(f'> error writing in {e}', colour=ERRORCOLOUR)
 
-        return
+def parsereadarguments(args=None):
+
+    tokens = [str(arg) for arg in (args or [])]
+    numbers = False
+    start = None
+    end = None
+    last = None
+
+    if len(tokens) >= 2 and tokens[-2].casefold() == 'with' and tokens[-1].casefold() == 'numbers':
+        numbers = True
+        tokens = tokens[:-2]
+
+    if len(tokens) >= 4 and tokens[0].casefold() == 'last' and tokens[2].casefold() == 'from':
+        try:
+            last = max(0, int(tokens[1]))
+        except (TypeError, ValueError):
+            return None
+        path = ' '.join(tokens[3:]).strip()
+        return (path, start, end, last, numbers) if path else None
+
+    if len(tokens) >= 5 and tokens[-4].casefold() == 'from' and tokens[-2].casefold() == 'to':
+        try:
+            start = max(1, int(tokens[-3]))
+            end = max(start, int(tokens[-1]))
+        except (TypeError, ValueError):
+            return None
+        path = ' '.join(tokens[:-4]).strip()
+        return (path, start, end, last, numbers) if path else None
+
+    path = ' '.join(tokens).strip()
+    return (path, start, end, last, numbers) if path else None
+
+
+def readbinary(path):
+
+    try:
+        with open(path, 'rb') as stream:
+            return b'\x00' in stream.read(4096)
+    except OSError:
+        return False
+
+
+def emitreadline(line, number, numbers):
+
+    text = str(line).rstrip('\r\n')
+    guiprint(f'{number} {text}' if numbers else text, colour=TEXTCOLOUR)
+
+
+def readtext(path, start=None, end=None, last=None, numbers=False):
+
+    if path == '-':
+        if not HEADLESS:
+            guiprint('> standard input is available only in headless brick', colour=ERRORCOLOUR)
+            return 1
+        for number, line in enumerate(sys.stdin, 1):
+            emitreadline(line, number, numbers)
+        return 0
+
+    if not os.path.isfile(path):
+        if os.path.isdir(path):
+            guiprint(f'> {lowertext(formatlocation(path))} is a tier', colour=ERRORCOLOUR)
+        else:
+            guiprint(f'> file {lowertext(formatlocation(path))} not found', colour=ERRORCOLOUR)
+        return 1
+
+    if readbinary(path):
+        guiprint(f'> {lowertext(formatlocation(path))} is a binary file', colour=ERRORCOLOUR)
+        return 1
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as stream:
+            if last is not None:
+                rows = deque(maxlen=last)
+                for number, line in enumerate(stream, 1):
+                    rows.append((number, line))
+                for number, line in rows:
+                    emitreadline(line, number, numbers)
+                return 0
+
+            for number, line in enumerate(stream, 1):
+                if start is not None and number < start:
+                    continue
+                if end is not None and number > end:
+                    break
+                emitreadline(line, number, numbers)
+        return 0
+
+    except PermissionError:
+        guiprint('> permission denied', colour=ERRORCOLOUR)
+        return 1
+    except OSError as e:
+        guiprint(f'> error reading {lowertext(formatlocation(path))} {lowertext(e.strerror or e)}', colour=ERRORCOLOUR)
+        return 1
 
 
 def read(args=None):
 
     if not args:
-
         guiprint("> filename required", colour=TEXTCOLOUR)
-
-        return
+        return 1
 
     try:
+        parsed = parsereadarguments(args)
+        if parsed is None:
+            guiprint('> usage read file from first to last with numbers', colour=ERRORCOLOUR)
+            guiprint('> usage read last count from file with numbers', colour=ERRORCOLOUR)
+            return 1
 
-        tokens = [str(arg) for arg in args]
-        suffix = []
+        path, start, end, last, numbers = parsed
+        if path != '-':
+            path = followarraylink(resolvepath(path))
 
-        if len(tokens) >= 2 and tokens[-2].lower() == 'with' and tokens[-1].lower() == 'numbers':
-            suffix = tokens[-2:]
-            tokens = tokens[:-2]
-
-        if len(tokens) >= 4 and tokens[0].lower() == 'last' and tokens[2].lower() == 'from':
-            readargs = tokens[:3] + [followarraylink(resolvepath(' '.join(tokens[3:])))] + suffix
-
-        elif len(tokens) >= 5 and tokens[-4].lower() == 'from' and tokens[-2].lower() == 'to':
-            readargs = [followarraylink(resolvepath(' '.join(tokens[:-4])))] + tokens[-4:] + suffix
-
-        else:
-            readpath = ' '.join(tokens)
-            readargs = [readpath if readpath == '-' else followarraylink(resolvepath(readpath))] + suffix
-
-        # line above
         guiprint()
-
-        # run reader and capture stdout/stderr
-        res = subprocess.run(
-            [sys.executable, "/the one/build/read/read.py", *readargs],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        try:
-
-            # decode stdout (best-effort)
-            if res.stdout:
-
-                out = res.stdout.decode('utf-8', errors='replace')
-
-                for line in out.splitlines():
-
-                    guiprint(line, colour=TEXTCOLOUR)
-
-        except Exception as e:
-
-            # stdout decode error
-            guiprint(f'> error decoding output {e}', colour=ERRORCOLOUR)
-
-        try:
-
-            # decode stderr and show as errors
-            if res.stderr:
-
-                err = res.stderr.decode('utf-8', errors='replace')
-
-                for line in err.splitlines():
-
-                    guiprint(f'> {line}', colour=ERRORCOLOUR)
-
-        except Exception as e:
-
-            # stderr decode error
-            guiprint(f'> error decoding errors {e}', colour=ERRORCOLOUR)
-
-        # line below
+        status = readtext(path, start=start, end=end, last=last, numbers=numbers)
         guiprint()
-
-        return int(res.returncode)
-
-    except FileNotFoundError:
-
-        # read software missing
-        guiprint('> read software missing', colour=ERRORCOLOUR)
-
-    except PermissionError:
-
-        # permission denied
-        guiprint('> permission denied', colour=ERRORCOLOUR)
-
+        return status
     except Exception as e:
-
-        # other errors starting the reader
-        guiprint(f'> error launching read {e}', colour=ERRORCOLOUR)
+        guiprint(f'> error reading file {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
 
 
 def search(args=None):
@@ -18574,164 +18543,241 @@ def netstatus(args=None):
     guiprint()
 
 
-def ping(args=None):
+BRICKPINGCOUNT = 4
+BRICKPINGTIMEOUT = 5.0
+BRICKRECEIVEMAXIMUM = 4 * 1024 * 1024
 
-    # if no arguments given
-    if not args:
 
-        guiprint("> enter host after the ping directive", colour=TEXTCOLOUR)
+def pingchecksum(data):
 
-        return
+    payload = bytes(data)
+    if len(payload) % 2:
+        payload += b'\x00'
+    total = sum(struct.unpack(f'!{len(payload) // 2}H', payload))
+    total = (total >> 16) + (total & 0xffff)
+    total += total >> 16
+    return (~total) & 0xffff
 
-    # define host
-    host = args[0]
+
+def pingnetworkhelpers():
+
+    from network.network import parseurl, resolvename, opentcp, opentls, NETTIMEOUT
+    return parseurl, resolvename, opentcp, opentls, NETTIMEOUT
+
+
+def pinghttps(target):
+
+    parseurl, resolvename, opentcp, opentls, timeout = pingnetworkhelpers()
 
     try:
+        scheme, host, port, _ = parseurl(target)
+        if not host:
+            raise ValueError('invalid url')
+        if scheme != 'https':
+            port = 443
+        address = resolvename(host)
+    except Exception as e:
+        guiprint(f'> could not prepare ping {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
 
-        # line above
-        guiprint()
+    guiprint(f'> ping {lowertext(host)} [{address}] port {port}', colour=TEXTCOLOUR)
+    sent = 0
+    received = 0
 
-        # run ping and capture output
-        res = subprocess.run(
-            [sys.executable, "/the one/build/ping/ping.py", host],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
+    for sequence in range(1, BRICKPINGCOUNT + 1):
+        tcp = None
+        tls = None
+        sent += 1
         try:
-
-            # decode and show stdout (normal text)
-            if res.stdout:
-
-                out = res.stdout.decode('utf-8', errors='replace')
-
-                for line in out.splitlines():
-
-                    guiprint(line, colour=TEXTCOLOUR)
-
+            started = time.monotonic()
+            tcp = opentcp(address, port, timeout=timeout)
+            if tcp is None:
+                guiprint('> connection failed', colour=ERRORCOLOUR)
+                continue
+            tls = opentls(tcp, host)
+            if tls is None:
+                guiprint('> tls handshake failed', colour=ERRORCOLOUR)
+                continue
+            elapsed = int((time.monotonic() - started) * 1000)
+            received += 1
+            guiprint(f'> reply from {address} sequence {sequence} time {elapsed}ms', colour=TEXTCOLOUR)
         except Exception as e:
+            guiprint(f'> ping error {lowertext(e)}', colour=ERRORCOLOUR)
+        finally:
+            for connection in (tls, tcp):
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except OSError:
+                        pass
 
-            # stdout decode error
-            guiprint(f'> error decoding output {e}', colour=ERRORCOLOUR)
+    lost = sent - received
+    loss = int((lost / sent) * 100) if sent else 100
+    guiprint(f'> ping statistics for {lowertext(host)} [{address}]', colour=TEXTCOLOUR)
+    guiprint(f'  packets sent {sent} completed {received} failed {lost} {loss}% loss', colour=TEXTCOLOUR)
+    return 0 if received else 1
 
-        try:
 
-            # decode and show stderr (errors)
-            if res.stderr:
+def pingicmp(target):
 
-                err = res.stderr.decode('utf-8', errors='replace')
+    parseurl, resolvename, _, _, _ = pingnetworkhelpers()
 
-                for line in err.splitlines():
+    try:
+        _, host, _, _ = parseurl(target if '://' in target else 'http://' + target)
+        host = host or target
+        address = resolvename(host)
+    except Exception as e:
+        guiprint(f'> could not resolve {lowertext(target)} {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
 
-                    guiprint(f'> {line}', colour=ERRORCOLOUR)
-
-        except Exception as e:
-
-            # stderr decode error
-            guiprint(f'> error decoding errors {e}', colour=ERRORCOLOUR)
-
-        # non-zero exit with no stderr still indicates failure
-        if res.returncode != 0 and not res.stderr:
-
-            guiprint('> ping failed', colour=ERRORCOLOUR)
-
-        # line below
-        guiprint()
-
-    except FileNotFoundError:
-
-        # script missing error
-        guiprint('> ping software not found', colour=ERRORCOLOUR)
-
+    try:
+        channel = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_ICMP)
     except PermissionError:
+        guiprint('> icmp ping is unavailable for this user', colour=ERRORCOLOUR)
+        return 1
+    except OSError as e:
+        guiprint(f'> could not open icmp ping {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
 
-        # permission denied error
-        guiprint('> permission denied', colour=ERRORCOLOUR)
+    guiprint(f'> ping {lowertext(host)} [{address}] with {BRICKPINGCOUNT} packets', colour=TEXTCOLOUR)
+    identifier = os.getpid() & 0xffff
+    sent = 0
+    received = 0
+
+    try:
+        for sequence in range(1, BRICKPINGCOUNT + 1):
+            payload = struct.pack('!d', time.monotonic())
+            header = struct.pack('!BBHHH', 8, 0, 0, identifier, sequence)
+            checksum = pingchecksum(header + payload)
+            packet = struct.pack('!BBHHH', 8, 0, checksum, identifier, sequence) + payload
+            sent += 1
+
+            try:
+                started = time.monotonic()
+                channel.settimeout(BRICKPINGTIMEOUT)
+                channel.sendto(packet, (address, 0))
+                reply, _ = channel.recvfrom(1024)
+                if len(reply) < 8 or reply[0] != 0:
+                    raise OSError('invalid icmp reply')
+                replysequence = struct.unpack('!H', reply[6:8])[0]
+                if replysequence != sequence:
+                    raise OSError('unexpected icmp sequence')
+                elapsed = int((time.monotonic() - started) * 1000)
+                received += 1
+                guiprint(f'> reply from {address} sequence {sequence} time {elapsed}ms', colour=TEXTCOLOUR)
+            except socket.timeout:
+                guiprint('> request timed out', colour=ERRORCOLOUR)
+            except OSError as e:
+                guiprint(f'> ping error {lowertext(e)}', colour=ERRORCOLOUR)
+    finally:
+        channel.close()
+
+    lost = sent - received
+    loss = int((lost / sent) * 100) if sent else 100
+    guiprint(f'> ping statistics for {lowertext(host)} [{address}]', colour=TEXTCOLOUR)
+    guiprint(f'  packets sent {sent} received {received} lost {lost} {loss}% loss', colour=TEXTCOLOUR)
+    return 0 if received else 1
+
+
+def ping(args=None):
+
+    if not args:
+        guiprint('> enter host after the ping directive', colour=TEXTCOLOUR)
+        return 1
+
+    target = str(args[0]).strip()
+    guiprint()
+    try:
+        status = pinghttps(target) if target.casefold().startswith('https://') else pingicmp(target)
+    except KeyboardInterrupt:
+        guiprint('> aborted', colour=ERRORCOLOUR)
+        status = 1
+    except Exception as e:
+        guiprint(f'> error pinging {lowertext(e)}', colour=ERRORCOLOUR)
+        status = 1
+    guiprint()
+    return status
+
+
+def receivepage(target, helpers=None):
+
+    if helpers is None:
+        from network.network import parseurl, resolvename, opentcp, opentls, NETBUFSIZE, NETTIMEOUT
+    else:
+        parseurl, resolvename, opentcp, opentls, NETBUFSIZE, NETTIMEOUT = helpers
+
+    try:
+        scheme, host, port, path = parseurl(target)
+        if not host:
+            raise ValueError('invalid url')
+        address = resolvename(host)
+    except Exception as e:
+        guiprint(f'> could not prepare receive {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
+
+    tcp = None
+    connection = None
+    try:
+        tcp = opentcp(address, port, timeout=NETTIMEOUT)
+        if tcp is None:
+            raise OSError('connection failed')
+        connection = opentls(tcp, host) if scheme == 'https' else tcp
+        if connection is None:
+            raise OSError('tls handshake failed')
+        request = (
+            f'GET {path} HTTP/1.1\r\n'
+            f'Host: {host}\r\n'
+            'User-Agent: t1os-brick/1\r\n'
+            'Connection: close\r\n\r\n'
+        ).encode('ascii', errors='strict')
+        connection.sendall(request)
+
+        chunks = []
+        size = 0
+        while True:
+            chunk = connection.recv(NETBUFSIZE)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > BRICKRECEIVEMAXIMUM:
+                raise ValueError('received page exceeds the brick limit')
+            chunks.append(chunk)
+
+        response = b''.join(chunks)
+        sections = response.split(b'\r\n\r\n', 1)
+        body = sections[1] if len(sections) == 2 else b''
+        guiprint(body.decode('utf-8', errors='replace'), colour=TEXTCOLOUR)
+        return 0
 
     except Exception as e:
-
-        # other errors
-        guiprint(f'> error pinging {e}', colour=ERRORCOLOUR)
+        guiprint(f'> receive failed {lowertext(e)}', colour=ERRORCOLOUR)
+        return 1
+    finally:
+        for candidate in (connection, tcp):
+            if candidate is not None:
+                try:
+                    candidate.close()
+                except OSError:
+                    pass
 
 
 def receive(args=None):
 
-    # if no arguments given
     if not args:
+        guiprint('> enter host after the receive directive', colour=TEXTCOLOUR)
+        return 1
 
-        guiprint("> enter host after the receive directive", colour=TEXTCOLOUR)
-
-        return
-
-    # define host
-    host = args[0]
-
+    guiprint()
     try:
-
-        # line above
-        guiprint()
-
-        # run receive and capture output
-        res = subprocess.run(
-            [sys.executable, "/the one/build/receive/receive.py", host],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        try:
-
-            # decode and show stdout
-            if res.stdout:
-
-                out = res.stdout.decode('utf-8', errors='replace')
-
-                for line in out.splitlines():
-
-                    guiprint(line)
-
-        except Exception as e:
-
-            # stdout decode error
-            guiprint(f'> error decoding output {e}', colour=ERRORCOLOUR)
-
-        try:
-
-            # decode and show stderr
-            if res.stderr:
-
-                err = res.stderr.decode('utf-8', errors='replace')
-
-                for line in err.splitlines():
-
-                    guiprint(f'> {line}', colour=ERRORCOLOUR)
-
-        except Exception as e:
-
-            # stderr decode error
-            guiprint(f'> error decoding errors {e}', colour=ERRORCOLOUR)
-
-        # non-zero exit with no stderr still indicates failure
-        if res.returncode != 0 and not res.stderr:
-
-            guiprint('> receive failed', colour=ERRORCOLOUR)
-
-        # line below
-        guiprint()
-
-    except FileNotFoundError:
-
-        # script missing error
-        guiprint('> receive software not found', colour=ERRORCOLOUR)
-
-    except PermissionError:
-
-        # permission denied error
-        guiprint('> permission denied', colour=ERRORCOLOUR)
-
+        status = receivepage(str(args[0]).strip())
+    except KeyboardInterrupt:
+        guiprint('> aborted', colour=ERRORCOLOUR)
+        status = 1
     except Exception as e:
-
-        # other errors
-        guiprint(f'> error receiving {e}', colour=ERRORCOLOUR)
+        guiprint(f'> error receiving {lowertext(e)}', colour=ERRORCOLOUR)
+        status = 1
+    guiprint()
+    return status
 
 
 # rubbish directives
@@ -19799,6 +19845,7 @@ def test(args):
         'development': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'development'],
         'dogfood': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'dogfood'],
         'network': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'network'],
+        'integrated': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'integrated'],
         'image': ['/the one/build/image/image.py', 'diagnostic'],
         'write': ['/the one/build/write/write.py', 'graphics-diagnostic'],
         'write performance': ['/the one/build/write/write.py', 'performance-diagnostic'],
@@ -20451,7 +20498,7 @@ DIRECTIVESPECS = [
     makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python'),
     makespec('export python lock', ['epl'], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
     makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
-    makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood', 'network']), category='development'),
+    makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood', 'network', 'integrated']), category='development'),
     makespec('play', [], 'play an audio or video file', ['play <media file>'], play, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('view', [], 'view an image inline', ['view <image file>'], view, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('run', ['r'], 'run software', ['run <software> [arguments]', 'run <software> [arguments] behind'], run, grammar=makegrammar('file', terms=['behind'], highlight_type='file', highlight='single'), category='operations'),
@@ -21555,16 +21602,12 @@ def diagnosticsearch():
         with open(matchpath, 'w', encoding='utf-8') as stream:
             stream.write('deep needle\n')
 
-        readresult = subprocess.run(
-            [sys.executable, '/the one/build/read/read.py', 'read', 'sample.txt', 'from', '2', 'to', '3', 'with', 'numbers'],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=10,
-        )
+        SCROLL.clear()
+        STYLES.clear()
+        readstatus = read([readpath, 'from', '2', 'to', '3', 'with', 'numbers'])
+        readoutput = [str(line) for line in SCROLL if str(line)]
 
-        if readresult.returncode != 0 or readresult.stdout.splitlines() != ['2: two', '3: three']:
+        if readstatus != 0 or readoutput != ['2 two', '3 three']:
             raise RuntimeError('focused bounded read failed')
 
         result['checks']['bounded_read'] = True
@@ -21885,6 +21928,115 @@ def diagnosticnetwork():
     return result
 
 
+def diagnosticintegratedcommands():
+
+    result = {'suite': 'integrated', 'passed': False, 'checks': {}, 'errors': []}
+    root = f'/.ephemeral/brick/integrated-diagnostic-{os.getpid()}'
+    originalrole = arch.currentrole
+    originalicmp = globals().get('pingicmp')
+    originalhttps = globals().get('pinghttps')
+
+    try:
+        shutil.rmtree(root, ignore_errors=True)
+        os.makedirs(root, exist_ok=False)
+        arch.currentrole = 'architect'
+
+        readpath = os.path.join(root, 'read sample.txt')
+        with open(readpath, 'w', encoding='utf-8') as stream:
+            stream.write('Alpha: one\nbeta\ngamma\ndelta\n')
+
+        SCROLL.clear()
+        STYLES.clear()
+        status = read([readpath, 'from', '2', 'to', '3', 'with', 'numbers'])
+        output = [str(line) for line in SCROLL if str(line)]
+        if status != 0 or output != ['2 beta', '3 gamma']:
+            raise RuntimeError('integrated bounded read failed')
+
+        SCROLL.clear()
+        STYLES.clear()
+        status = read(['last', '2', 'from', readpath])
+        output = [str(line) for line in SCROLL if str(line)]
+        if status != 0 or output != ['gamma', 'delta']:
+            raise RuntimeError('integrated last-line read failed')
+        result['checks']['read'] = True
+
+        writepath = os.path.join(root, 'write target.txt')
+        with open(writepath, 'w', encoding='utf-8') as stream:
+            stream.write('existing\n')
+        if writein(['added text', writepath]) != 0:
+            raise RuntimeError('integrated write in failed')
+        with open(writepath, 'r', encoding='utf-8') as stream:
+            if stream.read() != 'existing\nadded text\n':
+                raise RuntimeError('integrated write in changed the wrong content')
+        result['checks']['write_in'] = True
+
+        class DiagnosticConnection:
+
+            def __init__(self):
+                self.sent = b''
+                self.chunks = [
+                    b'HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nMixed: Body',
+                    b'',
+                ]
+
+            def sendall(self, payload):
+                self.sent += bytes(payload)
+
+            def recv(self, _size):
+                return self.chunks.pop(0)
+
+            def close(self):
+                return None
+
+        connection = DiagnosticConnection()
+        helpers = (
+            lambda _target: ('http', 'diagnostic.test', 80, '/page'),
+            lambda _host: '192.0.2.1',
+            lambda _address, _port, timeout=None: connection,
+            lambda channel, _host: channel,
+            4096,
+            1.0,
+        )
+        SCROLL.clear()
+        STYLES.clear()
+        if receivepage('http://diagnostic.test/page', helpers=helpers) != 0:
+            raise RuntimeError('integrated receive failed')
+        if [str(line) for line in SCROLL if str(line)] != ['Mixed: Body']:
+            raise RuntimeError('integrated receive changed page content')
+        if b'GET /page HTTP/1.1' not in connection.sent:
+            raise RuntimeError('integrated receive did not send the requested path')
+        result['checks']['receive'] = True
+
+        calls = []
+        globals()['pingicmp'] = lambda target: calls.append(('icmp', target)) or 0
+        globals()['pinghttps'] = lambda target: calls.append(('https', target)) or 0
+        if ping(['diagnostic.test']) != 0 or ping(['https://diagnostic.test']) != 0:
+            raise RuntimeError('integrated ping routing failed')
+        if calls != [('icmp', 'diagnostic.test'), ('https', 'https://diagnostic.test')]:
+            raise RuntimeError('integrated ping selected the wrong transport')
+        header = struct.pack('!BBHHH', 8, 0, 0, 1, 1) + b'payload'
+        checksum = pingchecksum(header)
+        packet = struct.pack('!BBHHH', 8, 0, checksum, 1, 1) + b'payload'
+        if pingchecksum(packet) != 0:
+            raise RuntimeError('integrated ping checksum failed')
+        result['checks']['ping'] = True
+
+        result['passed'] = all(result['checks'].values())
+
+    except Exception as error:
+        result['errors'].append(str(error))
+
+    finally:
+        globals()['pingicmp'] = originalicmp
+        globals()['pinghttps'] = originalhttps
+        arch.currentrole = originalrole
+        SCROLL.clear()
+        STYLES.clear()
+        shutil.rmtree(root, ignore_errors=True)
+
+    return result
+
+
 def focuseddirectivediagnosticcommand(suite):
 
     name = str(suite or '').strip().casefold()
@@ -21897,6 +22049,7 @@ def focuseddirectivediagnosticcommand(suite):
         'development': diagnosticdevelopment,
         'dogfood': diagnosticdogfood,
         'network': diagnosticnetwork,
+        'integrated': diagnosticintegratedcommands,
     }
     function = functions.get(name)
 
@@ -22008,12 +22161,9 @@ def directivediagnosticcommand():
 
         result['checks']['move_tier_success'] = True
 
-        # verify write in uses its deployed filename and preserves the target path
-        if not os.path.isfile('/the one/build/writein/write in.py'):
-
-            raise RuntimeError('deployed write in software was not found')
-
-        writein(['written text', 'written', 'file.txt'])
+        # verify integrated write in preserves a target path containing spaces
+        if writein(['written text', 'written', 'file.txt']) != 0:
+            raise RuntimeError('integrated write in failed')
 
         with open('written file.txt') as stream:
 
@@ -22345,31 +22495,21 @@ def directivediagnosticcommand():
         with open('read sample.txt', 'w') as stream:
             stream.write('one\ntwo\nthree\nfour\n')
 
-        readresult = subprocess.run(
-            [
-                sys.executable,
-                '/the one/build/read/read.py',
-                'read', 'sample.txt', 'from', '2', 'to', '3', 'with', 'numbers',
-            ],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        SCROLL.clear()
+        STYLES.clear()
+        readstatus = read(['read', 'sample.txt', 'from', '2', 'to', '3', 'with', 'numbers'])
+        readoutput = [str(line) for line in SCROLL if str(line)]
 
-        if readresult.returncode != 0 or readresult.stdout.splitlines() != ['2: two', '3: three']:
-            raise RuntimeError(f'bounded read failed {readresult.stderr.strip()}')
+        if readstatus != 0 or readoutput != ['2 two', '3 three']:
+            raise RuntimeError('bounded read failed')
 
-        lastresult = subprocess.run(
-            [sys.executable, '/the one/build/read/read.py', 'last', '2', 'from', 'read', 'sample.txt'],
-            cwd=root,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
+        SCROLL.clear()
+        STYLES.clear()
+        laststatus = read(['last', '2', 'from', 'read', 'sample.txt'])
+        lastoutput = [str(line) for line in SCROLL if str(line)]
 
-        if lastresult.returncode != 0 or lastresult.stdout.splitlines() != ['three', 'four']:
-            raise RuntimeError(f'last-line read failed {lastresult.stderr.strip()}')
+        if laststatus != 0 or lastoutput != ['three', 'four']:
+            raise RuntimeError('last-line read failed')
 
         result['checks']['bounded_read'] = True
 
@@ -22487,6 +22627,7 @@ def directivediagnosticcommand():
             diagnosticdevelopment(),
             diagnosticdogfood(),
             diagnosticnetwork(),
+            diagnosticintegratedcommands(),
         ]
 
         for suite in suites:
@@ -22598,7 +22739,7 @@ def consolediagnosticcommand():
 
 
 # core function
-def main(startupfile=None):
+def main(startupfile=None, initialdirective=None):
 
     global PREV_INPUTBUF, PREV_CURSORPOS, PREV_CURSOR_ON, DIRTY_PROMPT
 
@@ -22632,6 +22773,12 @@ def main(startupfile=None):
 
         # initialise input state for the prompt
         initinput()
+
+        # Trusted T1OS callers such as Operations Centre may open a new Brick
+        # with one directive represented as separate process arguments.  Brick
+        # still performs its ordinary parser, path and permission checks.
+        if initialdirective:
+            rundirective(str(initialdirective), echo=True)
 
         # Array opens selected Python source in Brick's already-confined
         # interactive console.  The mutable source remains an argument to this
@@ -22805,6 +22952,10 @@ if __name__ == '__main__':
             sys.exit(runfilewithoutwindow(sys.argv[2], sys.argv[3:]))
 
         main(sys.argv[2])
+
+    elif len(sys.argv) >= 3 and str(sys.argv[1]).strip().lower() == "--directive":
+
+        main(initialdirective=shlex.join(str(value) for value in sys.argv[2:]))
 
     else:
 

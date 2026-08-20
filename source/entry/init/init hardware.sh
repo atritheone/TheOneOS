@@ -337,6 +337,17 @@ mount_pseudo_filesystems() {
     "$busybox" mountpoint -q /proc || "$busybox" mount -t proc proc /proc
     "$busybox" mountpoint -q /sys || "$busybox" mount -t sysfs sysfs /sys
 
+    # Linux ping sockets permit ICMP echo without granting the desktop shell
+    # raw packet authority. Limit that facility to the T1OS user group.
+    "$busybox" printf '1000 1000\n' > /proc/sys/net/ipv4/ping_group_range ||
+        rescue 'I could not prepare ordinary-user ICMP echo support.'
+    ping_group_values=$("$busybox" cat /proc/sys/net/ipv4/ping_group_range) ||
+        rescue 'I could not verify ordinary-user ICMP echo support.'
+    set -- $ping_group_values
+    [ "$#" = 2 ] && [ "$1" = 1000 ] && [ "$2" = 1000 ] ||
+        rescue 'The ordinary-user ICMP echo boundary did not remain active.'
+    unset ping_group_values
+
     # Populate early device nodes. Persistent module discovery is owned by the
     # T1OS Driver Server after switch_root, not by an initramfs hotplug helper.
     "$busybox" mdev -s 2>/dev/null || true

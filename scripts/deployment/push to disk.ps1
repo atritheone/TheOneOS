@@ -966,15 +966,6 @@ for legacy_windows_dir in windowserver "window server"; do
     fi
 done
 
-if [ -e "$stage/build/writein" ] && [ -e "$stage/build/write in" ]; then
-    echo 'Both writein and write in exist in the staged build.' >&2
-    exit 1
-fi
-
-if [ -d "$stage/build/write in" ]; then
-    mv "$stage/build/write in" "$stage/build/writein"
-fi
-
 unexpected_build_files=$(find "$stage/build" -type f \
     ! -name '*.py' \
     ! -path "$stage/build/chromium/hardware diagnostics.json" \

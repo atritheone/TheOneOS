@@ -412,14 +412,6 @@ stage_source_trees() {
             mv "$expected_build/$legacy_windows_dir" "$expected_build/windows"
         fi
     done
-    if [ -e "$expected_build/writein" ] && [ -e "$expected_build/write in" ]; then
-        echo 'Both writein and write in exist in the current build source.' >&2
-        exit 1
-    fi
-    if [ -d "$expected_build/write in" ]; then
-        mv "$expected_build/write in" "$expected_build/writein"
-    fi
-
     unexpected_build_files=$(find "$expected_build" -type f \
         ! -name '*.py' \
         ! -path "$expected_build/chromium/hardware diagnostics.json" \

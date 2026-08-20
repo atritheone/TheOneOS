@@ -2539,6 +2539,40 @@ def safechown(path, uid=ENGINEUID, gid=ENGINEGID):
         ) from error
 
 
+def removeruntime():
+    """Remove Chromium scratch state, including its mode-000 sandbox root."""
+    if not os.path.lexists(RUNTIME):
+        return False
+
+    runtimestatus = os.lstat(RUNTIME)
+    if stat.S_ISLNK(runtimestatus.st_mode) or not stat.S_ISDIR(
+        runtimestatus.st_mode
+    ):
+        raise RuntimeError("chromium runtime path is not a real directory")
+
+    if os.path.lexists(SANDBOXROOT):
+        sandboxstatus = os.lstat(SANDBOXROOT)
+        if stat.S_ISLNK(sandboxstatus.st_mode) or not stat.S_ISDIR(
+            sandboxstatus.st_mode
+        ):
+            raise RuntimeError("Chromium sandbox root is not a real directory")
+        if (sandboxstatus.st_uid, sandboxstatus.st_gid) not in (
+            (ENGINEUID, ENGINEGID),
+            (0, 0),
+        ):
+            raise PermissionError(
+                "Chromium sandbox root has unexpected ownership "
+                f"{sandboxstatus.st_uid}:{sandboxstatus.st_gid}"
+            )
+        # chrome-sandbox requires this directory to be inaccessible while the
+        # engine is live.  Restore owner traversal only after engine teardown
+        # so shutil can inspect and remove the otherwise mode-000 directory.
+        os.chmod(SANDBOXROOT, 0o700)
+
+    shutil.rmtree(RUNTIME)
+    return True
+
+
 def chromiumstateobjectkind(mode):
     if stat.S_ISLNK(mode):
         return "symbolic link"
@@ -2816,9 +2850,7 @@ def prepareruntime():
             f"the T1OS downloads directory is unavailable: {downloads}"
         )
     if os.path.lexists(RUNTIME):
-        if os.path.islink(RUNTIME):
-            raise RuntimeError("chromium runtime path cannot be a symbolic link")
-        shutil.rmtree(RUNTIME)
+        removeruntime()
     for path, mode in (
         (RUNTIME, 0o700), (FRAMEBUFFER, 0o700), (CACHE, 0o700),
         (AUDIO, 0o700), (SHARED, 0o1777), (DISPLAYROOT, 0o1777),
@@ -6454,8 +6486,7 @@ def cleanup():
             pass
     closeengineoutputreader()
     try:
-        if os.path.isdir(RUNTIME) and not os.path.islink(RUNTIME):
-            shutil.rmtree(RUNTIME)
+        removeruntime()
     except Exception as error:
         logline(f"runtime cleanup failed: {error}")
     releaseinstance()
@@ -7199,8 +7230,7 @@ def audiodiagnostic():
             ENGINELOG = None
         closeengineoutputreader()
         try:
-            if os.path.isdir(RUNTIME) and not os.path.islink(RUNTIME):
-                shutil.rmtree(RUNTIME)
+            removeruntime()
         except Exception:
             pass
     print(json.dumps(result, sort_keys=True))
@@ -7467,8 +7497,7 @@ def enginediagnostic():
                 pass
         closeengineoutputreader()
         try:
-            if os.path.isdir(RUNTIME) and not os.path.islink(RUNTIME):
-                shutil.rmtree(RUNTIME)
+            removeruntime()
         except Exception:
             pass
     if not result["ok"]:

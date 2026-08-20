@@ -4,6 +4,23 @@ mount -t devtmpfs devtmpfs /dev
 mount -t proc     proc     /proc
 mount -t sysfs    sysfs    /sys
 
+# Linux ping sockets permit ICMP echo without granting the desktop shell raw
+# packet authority.  Limit that ordinary-user facility to the T1OS user group.
+/bin/busybox printf '1000 1000\n' > /proc/sys/net/ipv4/ping_group_range || {
+    /bin/busybox echo 'software init could not enable ordinary-user icmp echo' >/dev/console
+    exec /bin/busybox sh
+}
+ping_group_values=$(/bin/busybox cat /proc/sys/net/ipv4/ping_group_range) || {
+    /bin/busybox echo 'software init could not read the ordinary-user icmp echo boundary' >/dev/console
+    exec /bin/busybox sh
+}
+set -- $ping_group_values
+[ "$#" = 2 ] && [ "$1" = 1000 ] && [ "$2" = 1000 ] || {
+    /bin/busybox echo 'software init found the wrong ordinary-user icmp echo boundary' >/dev/console
+    exec /bin/busybox sh
+}
+unset ping_group_values
+
 root=/dev/sda
 
 if [ -b /dev/vda ]; then
