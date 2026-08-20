@@ -43,6 +43,7 @@ WIRELESSCREDENTIALPATTERN = r'network\.wireless\.[0-9a-f]{24}'
 WIRELESSENGINE = '/the one/software/network/wireless-engine'
 NETWORKRUNTIME = '/.ephemeral/network'
 CONNECTIONSTATE = os.path.join(NETWORKRUNTIME, 'connection.json')
+FIREWALLSTATE = os.path.join(NETWORKRUNTIME, 'firewall.json')
 INITIALSTATE = os.path.join(NETWORKRUNTIME, 'initial.json')
 INITIALSTATEFIELDS = frozenset(('format', 'connected', 'interface', 'completed'))
 INITIALSTATEMAXIMUM = 512
@@ -67,6 +68,8 @@ WIRELESSCONFIGURATIONS = {}
 LASTDHCPOPTIONS = {}
 FIREWALLTABLE = 't1os_filter'
 FIREWALLREADY = False
+FIREWALLPROFILE = ''
+FIREWALLPROFILES = frozenset(('protected', 'open'))
 
 
 
@@ -97,6 +100,25 @@ def getconfig(path):
 
     # transform "key=value" lines into a dictionary and return it
     return dict(l.split('=', 1) for l in lines)
+
+
+def hostnetworksettings():
+
+    config = getconfig(GLOBALCONF) if os.path.exists(GLOBALCONF) else {}
+    firewall = str(config.get('firewall') or 'protected').strip().lower()
+    if firewall not in FIREWALLPROFILES:
+        firewall = 'protected'
+    dns = str(config.get('dns') or 'automatic').strip().lower()
+    if dns not in ('automatic', 'manual'):
+        dns = 'automatic'
+    interface = str(config.get('interface') or '').strip()
+    if INITIALSTATEINTERFACE.fullmatch(interface) is None:
+        interface = ''
+    return {
+        'firewall': firewall,
+        'dns': dns,
+        'interface': interface,
+    }
 
 
 def dhcpoptiontext(options, code):
@@ -438,7 +460,9 @@ def _nftattribute(message, name):
     return None
 
 
-def firewallpresent(nft):
+def firewallpresent(nft, profile='protected'):
+
+    profile = profile if profile in FIREWALLPROFILES else 'protected'
 
     expected = {
         (FIREWALLTABLE, 'input'): 0,
@@ -458,12 +482,12 @@ def firewallpresent(nft):
     ]
     return (
         all(actual.get(identity) == policy for identity, policy in expected.items()) and
-        len(ownedrules) == 5 and
+        len(ownedrules) == (6 if profile == 'open' else 5) and
         all(_nftattribute(message, 'NFTA_RULE_CHAIN') == 'input' for message in ownedrules)
     )
 
 
-def verifyhostfirewall(nftfactory=None):
+def verifyhostfirewall(nftfactory=None, profile='protected'):
 
     if nftfactory is None:
         from pyroute2.nftables.main import NFTables
@@ -471,14 +495,16 @@ def verifyhostfirewall(nftfactory=None):
 
     nft = nftfactory()
     try:
-        return firewallpresent(nft)
+        return firewallpresent(nft, profile)
     finally:
         close = getattr(nft, 'close', None)
         if callable(close):
             close()
 
 
-def applyhostfirewall(nftfactory=None):
+def applyhostfirewall(nftfactory=None, profile='protected'):
+
+    profile = profile if profile in FIREWALLPROFILES else 'protected'
 
     if nftfactory is None:
         from pyroute2.nftables.main import NFTables
@@ -533,9 +559,17 @@ def applyhostfirewall(nftfactory=None):
             'add', table=FIREWALLTABLE, chain='input',
             expressions=(_nftdhcpreply(), _nftverdict()),
         )
+        if profile == 'open':
+            # The firewall remains installed and forwarding remains denied.
+            # This final input verdict is the explicit user-selected policy for
+            # software that must accept unsolicited connections from the link.
+            nft.rule(
+                'add', table=FIREWALLTABLE, chain='input',
+                expressions=(_nftverdict(),),
+            )
         nft.commit()
 
-        if not firewallpresent(nft):
+        if not firewallpresent(nft, profile):
             raise RuntimeError('committed firewall chains were not observable')
         return True
 
@@ -545,24 +579,50 @@ def applyhostfirewall(nftfactory=None):
             close()
 
 
-def ensurehostfirewall():
+def writefirewallstate(profile, active, error=''):
 
-    global FIREWALLREADY
+    try:
+        atomicjson(FIREWALLSTATE, {
+            'active': bool(active),
+            'profile': profile if profile in FIREWALLPROFILES else 'protected',
+            'incoming': 'allowed' if profile == 'open' else 'blocked',
+            'forwarding': 'blocked',
+            'outgoing': 'allowed',
+            'error': str(error or ''),
+            'updated': int(time.time()),
+        })
+    except Exception as stateerror:
+        log(f'could not publish firewall state: {stateerror}', durable=True)
 
-    if FIREWALLREADY:
+
+def ensurehostfirewall(profile=None):
+
+    global FIREWALLREADY, FIREWALLPROFILE
+
+    if profile is None:
+        profile = hostnetworksettings()['firewall']
+    profile = profile if profile in FIREWALLPROFILES else 'protected'
+
+    if FIREWALLREADY and FIREWALLPROFILE == profile:
         try:
-            if verifyhostfirewall():
+            if verifyhostfirewall(profile=profile):
+                writefirewallstate(profile, True)
                 return True
             log('host firewall drift detected; rebuilding policy', durable=True)
         except Exception as error:
             log(f'host firewall verification failed: {error}', durable=True)
         FIREWALLREADY = False
+        FIREWALLPROFILE = ''
 
     try:
-        FIREWALLREADY = bool(applyhostfirewall())
+        FIREWALLREADY = bool(applyhostfirewall(profile=profile))
+        FIREWALLPROFILE = profile if FIREWALLREADY else ''
+        writefirewallstate(profile, FIREWALLREADY)
     except Exception as error:
         FIREWALLREADY = False
+        FIREWALLPROFILE = ''
         log(f'host firewall admission failed: {error}', durable=True)
+        writefirewallstate(profile, False, error)
 
     return FIREWALLREADY
 
@@ -1677,6 +1737,14 @@ def dhcprequest(iface, mac, xid, yiaddr, server):
             packetlistener.close()
 
 
+def applyleasedns(router, dnsservers, automatic=True):
+
+    if not automatic:
+        log('retaining manually configured dns servers')
+        return False
+    return configuredns(dnsserversforlease(router, dnsservers))
+
+
 def configdhcp(iface):
 
     # log that we are beginning the DHCP process for the interface
@@ -1740,7 +1808,9 @@ def configdhcp(iface):
     # apply the obtained address with /24 mask and router as gateway
     configstatic(iface, yiaddr, '24', router)
 
-    configuredns(dnsserversforlease(router, dnsservers))
+    applyleasedns(
+        router, dnsservers,
+        hostnetworksettings()['dns'] == 'automatic')
 
     if iswirelessname(iface):
         connectionname = connectedwirelessname(iface)
@@ -2522,6 +2592,14 @@ def usablecurrentinterface(links):
     return ''
 
 
+def configuredinterface(links):
+
+    preferred = hostnetworksettings()['interface']
+    if not preferred:
+        return None
+    return next((link for link in links if link.get('name') == preferred), None)
+
+
 def configuredwirelesslinks(links):
 
     candidates = [
@@ -2621,6 +2699,10 @@ def main(force=False):
     activatewirelessinterfaces(initiallinks)
     links = linkinventory()
     current = usablecurrentinterface(links)
+    preferredlink = configuredinterface(links)
+    preferred = preferredlink['name'] if preferredlink else ''
+    if preferredlink and preferredlink.get('wireless'):
+        ensurewireless(preferred)
     wiredready = [
         link for link in links
         if not link.get('wireless') and linkready(link)
@@ -2630,16 +2712,26 @@ def main(force=False):
     # exception: it always pre-empts an existing Wi-Fi connection.
     if current and not force:
         currentlink = next((link for link in links if link['name'] == current), None)
-        if currentlink and (not currentlink.get('wireless') or not wiredready):
+        preferredready = bool(preferredlink and linkready(preferredlink))
+        if preferred and current != preferred and not preferredready:
+            return
+        if (
+            (not preferred or current == preferred) and currentlink and
+            (preferred or not currentlink.get('wireless') or not wiredready)
+        ):
             return
 
-    iface = wiredready[0]['name'] if wiredready else None
+    iface = preferred if preferredlink and linkready(preferredlink) else None
+    if not iface:
+        iface = wiredready[0]['name'] if wiredready else None
 
     if iface:
         configureinterface(iface)
         return
 
     wirelesslinks = configuredwirelesslinks(links)
+    if preferred:
+        wirelesslinks.sort(key=lambda item: item.get('name') != preferred)
 
     # Begin configured Wi-Fi association while Ethernet auto-negotiates. The
     # former serial path waited the full Ethernet settling interval before it

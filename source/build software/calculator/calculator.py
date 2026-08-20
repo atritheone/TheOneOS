@@ -180,7 +180,7 @@ def redraw():
 # calculation functions
 def currentvalue():
 
-    if ERROR or DISPLAY == 'Error':
+    if ERROR or DISPLAY == 'error':
         raise InvalidOperation
 
     return Decimal(str(DISPLAY))
@@ -227,7 +227,7 @@ def seterror(message):
     global DISPLAY, EXPRESSION, ACCUMULATOR, PENDING, LASTOPERATOR
     global LASTOPERAND, NEWINPUT, ERROR
 
-    DISPLAY = 'Error'
+    DISPLAY = 'error'
     EXPRESSION = str(message)[:64]
     ACCUMULATOR = None
     PENDING = None
@@ -562,7 +562,7 @@ def buttons():
         y += height + GAP
 
     definitions = (
-        ('clear', 'AC', 0, 0, 1),
+        ('clear', 'ac', 0, 0, 1),
         ('sign', '±', 0, 1, 1),
         ('percent', '%', 0, 2, 1),
         ('operator:/', '÷', 0, 3, 1),
@@ -1299,7 +1299,7 @@ def diagnostic():
 
         result['checks']['percent'] = DISPLAY
 
-        if sequence('digit:9', 'operator:/', 'digit:0', 'equals') != 'Error' or ERROR != 'cannot divide by zero':
+        if sequence('digit:9', 'operator:/', 'digit:0', 'equals') != 'error' or ERROR != 'cannot divide by zero':
             raise RuntimeError('division by zero did not enter the expected error state')
 
         press('digit:7')
@@ -1343,7 +1343,7 @@ def diagnostic():
             not scene
             or scene[0].get('rect') != [0, 0, WINW, WINH]
             or scene[0].get('color') != COLOURBG
-            or not all(label in texts for label in ('AC', '±', '%', '÷', '×', '−', '+', '='))
+            or not all(label in texts for label in ('ac', '±', '%', '÷', '×', '−', '+', '='))
         ):
             raise RuntimeError('calculator scene is incomplete')
 
@@ -1428,7 +1428,7 @@ def graphicsdiagnostic():
         if not scene or scene[0].get('rect') != [0, 0, WINW, WINH] or scene[0].get('color') != COLOURBG:
             raise RuntimeError('calculator did not build a complete opaque scene')
 
-        if not all(label in texts for label in ('calculator', '15', 'AC', '÷', '×', '−', '+', '=')):
+        if not all(label in texts for label in ('calculator', '15', 'ac', '÷', '×', '−', '+', '=')):
             raise RuntimeError('calculator managed scene is missing visible controls')
 
         if len(scene) >= 128:

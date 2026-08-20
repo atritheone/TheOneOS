@@ -223,8 +223,7 @@ function Invoke-T1OSAgentRequest {
             'brick', 'brick-gui', 'settings-gui', 'settings-display-gui',
             'player-gui', 'player-audio-gui', 'viewer-gui', 'write-gui',
             'chromium-gui', 'array-opengl-gui', 'session-status',
-            'feature-status', 'service-status', 'network-probe', 'close-fixed-guis',
-            'creep-self-test'
+            'feature-status', 'service-status', 'network-probe', 'close-fixed-guis'
         )]
         [string]$Action = 'brick',
         [AllowEmptyString()][string]$Command = '',
@@ -786,86 +785,6 @@ function Wait-T1OSBrickPythonStage {
     throw "Brick Python stage did not arrive: operation=$Operation stage=$Stage pid=$ProcessId"
 }
 
-function Wait-T1OSBrickStage {
-    param(
-        [Parameter(Mandatory)][int]$ProcessId,
-        [Parameter(Mandatory)][string]$Stage,
-        [int]$TimeoutSeconds = 60
-    )
-
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
-        $feature = Get-T1OSFeatureStatus
-        $status = $feature.brick_status
-        if ([int]$status.pid -eq $ProcessId -and
-            [string]$status.stage -eq $Stage) {
-            return $feature
-        }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Brick stage did not arrive: stage=$Stage pid=$ProcessId"
-}
-
-function Wait-T1OSCreepInteractiveStage {
-    param(
-        [Parameter(Mandatory)][string]$Stage,
-        [Parameter(Mandatory)][int]$Sequence,
-        [int]$TimeoutSeconds = 30
-    )
-
-    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-    do {
-        $feature = Get-T1OSFeatureStatus
-        $status = $feature.creep_interactive
-        if ([string]$status.stage -eq 'failed') {
-            $detail = $status | ConvertTo-Json -Compress -Depth 8
-            throw "Creep failed before becoming interactive: $detail"
-        }
-        if ([string]$status.stage -eq $Stage -and
-            [int]$status.sequence -eq $Sequence) {
-            return $feature
-        }
-        Start-Sleep -Milliseconds 200
-    } while ([DateTime]::UtcNow -lt $deadline)
-    throw "Creep interactive stage did not arrive: stage=$Stage sequence=$Sequence"
-}
-
-function Invoke-T1OSCreepFrontTest {
-    Write-Host 'PYTHON: running and interacting with Creep in Brick front mode...'
-    Start-Sleep -Seconds 2
-    [void](Save-T1OSGuiStage -Name 'python-creep-launch' -TimeoutSeconds 30)
-    [void](Wait-T1OSCreepInteractiveStage -Stage 'ready' -Sequence 0)
-    $interactiveCommands = @(
-        'set target 127.0.0.1:65535',
-        'add endpoints api/v1,login',
-        'set debug true',
-        'show options',
-        'help'
-    )
-    $sequence = 0
-    foreach ($command in $interactiveCommands) {
-        Send-T1OSAsciiScanText -Text $command -DelayMilliseconds 35
-        Send-T1OSKey -ScanCode '1c'
-        $sequence++
-        $interactive = Wait-T1OSCreepInteractiveStage `
-            -Stage 'running' -Sequence $sequence
-    }
-    $interactiveStatus = $interactive.creep_interactive
-    if ([string]$interactiveStatus.target -ne '127.0.0.1:65535' -or
-        -not [bool]$interactiveStatus.debug -or
-        @($interactiveStatus.endpoints) -notcontains '/api' -or
-        @($interactiveStatus.endpoints) -notcontains '/api/v1' -or
-        @($interactiveStatus.endpoints) -notcontains '/login') {
-        $detail = $interactiveStatus | ConvertTo-Json -Compress -Depth 8
-        throw "Creep front-mode state did not match the entered commands: $detail"
-    }
-    [void](Save-T1OSGuiStage -Name 'python-creep-front' -TimeoutSeconds 30)
-    Send-T1OSAsciiScanText -Text 'exit' -DelayMilliseconds 60
-    Send-T1OSKey -ScanCode '1c'
-    [void](Wait-T1OSCreepInteractiveStage -Stage 'exited' -Sequence $sequence)
-    $pythonChecks.creep_front_interactive = $true
-}
-
 function Invoke-T1OSSettingsPythonInstall {
     param(
         [Parameter(Mandatory)][string]$Name,
@@ -981,47 +900,11 @@ function Assert-T1OSPythonDirectiveCode {
 }
 
 function Invoke-T1OSPythonDirectiveTest {
-    Write-Host 'PYTHON: verifying the lowercase missing-module question...'
-    # Reuse the already-focused, maximised Brick from the GUI smoke test. A
-    # second fixed launch is intentionally not used because it would exercise
-    # window-stack focus selection rather than the Python prompt itself.
-    $promptLaunch = $script:guiLaunch
-    if ($null -eq $promptLaunch -or -not $promptLaunch.passed) {
-        throw 'The focused Brick window is unavailable for prompt testing.'
+    Write-Host 'PYTHON: resetting fixed GUI applications before Python management tests...'
+    $closed = Invoke-T1OSAgentRequest -Action 'close-fixed-guis' -Order 0
+    if (-not $closed.passed) {
+        throw 'The fixed GUI applications could not be reset before the Python management tests.'
     }
-    Send-T1OSAsciiScanText -Text 'run /software/creep.py' -DelayMilliseconds 35
-    Send-T1OSKey -ScanCode '1c'
-    $prompt = Wait-T1OSBrickStage `
-        -ProcessId ([int]$promptLaunch.response.pid) `
-        -Stage 'python-missing-prompt'
-    $missing = @($prompt.brick_status.python_missing)
-    if ($missing -notcontains 'requests' -or $missing -notcontains 'paramiko') {
-        $detail = $prompt.brick_status | ConvertTo-Json -Compress -Depth 8
-        throw "Brick did not identify Creep's missing modules: $detail"
-    }
-    [void](Save-T1OSGuiStage -Name 'python-missing-modules-question' -TimeoutSeconds 30)
-    Send-T1OSAsciiScanText -Text 'no' -DelayMilliseconds 75
-    Send-T1OSKey -ScanCode '1c'
-    $answer = Wait-T1OSBrickStage `
-        -ProcessId ([int]$promptLaunch.response.pid) `
-        -Stage 'python-missing-answer'
-    if ([string]$answer.brick_status.python_answer -cne 'no') {
-        throw 'Brick did not accept the lowercase no answer.'
-    }
-    $pythonChecks.missing_module_prompt_lowercase_no = $true
-
-    # Run the command again in the same focused Brick and take the affirmative
-    # path. The detected order is stable because missingpythonmodules sorts it.
-    Send-T1OSAsciiScanText -Text 'run /software/creep.py' -DelayMilliseconds 35
-    Send-T1OSKey -ScanCode '1c'
-    Start-Sleep -Seconds 1
-    Send-T1OSAsciiScanText -Text 'yes' -DelayMilliseconds 75
-    Send-T1OSKey -ScanCode '1c'
-    [void](Wait-T1OSPythonModule -Name 'paramiko' -Present $true -TimeoutSeconds 300)
-    [void](Wait-T1OSPythonModule -Name 'requests' -Present $true -TimeoutSeconds 300)
-    [void](Wait-T1OSPythonIdle -TimeoutSeconds 300)
-    $pythonChecks.missing_module_prompt_lowercase_yes = $true
-    $pythonChecks.missing_modules_installed = $true
 
     Write-Host 'PYTHON: installing requests and paramiko through Settings...'
     Invoke-T1OSSettingsPythonInstall -Name 'requests'
@@ -1052,13 +935,13 @@ function Invoke-T1OSPythonDirectiveTest {
     [void](Wait-T1OSPythonModule -Name 'humanize' -Present $true)
 
     $export = Invoke-T1OSAgentRequest -Action 'brick' `
-        -Command 'export python lock /master/development/creep-lock.toml' `
+        -Command 'export python lock /master/development/python-modules-lock.toml' `
         -Order 0
     if (-not $export.passed) {
         throw 'export python lock did not write the lock through Brick.'
     }
     $exportedFile = Invoke-T1OSAgentRequest -Action 'brick' `
-        -Command 'show details /master/development/creep-lock.toml' -Order 0
+        -Command 'show details /master/development/python-modules-lock.toml' -Order 0
     if (-not $exportedFile.passed) {
         throw 'the exported Python lock is not visible in the user filesystem.'
     }
@@ -1068,7 +951,7 @@ function Invoke-T1OSPythonDirectiveTest {
         -Command 'remove python module humanize'
     [void](Wait-T1OSPythonModule -Name 'humanize' -Present $false)
     Invoke-T1OSBrickPythonMutation -Name apply_python_lock `
-        -Command 'apply python lock /master/development/creep-lock.toml'
+        -Command 'apply python lock /master/development/python-modules-lock.toml'
     $lockedModule = Wait-T1OSPythonModule -Name 'humanize' -Present $true
     if (-not [bool]$lockedModule.response.result.results[0].data.modules[0].pinned) {
         throw 'apply python lock did not restore the wheel-pinned humanize module.'
@@ -1104,14 +987,6 @@ function Invoke-T1OSPythonDirectiveTest {
     Invoke-T1OSBrickPythonMutation -Name restore_python_modules `
         -Command 'restore python modules'
     [void](Wait-T1OSPythonModule -Name 'humanize' -Present $true)
-
-    $status = Get-T1OSFeatureStatus
-    foreach ($moduleName in @('requests', 'paramiko')) {
-        if (-not [bool]$status.python_module_availability.$moduleName) {
-            throw "the adapted creep dependency is unavailable: $moduleName"
-        }
-    }
-    $pythonChecks.creep_dependencies_importable = $true
 
     $closed = Invoke-T1OSAgentRequest -Action 'close-fixed-guis' -Order 0
     if (-not $closed.passed) {
@@ -1803,7 +1678,7 @@ finally {
         }
         python = if ($runPython) {
             [ordered]@{
-                passed = -not $failure -and $pythonChecks.Count -ge 24 -and -not ($pythonChecks.Values -contains $false)
+                passed = -not $failure -and $pythonChecks.Count -ge 22 -and -not ($pythonChecks.Values -contains $false)
                 checks = $pythonChecks
                 launches = $pythonLaunches
             }

@@ -4155,7 +4155,7 @@ def loginuser(sessionbroker=False):
 
         if retryafter:
             wait_seconds = max(1, int(retryafter + 0.999))
-            err = f"invalid password; wait {wait_seconds} seconds"
+            err = "invalid password"
         else:
             wait_seconds = 1
             err = "authentication unavailable"

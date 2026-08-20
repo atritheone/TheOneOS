@@ -84,6 +84,7 @@ NETWORKFILE = os.path.join(NETWORKDIR, 'network.txt')
 DNSFILE = os.path.join(NETWORKDIR, 'dns.txt')
 ETHERNETNAMESFILE = os.path.join(NETWORKDIR, 'ethernet-names.json')
 NETWORKSTATE = os.environ.get('T1OS_NETWORK_STATE', '/.ephemeral/network/connection.json')
+FIREWALLSTATE = os.environ.get('T1OS_FIREWALL_STATE', '/.ephemeral/network/firewall.json')
 WIRELESSFILE = os.path.join(NETWORKDIR, 'wireless.txt')
 WIRELESSCREDENTIALPREFIX = 'network.wireless.'
 WIRELESSSCANSTATE = os.environ.get('T1OS_WIRELESS_SCAN_STATE', '/.ephemeral/network/wireless.json')
@@ -163,6 +164,8 @@ DEFAULTMOUSE = {
 DEFAULTNETWORK = {
     'interface': '',
     'dhcp': True,
+    'automatic_dns': True,
+    'firewall': 'protected',
     'address': '',
     'netmask': '24',
     'gateway': '',
@@ -220,6 +223,7 @@ if SECTION not in SECTIONS:
     SECTION = 'display'
 SETTINGSTARGET = str(os.environ.get('T1OS_SETTINGS_TARGET', '')).strip().lower()
 DISPLAYPAGE = 'main'
+NETWORKPAGE = 'connection'
 STATUS = ''
 STATUSERROR = False
 STATUSSECTION = ''
@@ -1094,6 +1098,14 @@ def pythontableheader():
     return 400 if PYTHONADVANCED else 306
 
 
+def pythonsortmarker(column, selected=None, descending=None):
+    selected = PYTHONSORT if selected is None else str(selected)
+    descending = PYTHONSORTDESC if descending is None else bool(descending)
+    if str(column) != selected:
+        return ''
+    return ' descending' if descending else ' ascending'
+
+
 def selectedpythonmodule():
     return next((
         item for item in pythonmoduleview()
@@ -1237,21 +1249,21 @@ def startpythonrequest(
     if PYTHONWORK is not None and PYTHONWORK.is_alive():
         if descriptor is not None:
             os.close(descriptor)
-        setstatus('A Python request is already running.', True, section='python')
+        setstatus('a python request is already running.', True, section='python')
         return False
     thread = threading.Thread(
         target=_pythonworker,
         args=(
             str(operation), dict(arguments or {}), float(timeout),
             descriptor),
-        name='settings Python request',
+        name='settings python request',
         daemon=True,
     )
     PYTHONWORK = thread
     PYTHONWORKOPERATION = str(operation)
     thread.start()
     if operation != 'refresh':
-        setstatus('Preparing the Python module change…', section='python')
+        setstatus('preparing the python module change…', section='python')
         writevmteststatus('python-running', python_operation=str(operation))
     redraw()
     return True
@@ -1312,15 +1324,15 @@ def pollpythonrequest():
         PYTHONPENDING = {
             'operation': str(preview.get('change_operation') or ''),
             'arguments': dict(preview.get('change_arguments') or {}),
-            'message': str(preview.get('message') or 'Review the Python module change.'),
+            'message': str(preview.get('message') or 'review the python module change.'),
             'changes': list(preview.get('changes') or []),
             'notes': list(preview.get('notes') or []),
         }
-        setstatus('Review the Python module change.', section='python')
+        setstatus('review the python module change.', section='python')
     elif outcome.get('operation') == 'find_module':
         name = str(PYTHONFOUND.get('name') or 'module')
         latest = str(PYTHONFOUND.get('latest') or 'no compatible release')
-        setstatus('Found {} — latest {}.'.format(name, latest), section='python')
+        setstatus('found {} — latest {}.'.format(name, latest), section='python')
     else:
         if outcome.get('operation') == 'install_module':
             # A completed add is no longer an editable request.  Keeping its
@@ -1328,14 +1340,14 @@ def pollpythonrequest():
             # the previous one and turns a valid request into another name.
             PYTHONQUERY = ''
         setstatus(
-            str(response.get('message') or 'Python module change completed.'),
+            str(response.get('message') or 'python module change completed.'),
             section='python',
         )
         writevmteststatus(
             'python-complete',
             python_operation=str(outcome.get('operation') or ''),
             python_message=str(
-                response.get('message') or 'Python module change completed.'),
+                response.get('message') or 'python module change completed.'),
         )
     redraw()
     return True
@@ -1343,7 +1355,7 @@ def pollpythonrequest():
 
 def queuepythonchange(operation, arguments, message):
     if PYTHONWORK is not None and PYTHONWORK.is_alive():
-        setstatus('Wait for the current Python request.', True, section='python')
+        setstatus('wait for the current python request.', True, section='python')
         return False
     del message
     return startpythonrequest(
@@ -1362,7 +1374,7 @@ def cancelpythonchange():
         except OSError:
             pass
     PYTHONPENDING = None
-    setstatus('Python module change cancelled.', section='python')
+    setstatus('python module change cancelled.', section='python')
     redraw()
 
 
@@ -1823,8 +1835,8 @@ def refreshwirelessnetworks(force=False):
     WIRELESSSTATEMTIME = modified
     if changed and not force and SECTION == 'network':
         setstatus(
-            str(len(networks)) + ' Wi-Fi network' + ('' if len(networks) == 1 else 's') + ' found.'
-            if networks else 'No Wi-Fi networks were found.',
+            str(len(networks)) + ' wi-fi network' + ('' if len(networks) == 1 else 's') + ' found.'
+            if networks else 'no wi-fi networks were found.',
             error=not networks)
     return changed
 
@@ -1847,20 +1859,20 @@ def refreshnetworkruntime(force=False):
             name = name or networkdisplayname(state.get('type') or 'network')
             setstatus(name + ' connected.')
         else:
-            setstatus('No network connection.', True)
+            setstatus('no network connection.', True)
     return True
 
 
 def requestwirelessscan():
     if not wirelessinterfaces():
-        setstatus('No Wi-Fi interface is available.', True)
+        setstatus('no wi-fi interface is available.', True)
         return False
     try:
         atomictext(WIRELESSSCANREQUEST, str(int(time.time())) + '\n')
     except Exception as error:
-        setstatus('Could not request a Wi-Fi scan: ' + str(error), True)
+        setstatus('could not request a wi-fi scan: ' + str(error), True)
         return False
-    setstatus('Scanning for Wi-Fi networks…')
+    setstatus('scanning for wi-fi networks…')
     return True
 
 
@@ -1893,6 +1905,25 @@ def interfaceconnected(interface):
 
 def connectionstate():
     return loadjson(NETWORKSTATE, {})
+
+
+def firewallstate():
+    return loadjson(FIREWALLSTATE, {})
+
+
+def firewallstatuslabel():
+    state = firewallstate()
+    if not bool(state.get('active')):
+        return 'not active — network access is held offline'
+    profile = str(state.get('profile') or NETWORK.get('firewall') or 'protected')
+    return 'active — ' + ('incoming connections allowed' if profile == 'open' else 'incoming connections blocked')
+
+
+def networkupdatedlabel(value):
+    try:
+        return datetime.datetime.fromtimestamp(int(value)).strftime('%d %b %Y  %H.%M.%S')
+    except (TypeError, ValueError, OSError, OverflowError):
+        return 'unavailable'
 
 
 def preferrednetworkinterface():
@@ -2078,7 +2109,7 @@ def refreshclock():
 def loadstate():
     global DISPLAY, AUDIO, MOUSE, NETWORK, WIRELESS, ETHERNETNAMES, TIME
     global TERMINALNAME, MASTER, MASTERNAMEEDITING, CLOCKEDITED
-    global RESOLUTIONS, INTERFACES, RESOLUTIONEDITED, DISPLAYPAGE
+    global RESOLUTIONS, INTERFACES, RESOLUTIONEDITED, DISPLAYPAGE, NETWORKPAGE
     DISPLAY = loadjson(DISPLAYFILE, DEFAULTDISPLAY)
     DISPLAY['width'] = clamp(int(DISPLAY.get('width', 2560)), 320, 8192)
     DISPLAY['height'] = clamp(int(DISPLAY.get('height', 1440)), 200, 8192)
@@ -2146,6 +2177,18 @@ def loadstate():
     NETWORK = dict(DEFAULTNETWORK)
     NETWORK.update(config)
     NETWORK['dhcp'] = boolvalue(config.get('dhcp', True), True)
+    NETWORK['automatic_dns'] = (
+        str(config.get('dns') or 'automatic').strip().lower() != 'manual')
+    if not NETWORK['dhcp']:
+        NETWORK['automatic_dns'] = False
+    NETWORK['firewall'] = str(
+        config.get('firewall') or 'protected').strip().lower()
+    if NETWORK['firewall'] not in ('protected', 'open'):
+        NETWORK['firewall'] = 'protected'
+    NETWORKPAGE = (
+        SETTINGSTARGET if SECTION == 'network' and
+        SETTINGSTARGET in ('connection', 'dns', 'firewall', 'details')
+        else 'connection')
     try:
         with open(DNSFILE, 'r', encoding='utf-8') as stream:
             servers = [line.split(None, 1)[1].strip() for line in stream if line.strip().lower().startswith('nameserver ') and len(line.split(None, 1)) == 2]
@@ -2237,7 +2280,7 @@ def saveterminalname(live=True):
     name = validateterminalname(TERMINALNAME)
     settings_hostname_set(name, timeout=3.0)
     TERMINALNAME = name
-    setstatus('Terminal name applied.', section='about')
+    setstatus('terminal name applied.', section='about')
 
 
 def savemaster():
@@ -2245,7 +2288,7 @@ def savemaster():
     requestedname = validatemastername(MASTER.get('name'))
     currentname, _, _ = readmasteraccount()
     if not currentname:
-        raise RuntimeError('Master account is unavailable.')
+        raise RuntimeError('master account is unavailable.')
 
     newpassword = str(MASTER.get('new_password') or '')
     confirmation = str(MASTER.get('confirm_password') or '')
@@ -2263,23 +2306,23 @@ def savemaster():
 
     if not namechanged and not passwordchanged and not profilechanged:
         MASTER['current_password'] = ''
-        setstatus('No master changes to apply.', section='master')
+        setstatus('no master changes to apply.', section='master')
         return
 
     currentpassword = str(MASTER.get('current_password') or '')
     try:
         if (namechanged or passwordchanged) and not currentpassword:
             raise ValueError(
-                'Enter the current password to apply account changes.')
+                'enter the current password to apply account changes.')
         if passwordchanged:
             if not newpassword:
-                raise ValueError('New password cannot be empty.')
+                raise ValueError('new password cannot be empty.')
             if not MASTERPASSWORDMINCHARS <= len(newpassword) <= MASTERPASSWORDMAXCHARS:
                 raise ValueError(
-                    'New password must contain {}-{} characters.'.format(
+                    'new password must contain {}-{} characters.'.format(
                         MASTERPASSWORDMINCHARS, MASTERPASSWORDMAXCHARS))
             if newpassword != confirmation:
-                raise ValueError('New passwords do not match.')
+                raise ValueError('new passwords do not match.')
         result = settings_master_update(
             currentpassword,
             requestedname,
@@ -2299,16 +2342,16 @@ def savemaster():
         MASTER['image_path'] = imagepath
         MASTER['original_image_path'] = imagepath
         if profilechanged and (namechanged or passwordchanged):
-            message = 'Master account and image settings applied.'
+            message = 'master account and image settings applied.'
         elif profilechanged:
-            message = 'Master image settings applied.'
+            message = 'master image settings applied.'
         else:
             message = (
-                'Master name and password changed.'
+                'master name and password changed.'
                 if namechanged and passwordchanged else
-                'Master name changed. Reopen apps to refresh user paths.'
+                'master name changed. reopen apps to refresh user paths.'
                 if namechanged else
-                'Master password changed.')
+                'master password changed.')
         setstatus(message, section='master')
     finally:
         clearmasterpasswords()
@@ -2360,11 +2403,11 @@ def savedisplay():
             **{key: applied.get(key, value) for key, value in nightlight.items()},
         })
     if virtualboxcontrolsresolution():
-        setstatus('Display settings applied. Resolution remains controlled by VirtualBox Guest Additions.')
+        setstatus('display settings applied. resolution remains controlled by virtualbox guest additions.')
     elif GRAPHICSBACKEND == 'framebuffer':
-        setstatus('Display settings applied. Resolution is set by the framebuffer.')
+        setstatus('display settings applied. resolution is set by the framebuffer.')
     else:
-        setstatus('Image settings applied. Resolution takes effect after restarting the graphics service.')
+        setstatus('image settings applied. resolution takes effect after restarting the graphics service.')
 
 
 def validateaddress(value, optional=False):
@@ -2386,6 +2429,8 @@ def newwirelesscredential():
 
 def savenetwork():
     interface = str(NETWORK.get('interface', '')).strip()
+    if interface and re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', interface) is None:
+        raise ValueError('the network interface name is invalid.')
     wirelesslines = None
     previouswireless = loadkeyvalues(WIRELESSFILE)
     previouscredential = str(previouswireless.get('credential') or '').strip()
@@ -2399,18 +2444,18 @@ def savenetwork():
         security = str(WIRELESS.get('security') or 'wpa2').strip().lower()
         passphrase = str(WIRELESS.get('passphrase') or '')
         if not ssid or len(ssid.encode('utf-8')) > 32:
-            raise ValueError('The Wi-Fi network name must contain 1 to 32 UTF-8 bytes.')
+            raise ValueError('the wi-fi network name must contain 1 to 32 utf-8 bytes.')
         if '=' in ssid or any(character in ssid for character in ('\x00', '\n', '\r')):
-            raise ValueError('The Wi-Fi network name contains an unsupported character.')
+            raise ValueError('the wi-fi network name contains an unsupported character.')
         if security not in ('open', 'wpa2', 'wpa3'):
-            raise ValueError('Wi-Fi security must be open, WPA2 Personal, or WPA3 Personal.')
+            raise ValueError('wi-fi security must be open, wpa2 personal, or wpa3 personal.')
         if security != 'open':
             length = len(passphrase.encode('utf-8'))
             if passphrase:
                 if length < 8 or length > 63:
-                    raise ValueError('The Wi-Fi password must contain 8 to 63 UTF-8 bytes.')
+                    raise ValueError('the wi-fi password must contain 8 to 63 utf-8 bytes.')
                 if any(character in passphrase for character in ('\x00', '\n', '\r')):
-                    raise ValueError('The Wi-Fi password contains an unsupported character.')
+                    raise ValueError('the wi-fi password contains an unsupported character.')
             else:
                 sameprofile = (
                     str(previouswireless.get('ssid') or '') == ssid and
@@ -2421,7 +2466,7 @@ def savenetwork():
                     service_secret_exists(previouscredential, timeout=3.0)
                 ):
                     raise ValueError(
-                        'Enter the Wi-Fi password for this protected network.')
+                        'enter the wi-fi password for this protected network.')
                 activecredential = previouscredential
         else:
             passphrase = ''
@@ -2438,19 +2483,35 @@ def savenetwork():
         gateway = validateaddress(NETWORK.get('gateway'))
         prefix = int(str(NETWORK.get('netmask', '24')).strip())
         if prefix < 0 or prefix > 32:
-            raise ValueError('Network prefix must be from 0 to 32.')
+            raise ValueError('network prefix must be from 0 to 32.')
         NETWORK['address'], NETWORK['gateway'], NETWORK['netmask'] = address, gateway, str(prefix)
+    automaticdns = bool(NETWORK.get('automatic_dns')) and bool(NETWORK.get('dhcp'))
+    NETWORK['automatic_dns'] = automaticdns
+    firewall = str(NETWORK.get('firewall') or 'protected').strip().lower()
+    if firewall not in ('protected', 'open'):
+        raise ValueError('choose a supported firewall profile.')
+    NETWORK['firewall'] = firewall
     dns = []
     for field in ('dns1', 'dns2'):
         value = validateaddress(NETWORK.get(field, ''), optional=True)
         NETWORK[field] = value
         if value and value not in dns:
             dns.append(value)
+    if not automaticdns and not dns:
+        raise ValueError('enter at least one DNS server when automatic DNS is off.')
     lines = ['dhcp=' + ('true' if NETWORK.get('dhcp') else 'false')]
     if not NETWORK.get('dhcp'):
         lines.extend(('address=' + NETWORK['address'], 'netmask=' + NETWORK['netmask'], 'gateway=' + NETWORK['gateway']))
-    target = os.path.join(NETWORKDIR, interface + '.txt') if interface else NETWORKFILE
-    atomictext(target, '\n'.join(lines) + '\n', mode=0o644)
+    hostlines = [
+        'interface=' + interface,
+        'dns=' + ('automatic' if automaticdns else 'manual'),
+        'firewall=' + firewall,
+    ]
+    atomictext(NETWORKFILE, '\n'.join(hostlines + lines) + '\n', mode=0o644)
+    if interface:
+        atomictext(
+            os.path.join(NETWORKDIR, interface + '.txt'),
+            '\n'.join(lines) + '\n', mode=0o644)
     atomictext(
         DNSFILE, ''.join('nameserver ' + server + '\n' for server in dns),
         mode=0o644)
@@ -2494,11 +2555,11 @@ def savenetwork():
             networktype(name) == 'ethernet' and interfaceconnected(name)
             for name in INTERFACES)
         if wiredonline:
-            setstatus('Wi-Fi saved. Ethernet remains preferred while connected.')
+            setstatus('wi-fi saved. ethernet remains preferred while connected.')
         else:
-            setstatus('Connecting to ' + str(WIRELESS.get('ssid') or 'Wi-Fi') + '…')
+            setstatus('connecting to ' + str(WIRELESS.get('ssid') or 'wi-fi') + '…')
     else:
-        setstatus('Network settings applied. Ethernet remains the preferred connection.')
+        setstatus('network settings applied. ethernet remains the preferred connection.')
 
 
 def motherboardclockfields(epoch, name=None):
@@ -2568,7 +2629,7 @@ def setclock():
     if manual:
         epoch = manualepoch(TIME['date'], TIME['time'], name)
         if not hasattr(time, 'clock_settime'):
-            raise PermissionError('This platform does not provide system clock control.')
+            raise PermissionError('this platform does not provide system clock control.')
         enabled = False
         virtualbox_enabled = False
         TIME['internet'] = False
@@ -2589,17 +2650,17 @@ def setclock():
     refreshclock()
     virtualbox_active = virtualbox_enabled and virtualboxtimeavailable()
     if manual and motherboard_updated:
-        setstatus('Manual time saved to the system and motherboard clocks; automatic sources are off.')
+        setstatus('manual time saved to the system and motherboard clocks; automatic sources are off.')
     elif manual:
-        setstatus('Manual system time saved; the motherboard clock was unavailable. Automatic sources are off.')
+        setstatus('manual system time saved; the motherboard clock was unavailable. automatic sources are off.')
     elif enabled and virtualbox_active:
-        setstatus('Internet and VirtualBox host time enabled.')
+        setstatus('internet and virtualbox host time enabled.')
     elif enabled:
-        setstatus('Internet time enabled. The time service will synchronise shortly.')
+        setstatus('internet time enabled. the time service will synchronise shortly.')
     elif virtualbox_active:
-        setstatus('VirtualBox host time enabled.')
+        setstatus('virtualbox host time enabled.')
     else:
-        setstatus('Time settings saved. Using the motherboard clock.')
+        setstatus('time settings saved. using the motherboard clock.')
 
 
 def audiopacket(message, payload=None):
@@ -2661,13 +2722,13 @@ def refreshaudio(quiet=False):
         AUDIODEVICES = list(devices.get('devices', []))
         AUDIO['active'] = devices.get('active')
         if not quiet:
-            setstatus('Audio devices refreshed.')
+            setstatus('audio devices refreshed.')
         redraw()
         return True
     except Exception as error:
         AUDIODEVICES = []
         if not quiet:
-            setstatus('Audio service unavailable: ' + str(error), True)
+            setstatus('audio service unavailable: ' + str(error), True)
         return False
 
 
@@ -2721,7 +2782,7 @@ def saveaudio():
         if selected:
             audiorequest(channel, MSGDEVSET, {'id': selected})
     withaudio(apply)
-    setstatus('Audio settings applied.')
+    setstatus('audio settings applied.')
 
 
 def savemouse(live=True):
@@ -2745,7 +2806,7 @@ def savemouse(live=True):
                 'cursor_size': cursorsize,
                 'cursor_speed': speed,
             })
-    setstatus('Mouse settings applied.')
+    setstatus('mouse settings applied.')
 
 
 def applysection():
@@ -2774,18 +2835,18 @@ def applysection():
 def recoveryready():
 
     if not os.path.ismount(RECOVERYBOOTMOUNT):
-        return False, 'The Angel boot-partition request store is unavailable.'
+        return False, 'the angel boot-partition request store is unavailable.'
 
     try:
         with open(RECOVERYMANIFEST, 'r', encoding='utf-8') as stream:
             header = stream.readline().rstrip('\n').split('\t')
     except OSError:
-        return False, 'The independent recovery baseline is unavailable.'
+        return False, 'the independent recovery baseline is unavailable.'
 
     if len(header) < 2 or header[:2] != ['H', '1']:
-        return False, 'The recovery baseline identity is invalid.'
+        return False, 'the recovery baseline identity is invalid.'
 
-    return True, 'Angel recovery is ready.'
+    return True, 'angel recovery is ready.'
 
 
 def selectrecovery(action):
@@ -2793,7 +2854,7 @@ def selectrecovery(action):
     action = str(action or '').strip().lower()
 
     if action not in ('python', 'build', 'reset', 'reinstall'):
-        raise ValueError('Choose a supported recovery action.')
+        raise ValueError('choose a supported recovery action.')
 
     ready, detail = recoveryready()
 
@@ -2803,7 +2864,7 @@ def selectrecovery(action):
 
     RECOVERY['action'] = action
     setstatus(
-        'Review this recovery action, then choose restart to authenticate.',
+        'review this recovery action, then choose restart to authenticate.',
         section='recovery',
     )
     redraw()
@@ -2815,7 +2876,7 @@ def cancelrecovery():
     EDITFIELD = None
     EDITBUFFER = ''
     RECOVERY['action'] = ''
-    setstatus('Recovery request cancelled.', section='recovery')
+    setstatus('recovery request cancelled.', section='recovery')
     redraw()
 
 
@@ -2826,7 +2887,7 @@ def openpasswordprompt(kind, title, message, section, submitlabel='continue'):
         return False
     if WINID is None:
         setstatus(
-            'The password prompt is unavailable.', True, section=section)
+            'the password prompt is unavailable.', True, section=section)
         return False
     PASSWORDPROMPTSEQUENCE += 1
     dialogid = 'settings-password-{}-{}'.format(
@@ -2850,7 +2911,7 @@ def openpasswordprompt(kind, title, message, section, submitlabel='continue'):
         'cancel_label': 'cancel',
         'max_length': 256,
     })
-    setstatus('Enter the current master password.', section=section)
+    setstatus('enter the current master password.', section=section)
     redraw()
     return True
 
@@ -2875,12 +2936,12 @@ def requestrecoverypassword():
 
     action = str(RECOVERY.get('action') or '').strip().lower()
     if action not in ('python', 'build', 'reset', 'reinstall'):
-        setstatus('Choose a recovery action first.', True, section='recovery')
+        setstatus('choose a recovery action first.', True, section='recovery')
         return False
     return openpasswordprompt(
         'recovery',
         'confirm recovery',
-        'Enter the current master password to authorise {} recovery.'.format(
+        'enter the current master password to authorise {} recovery.'.format(
             action),
         'recovery',
         submitlabel='restart',
@@ -2892,12 +2953,12 @@ def confirmrecovery(password):
     action = str(RECOVERY.get('action') or '').strip().lower()
 
     if action not in ('python', 'build', 'reset', 'reinstall'):
-        raise ValueError('Choose a recovery action first.')
+        raise ValueError('choose a recovery action first.')
 
     settings_recovery_authorize(password, action, timeout=10.0)
     RECOVERY['action'] = ''
     setstatus(
-        'Angel will ' + action + ' after the computer restarts.',
+        'angel will ' + action + ' after the computer restarts.',
         section='recovery',
     )
     redraw()
@@ -2909,7 +2970,7 @@ def startmasternamechange():
     MASTER['name'] = str(MASTER.get('original_name') or '')
     clearmasterpasswords()
     MASTERNAMEEDITING = True
-    setstatus('Enter a new master name, then confirm it with your password.',
+    setstatus('enter a new master name, then confirm it with your password.',
               section='master')
     redraw()
 
@@ -2921,7 +2982,7 @@ def cancelmasternamechange():
     MASTER['name'] = str(MASTER.get('original_name') or '')
     clearmasterpasswords()
     MASTERNAMEEDITING = False
-    setstatus('Master name change cancelled.', section='master')
+    setstatus('master name change cancelled.', section='master')
     redraw()
 
 
@@ -2933,7 +2994,7 @@ def confirmmasternamechange():
     ):
         clearmasterpasswords()
         MASTERNAMEEDITING = False
-        setstatus('Master name is unchanged.', section='master')
+        setstatus('master name is unchanged.', section='master')
         redraw()
         return
     try:
@@ -2944,7 +3005,7 @@ def confirmmasternamechange():
     openpasswordprompt(
         'master_name',
         'change master name',
-        'Enter the current master password to change the master name.',
+        'enter the current master password to change the master name.',
         'master',
         submitlabel='change name',
     )
@@ -2979,7 +3040,7 @@ def requestmastersave():
             return openpasswordprompt(
                 'master_changes',
                 'apply master changes',
-                'Enter the current master password to apply these changes.',
+                'enter the current master password to apply these changes.',
                 'master',
                 submitlabel='apply',
             )
@@ -3004,7 +3065,7 @@ def handlepasswordpromptresult(message):
     PASSWORDPROMPT = None
     section = str(pending.get('section', SECTION))
     if str(message.get('result', 'cancel')) != 'submit':
-        setstatus('Password entry cancelled.', section=section)
+        setstatus('password entry cancelled.', section=section)
         redraw()
         return True
 
@@ -3019,7 +3080,7 @@ def handlepasswordpromptresult(message):
             if kind == 'master_name':
                 MASTERNAMEEDITING = False
         else:
-            raise RuntimeError('The password prompt request is no longer valid.')
+            raise RuntimeError('the password prompt request is no longer valid.')
     except Exception as error:
         setstatus(str(error), True, section=section)
     finally:
@@ -3127,38 +3188,63 @@ def layout():
         rowy += 72
         controls['rows']['cursor_size'] = [contentx, rowy, rowwidth, 70]
     elif SECTION == 'network':
-        controls['rows']['connection'] = [contentx, rowy, rowwidth, 40]
-        rowy += 50
-        controls['rows']['interface'] = [contentx, rowy, rowwidth, 40]
-        if networkwirelessselected():
-            rowy += 44
-            controls['rows']['wifi_network'] = [contentx, rowy, rowwidth, 38]
-            rowy += 44
-            controls['rows']['security'] = [contentx, rowy, rowwidth, 38]
-            rowy += 44
-            controls['rows']['passphrase'] = [contentx, rowy, rowwidth, 38]
-            rowy += 44
-            controls['rows']['scan'] = [contentx, rowy, 160, 32]
-            rowy += 44
-            controls['rows']['dhcp'] = [contentx, rowy, rowwidth, 38]
-            detailfields = (
-                ('mac', 'address', 'gateway', 'dns1', 'dns2')
-                if NETWORK.get('dhcp') else
-                ('address', 'netmask', 'gateway', 'dns1', 'dns2')
-            )
-            for field in detailfields:
-                rowy += 42
-                controls['rows'][field] = [contentx, rowy, rowwidth, 36]
-        else:
+        tabwidth = max(76, (rowwidth - 24) // 4)
+        for index, page in enumerate(('connection', 'dns', 'firewall', 'details')):
+            controls['rows']['network_tab_' + page] = [
+                contentx + index * (tabwidth + 8), 88, tabwidth, 30]
+        if NETWORKPAGE == 'connection':
+            controls['rows']['connection'] = [contentx, rowy, rowwidth, 40]
             rowy += 50
-            controls['rows']['network_name'] = [contentx, rowy, rowwidth, 40]
-            rowy += 50
-            controls['rows']['mac'] = [contentx, rowy, rowwidth, 40]
-            rowy += 50
-            controls['rows']['dhcp'] = [contentx, rowy, rowwidth, 40]
-            for field in ('address', 'netmask', 'gateway', 'dns1', 'dns2'):
-                rowy += 48
-                controls['rows'][field] = [contentx, rowy, rowwidth, 38]
+            controls['rows']['interface'] = [contentx, rowy, rowwidth, 40]
+            if networkwirelessselected():
+                rowy += 44
+                controls['rows']['wifi_network'] = [contentx, rowy, rowwidth, 38]
+                rowy += 44
+                controls['rows']['security'] = [contentx, rowy, rowwidth, 38]
+                rowy += 44
+                controls['rows']['passphrase'] = [contentx, rowy, rowwidth, 38]
+                rowy += 44
+                controls['rows']['scan'] = [contentx, rowy, 160, 32]
+                rowy += 44
+                controls['rows']['dhcp'] = [contentx, rowy, rowwidth, 38]
+                detailfields = (
+                    ('mac', 'address', 'gateway')
+                    if NETWORK.get('dhcp') else
+                    ('address', 'netmask', 'gateway')
+                )
+                for field in detailfields:
+                    rowy += 42
+                    controls['rows'][field] = [contentx, rowy, rowwidth, 36]
+            else:
+                rowy += 50
+                controls['rows']['network_name'] = [contentx, rowy, rowwidth, 40]
+                rowy += 50
+                controls['rows']['mac'] = [contentx, rowy, rowwidth, 40]
+                rowy += 50
+                controls['rows']['dhcp'] = [contentx, rowy, rowwidth, 40]
+                for field in ('address', 'netmask', 'gateway'):
+                    rowy += 48
+                    controls['rows'][field] = [contentx, rowy, rowwidth, 38]
+        elif NETWORKPAGE == 'dns':
+            controls['rows']['automatic_dns'] = [contentx, 138, rowwidth, 42]
+            controls['rows']['dns1'] = [contentx, 198, rowwidth, 40]
+            controls['rows']['dns2'] = [contentx, 256, rowwidth, 40]
+            controls['rows']['dns_source'] = [contentx, 332, rowwidth, 40]
+        elif NETWORKPAGE == 'firewall':
+            controls['rows']['firewall_status'] = [contentx, 138, rowwidth, 40]
+            controls['rows']['firewall_profile'] = [contentx, 198, rowwidth, 40]
+            controls['rows']['firewall_incoming'] = [contentx, 278, rowwidth, 40]
+            controls['rows']['firewall_forwarding'] = [contentx, 326, rowwidth, 40]
+            controls['rows']['firewall_outgoing'] = [contentx, 374, rowwidth, 40]
+        elif NETWORKPAGE == 'details':
+            controls['save'] = None
+            for index, field in enumerate((
+                'detail_connection', 'detail_type', 'detail_interface',
+                'detail_name', 'detail_address', 'detail_gateway',
+                'detail_server', 'detail_mac', 'detail_updated',
+            )):
+                controls['rows'][field] = [contentx, 130 + index * 48, rowwidth, 38]
+            controls['rows']['network_refresh'] = [right - 112, 580, 112, 32]
     elif SECTION == 'time & date':
         for field in ('date', 'time', 'timezone'):
             controls['rows'][field] = [contentx, rowy, rowwidth, 44]
@@ -3395,17 +3481,20 @@ def textcursorfields():
             'night_light_bedtime_time',
         }
     if SECTION == 'network':
-        fields = {'dns1', 'dns2'}
-        if not NETWORK.get('dhcp'):
-            fields.update(('address', 'netmask', 'gateway'))
-        if networkwirelessselected():
-            if str(WIRELESS.get('security') or '').lower() != 'open':
-                fields.add('passphrase')
-        elif (
-            ethernetconnectionkey(preferrednetworkinterface())
-            and not ethernetdhcpname(preferrednetworkinterface())
-        ):
-            fields.add('network_name')
+        fields = set()
+        if NETWORKPAGE == 'dns' and not NETWORK.get('automatic_dns'):
+            fields.update(('dns1', 'dns2'))
+        elif NETWORKPAGE == 'connection':
+            if not NETWORK.get('dhcp'):
+                fields.update(('address', 'netmask', 'gateway'))
+            if networkwirelessselected():
+                if str(WIRELESS.get('security') or '').lower() != 'open':
+                    fields.add('passphrase')
+            elif (
+                ethernetconnectionkey(preferrednetworkinterface())
+                and not ethernetdhcpname(preferrednetworkinterface())
+            ):
+                fields.add('network_name')
         return fields
     if SECTION == 'time & date':
         return {'date', 'time'}
@@ -3581,6 +3670,8 @@ def dropdownselect(name, value):
         WIRELESS['security'] = str(value or 'wpa2')
         if WIRELESS['security'] == 'open':
             WIRELESS['passphrase'] = ''
+    elif name == 'firewall_profile':
+        NETWORK['firewall'] = str(value or 'protected')
     elif name == 'timezone':
         TIME['timezone'] = str(value)
         try:
@@ -3857,74 +3948,155 @@ def paint():
             minimum=CURSORSIZEMIN,
             marks=tuple(size for _, size in CURSORSIZEDEFAULTS))
     elif SECTION == 'network':
-        drawtext(
-            205, 94,
-            'Ethernet is always preferred; Wi-Fi is used when no cable is connected.',
-            COLOURMUTED, 13)
+        for page, label in (
+            ('connection', 'connection'), ('dns', 'DNS'),
+            ('firewall', 'firewall'), ('details', 'details'),
+        ):
+            button(
+                rows['network_tab_' + page], label,
+                focused=NETWORKPAGE == page)
         selectedinterface = preferrednetworkinterface()
         details = networkdetails(selectedinterface)
-        fieldrow('connection', 'connection', networkconnectionlabel(selectedinterface), rows['connection'])
-        interfaceoptions = [('', 'automatic')]
-        interfaceoptions.extend((name, networktype(name) + ' — ' + name) for name in INTERFACES)
-        dropdownrow('interface', 'interface', str(NETWORK.get('interface') or ''),
-                    rows['interface'], interfaceoptions, not INTERFACES)
-        if networkwirelessselected():
-            networkoptions = []
-            savedssid = str(WIRELESS.get('ssid') or '').strip()
-            if savedssid:
-                networkoptions.append((savedssid, savedssid))
-            for network in WIRELESSNETWORKS:
-                ssid = network['ssid']
-                if ssid == savedssid:
-                    continue
-                label = ssid + ' — ' + wirelesssecuritylabel(network['security'])
-                networkoptions.append((ssid, label))
-            dropdownrow(
-                'wifi_network', 'Wi-Fi SSID', savedssid, rows['wifi_network'],
-                networkoptions, not networkoptions)
-            dropdownrow(
-                'security', 'security', str(WIRELESS.get('security') or 'wpa2'),
-                rows['security'],
-                [('open', 'open'), ('wpa2', 'WPA2 Personal'), ('wpa3', 'WPA3 Personal')])
-            passworddisabled = str(WIRELESS.get('security') or '').lower() == 'open'
-            fieldrow(
-                'passphrase', 'password', WIRELESS.get('passphrase', ''),
-                rows['passphrase'], disabled=passworddisabled, secret=True)
-            button(rows['scan'], 'scan networks')
-            checkbox(rows['dhcp'], NETWORK.get('dhcp'), 'automatic address (DHCP)')
-            disabled = bool(NETWORK.get('dhcp'))
-            if disabled:
-                fieldrow('mac', 'MAC address', details.get('mac', ''), rows['mac'], True)
-                fieldrow('address', 'IP address', details.get('address', ''), rows['address'], True)
-                fieldrow('gateway', 'gateway', details.get('gateway', ''), rows['gateway'], True)
+        if NETWORKPAGE == 'connection':
+            fieldrow('connection', 'connection', networkconnectionlabel(selectedinterface), rows['connection'])
+            interfaceoptions = [('', 'automatic')]
+            interfaceoptions.extend((name, networktype(name) + ' — ' + name) for name in INTERFACES)
+            dropdownrow('interface', 'interface', str(NETWORK.get('interface') or ''),
+                        rows['interface'], interfaceoptions, not INTERFACES)
+            if networkwirelessselected():
+                networkoptions = []
+                savedssid = str(WIRELESS.get('ssid') or '').strip()
+                if savedssid:
+                    networkoptions.append((savedssid, savedssid))
+                for network in WIRELESSNETWORKS:
+                    ssid = network['ssid']
+                    if ssid == savedssid:
+                        continue
+                    label = ssid + ' — ' + wirelesssecuritylabel(network['security'])
+                    networkoptions.append((ssid, label))
+                dropdownrow(
+                    'wifi_network', 'Wi-Fi SSID', savedssid, rows['wifi_network'],
+                    networkoptions, not networkoptions)
+                dropdownrow(
+                    'security', 'security', str(WIRELESS.get('security') or 'wpa2'),
+                    rows['security'],
+                    [('open', 'open'), ('wpa2', 'WPA2 Personal'), ('wpa3', 'WPA3 Personal')])
+                passworddisabled = str(WIRELESS.get('security') or '').lower() == 'open'
+                fieldrow(
+                    'passphrase', 'password', WIRELESS.get('passphrase', ''),
+                    rows['passphrase'], disabled=passworddisabled, secret=True)
+                button(rows['scan'], 'scan networks')
+                checkbox(rows['dhcp'], NETWORK.get('dhcp'), 'automatic address (DHCP)')
+                disabled = bool(NETWORK.get('dhcp'))
+                if disabled:
+                    fieldrow('mac', 'MAC address', details.get('mac', ''), rows['mac'], True)
+                    fieldrow('address', 'IP address', details.get('address', ''), rows['address'], True)
+                    fieldrow('gateway', 'gateway', details.get('gateway', ''), rows['gateway'], True)
+                else:
+                    fieldrow('address', 'IP address', NETWORK.get('address', ''), rows['address'])
+                    fieldrow('netmask', 'network prefix', NETWORK.get('netmask', '24'), rows['netmask'])
+                    fieldrow('gateway', 'gateway', NETWORK.get('gateway', ''), rows['gateway'])
             else:
-                fieldrow('address', 'IP address', NETWORK.get('address', ''), rows['address'])
-                fieldrow('netmask', 'network prefix', NETWORK.get('netmask', '24'), rows['netmask'])
-                fieldrow('gateway', 'gateway', NETWORK.get('gateway', ''), rows['gateway'])
-            fieldrow('dns1', 'primary DNS', NETWORK.get('dns1', ''), rows['dns1'])
-            fieldrow('dns2', 'secondary DNS', NETWORK.get('dns2', ''), rows['dns2'])
-        else:
-            routername = ethernetdhcpname(selectedinterface)
-            customname = ethernetcustomname(selectedinterface)
-            editableethernetname = bool(
-                ethernetconnectionkey(selectedinterface) and not routername)
+                routername = ethernetdhcpname(selectedinterface)
+                customname = ethernetcustomname(selectedinterface)
+                editableethernetname = bool(
+                    ethernetconnectionkey(selectedinterface) and not routername)
+                fieldrow(
+                    'network_name', 'network name', routername or customname,
+                    rows['network_name'], disabled=not editableethernetname)
+                if details:
+                    fieldrow('mac', 'MAC address', details.get('mac', ''), rows['mac'], True)
+                checkbox(rows['dhcp'], NETWORK.get('dhcp'), 'automatic address (DHCP)')
+                disabled = bool(NETWORK.get('dhcp'))
+                liveaddress = details.get('address', '') if disabled else ''
+                if '/' in liveaddress:
+                    liveaddress, liveprefix = liveaddress.rsplit('/', 1)
+                else:
+                    liveprefix = ''
+                fieldrow('address', 'IP address', liveaddress or NETWORK.get('address', ''), rows['address'], disabled)
+                fieldrow('netmask', 'network prefix', liveprefix or NETWORK.get('netmask', '24'), rows['netmask'], disabled)
+                fieldrow('gateway', 'gateway', details.get('gateway', '') if disabled and details else NETWORK.get('gateway', ''), rows['gateway'], disabled)
+        elif NETWORKPAGE == 'dns':
+            automaticdns = bool(NETWORK.get('automatic_dns')) and bool(NETWORK.get('dhcp'))
+            checkbox(
+                rows['automatic_dns'], automaticdns,
+                'obtain DNS servers automatically')
             fieldrow(
-                'network_name', 'network name', routername or customname,
-                rows['network_name'], disabled=not editableethernetname)
-            if details:
-                fieldrow('mac', 'MAC address', details.get('mac', ''), rows['mac'], True)
-            checkbox(rows['dhcp'], NETWORK.get('dhcp'), 'automatic address (DHCP)')
-            disabled = bool(NETWORK.get('dhcp'))
-            liveaddress = details.get('address', '') if disabled else ''
-            if '/' in liveaddress:
-                liveaddress, liveprefix = liveaddress.rsplit('/', 1)
-            else:
-                liveprefix = ''
-            fieldrow('address', 'IP address', liveaddress or NETWORK.get('address', ''), rows['address'], disabled)
-            fieldrow('netmask', 'network prefix', liveprefix or NETWORK.get('netmask', '24'), rows['netmask'], disabled)
-            fieldrow('gateway', 'gateway', details.get('gateway', '') if disabled and details else NETWORK.get('gateway', ''), rows['gateway'], disabled)
-            fieldrow('dns1', 'primary DNS', NETWORK.get('dns1', ''), rows['dns1'])
-            fieldrow('dns2', 'secondary DNS', NETWORK.get('dns2', ''), rows['dns2'])
+                'dns1', 'primary DNS', NETWORK.get('dns1', ''),
+                rows['dns1'], disabled=automaticdns)
+            fieldrow(
+                'dns2', 'secondary DNS', NETWORK.get('dns2', ''),
+                rows['dns2'], disabled=automaticdns)
+            fieldrow(
+                'dns_source', 'source',
+                'DHCP' if automaticdns else 'manual',
+                rows['dns_source'], disabled=True)
+            drawtext(
+                205, 400,
+                'automatic DNS follows the active DHCP connection.',
+                COLOURMUTED, 13)
+            drawtext(
+                205, 422,
+                'manual DNS is retained when the connection is renewed.',
+                COLOURMUTED, 13)
+        elif NETWORKPAGE == 'firewall':
+            state = firewallstate()
+            fieldrow(
+                'firewall_status', 'status', firewallstatuslabel(),
+                rows['firewall_status'], disabled=True)
+            dropdownrow(
+                'firewall_profile', 'incoming policy',
+                str(NETWORK.get('firewall') or 'protected'),
+                rows['firewall_profile'],
+                [
+                    ('protected', 'protected'),
+                    ('open', 'allow incoming'),
+                ])
+            fieldrow(
+                'firewall_incoming', 'incoming',
+                str(state.get('incoming') or (
+                    'allowed' if NETWORK.get('firewall') == 'open' else 'blocked')),
+                rows['firewall_incoming'], disabled=True)
+            fieldrow(
+                'firewall_forwarding', 'forwarding',
+                str(state.get('forwarding') or 'blocked'),
+                rows['firewall_forwarding'], disabled=True)
+            fieldrow(
+                'firewall_outgoing', 'outgoing',
+                str(state.get('outgoing') or 'allowed'),
+                rows['firewall_outgoing'], disabled=True)
+            drawtext(
+                205, 446,
+                'protected blocks unsolicited incoming and forwarded traffic.',
+                COLOURMUTED, 13)
+            drawtext(
+                205, 468,
+                'allow incoming keeps the firewall active but accepts new inbound traffic.',
+                COLOURMUTED, 13)
+        elif NETWORKPAGE == 'details':
+            state = connectionstate()
+            current = str(state.get('interface') or selectedinterface or '')
+            values = {
+                'detail_connection': 'connected' if state.get('connected') else 'not connected',
+                'detail_type': str(state.get('type') or (networktype(current) if current else '')),
+                'detail_interface': current,
+                'detail_name': networkdisplayname(state.get('name')),
+                'detail_address': str(state.get('address') or ''),
+                'detail_gateway': str(state.get('gateway') or ''),
+                'detail_server': str(state.get('server') or ''),
+                'detail_mac': str(state.get('mac') or ''),
+                'detail_updated': networkupdatedlabel(state.get('updated')),
+            }
+            labels = {
+                'detail_connection': 'connection', 'detail_type': 'type',
+                'detail_interface': 'interface', 'detail_name': 'network name',
+                'detail_address': 'IP address', 'detail_gateway': 'gateway',
+                'detail_server': 'DHCP server', 'detail_mac': 'MAC address',
+                'detail_updated': 'last changed',
+            }
+            for name, value in values.items():
+                fieldrow(name, labels[name], value, rows[name], disabled=True)
+            button(rows['network_refresh'], 'refresh')
     elif SECTION == 'time & date':
         fieldrow('date', 'date', TIME.get('date', ''), rows['date'])
         fieldrow('time', 'time', TIME.get('time', ''), rows['time'])
@@ -3937,7 +4109,7 @@ def paint():
             helpy = 443
         else:
             helpy = 385
-        drawtext(205, helpy, 'Date format: DD:MM:YAE. A manual time turns automatic sources off.', COLOURMUTED, 13)
+        drawtext(205, helpy, 'date format: dd:mm:yae. a manual time turns automatic sources off.', COLOURMUTED, 13)
     elif SECTION == 'master':
         fieldrow(
             'master_name', 'master name', MASTER.get('name', ''),
@@ -3949,7 +4121,7 @@ def paint():
                 focused=EDITFIELD is None)
             drawtext(
                 205, 252,
-                'A password prompt will confirm the master name change.',
+                'a password prompt will confirm the master name change.',
                 COLOURMUTED, 13)
         else:
             button(rows['master_name_change'], 'change name')
@@ -3977,7 +4149,7 @@ def paint():
                     else 'choose image')
             drawtext(
                 205, 546,
-                'Image changes apply directly; account changes require the current password.',
+                'image changes apply directly; account changes require the current password.',
                 COLOURMUTED, 13)
     elif SECTION == 'recovery':
         ready, recoverydetail = recoveryready()
@@ -3987,17 +4159,17 @@ def paint():
         action = str(RECOVERY.get('action') or '')
         recoverydescriptions = {
             'python': (
-                'repair Python',
-                'Restore Python, its managed libraries, and the image catalogue.'),
+                'repair python',
+                'restore python, its managed libraries, and the image catalogue.'),
             'build': (
                 'reset build software',
-                'Replace the complete build software tree with the recovery baseline.'),
+                'replace the complete build software tree with the recovery baseline.'),
             'reset': (
-                'reset The One OS',
-                'Replace operating-system files and settings while keeping user files.'),
+                'reset the one os',
+                'replace operating-system files and settings while keeping user files.'),
             'reinstall': (
-                'reinstall The One OS',
-                'Erase every user file, then install a clean operating-system baseline.'),
+                'reinstall the one os',
+                'erase every user file, then install a clean operating-system baseline.'),
         }
         if not action:
             for name in ('python', 'build', 'reset', 'reinstall'):
@@ -4019,12 +4191,12 @@ def paint():
             if action == 'reinstall':
                 drawtext(
                     205, 226,
-                    'Reinstall permanently removes every user file from the root drive.',
+                    'reinstall permanently removes every user file from the root drive.',
                     COLOURERROR, 14)
             else:
                 drawtext(
                     205, 226,
-                    'The computer will restart into Angel recovery.',
+                    'the computer will restart into angel recovery.',
                     COLOURMUTED, 14)
             button(rows['recovery_cancel'], 'cancel')
             button(
@@ -4056,7 +4228,7 @@ def paint():
         button(rows['python_add'], 'add')
         drawtext(
             205, 194,
-            'Use name or name==version. Changes are applied by the Python service.',
+            'use name or name==version. changes are applied by the python service.',
             COLOURMUTED, 13)
 
         selected = selectedpythonmodule()
@@ -4170,7 +4342,7 @@ def paint():
             ('installed', 'installed'), ('status', 'status'),
         ):
             columnx, columnwidth = columns[name]
-            marker = ' ↓' if PYTHONSORT == name and PYTHONSORTDESC else ' ↑' if PYTHONSORT == name else ''
+            marker = pythonsortmarker(name)
             drawtext(
                 columnx + 8, tableheader + 6,
                 label + marker, COLOURMUTED, 13, moduleclip)
@@ -4210,7 +4382,7 @@ def paint():
                         13, moduleclip)
         else:
             drawtext(
-                213, tableheader + 44, 'No Python modules match this view.',
+                213, tableheader + 44, 'no python modules match this view.',
                 COLOURMUTED, 15, moduleclip)
     elif SECTION == 'about':
         drawtext(205, 94, 'terminal', COLOURTEXT, 19)
@@ -4276,6 +4448,8 @@ def paint():
 def windowname():
     if SECTION == 'display' and DISPLAYPAGE != 'main':
         return 'night light'
+    if SECTION == 'network' and NETWORKPAGE != 'connection':
+        return NETWORKPAGE
     return SECTION
 
 
@@ -4377,7 +4551,7 @@ def sliderchange(name, x, rect):
 
 
 def handlebutton(message):
-    global SECTION, DRAGGING, RESOLUTIONEDITED, DISPLAYPAGE
+    global SECTION, DRAGGING, RESOLUTIONEDITED, DISPLAYPAGE, NETWORKPAGE
     global MASTERNAMEEDITING, ABOUTSCROLL, PYTHONSCROLL
     global PYTHONSELECTED, PYTHONFILTER, PYTHONSORT, PYTHONSORTDESC
     global PYTHONADVANCED, PYTHONQUERY
@@ -4410,6 +4584,7 @@ def handlebutton(message):
                 RECOVERY['action'] = ''
             SECTION = section
             DISPLAYPAGE = 'main'
+            NETWORKPAGE = 'connection'
             if section == 'about':
                 ABOUTSCROLL = 0
             if section == 'python':
@@ -4463,7 +4638,7 @@ def handlebutton(message):
                 DISPLAY['night_light_preview'] = True
                 savedisplay()
                 DISPLAY['night_light_preview'] = False
-                setstatus('Previewing a full day for 15 seconds.', section='display')
+                setstatus('previewing a full day for 15 seconds.', section='display')
                 return
             for name in (
                 'night_light_manual_temperature',
@@ -4508,6 +4683,37 @@ def handlebutton(message):
             DRAGGING = 'cursor_size'
             sliderchange('cursor_size', x, rows['cursor_size'])
     elif SECTION == 'network':
+        for page in ('connection', 'dns', 'firewall', 'details'):
+            if pointin(x, y, rows.get('network_tab_' + page)):
+                editsave()
+                NETWORKPAGE = page
+                redraw()
+                return
+        if NETWORKPAGE == 'firewall':
+            if pointin(
+                x, y,
+                CONTROLS.get('dropdowns', {}).get(
+                    'firewall_profile', {}).get('rect')
+            ):
+                opendropdown('firewall_profile')
+            return
+        if NETWORKPAGE == 'dns':
+            if pointin(x, y, rows.get('automatic_dns')) and NETWORK.get('dhcp'):
+                NETWORK['automatic_dns'] = not NETWORK.get('automatic_dns')
+                redraw()
+                return
+            if not NETWORK.get('automatic_dns'):
+                for name in ('dns1', 'dns2'):
+                    if pointin(x, y, rows.get(name)):
+                        startedit(name, NETWORK.get(name, ''))
+                        return
+            return
+        if NETWORKPAGE == 'details':
+            if pointin(x, y, rows.get('network_refresh')):
+                refreshnetworkruntime(force=True)
+                refreshnetworkinterfaces()
+                redraw()
+            return
         if pointin(x, y, CONTROLS.get('dropdowns', {}).get('interface', {}).get('rect')):
             opendropdown('interface')
         elif pointin(x, y, CONTROLS.get('dropdowns', {}).get('wifi_network', {}).get('rect')):
@@ -4529,10 +4735,12 @@ def handlebutton(message):
             startedit('network_name', ethernetcustomname(preferrednetworkinterface()))
         elif pointin(x, y, rows.get('dhcp')):
             NETWORK['dhcp'] = not NETWORK.get('dhcp')
+            if not NETWORK.get('dhcp'):
+                NETWORK['automatic_dns'] = False
             redraw()
         else:
-            for name in EDITABLE['network']:
-                if pointin(x, y, rows.get(name)) and (name in ('dns1', 'dns2') or not NETWORK.get('dhcp')):
+            for name in ('address', 'netmask', 'gateway'):
+                if pointin(x, y, rows.get(name)) and not NETWORK.get('dhcp'):
                     startedit(name, NETWORK.get(name, ''))
                     return
     elif SECTION == 'time & date':
@@ -4628,7 +4836,7 @@ def handlebutton(message):
                 return
             queuepythonchange(
                 'install_module', arguments,
-                'Install {} and its required dependencies?'.format(
+                'install {} and its required dependencies?'.format(
                     PYTHONQUERY.strip()))
             return
         if pointin(x, y, rows.get('python_cancel')):
@@ -4651,18 +4859,18 @@ def handlebutton(message):
         if PYTHONADVANCED:
             if pointin(x, y, rows.get('python_advanced_update_all')):
                 queuepythonchange(
-                    'update_modules', {}, 'Update every unpinned requested module?')
+                    'update_modules', {}, 'update every unpinned requested module?')
                 return
             if pointin(x, y, rows.get('python_advanced_wheel')):
                 startpythonpicker('wheel')
                 return
             if pointin(x, y, rows.get('python_advanced_repair')):
                 queuepythonchange(
-                    'repair_modules', {}, 'Repair every managed Python module?')
+                    'repair_modules', {}, 'repair every managed python module?')
                 return
             if pointin(x, y, rows.get('python_advanced_restore')):
                 queuepythonchange(
-                    'restore_modules', {}, 'Restore the previous Python module set?')
+                    'restore_modules', {}, 'restore the previous python module set?')
                 return
             if pointin(x, y, rows.get('python_advanced_history')):
                 startpythonrequest('history', {'limit': 50}, timeout=10.0)
@@ -4696,24 +4904,24 @@ def handlebutton(message):
                 PYTHONQUERY = name + '==' + str(selected.get('version') or '')
                 startedit('python_query', PYTHONQUERY)
                 setstatus(
-                    'Replace the current version, then choose add.', section='python')
+                    'replace the current version, then choose add.', section='python')
                 return
             if pointin(x, y, rows.get('python_remove')):
                 queuepythonchange(
                     'remove_module', {'name': name},
-                    'Remove {} and dependencies no longer needed?'.format(label))
+                    'remove {} and dependencies no longer needed?'.format(label))
                 return
             if pointin(x, y, rows.get('python_update')):
                 queuepythonchange(
                     'update_module', {'name': name},
-                    'Update {} to the latest compatible version?'.format(label))
+                    'update {} to the latest compatible version?'.format(label))
                 return
             if pointin(x, y, rows.get('python_pin')):
                 operation = 'unpin_module' if selected.get('pinned') else 'pin_module'
                 queuepythonchange(
                     operation, {'name': name},
                     '{} {} at version {}?'.format(
-                        'Unpin' if selected.get('pinned') else 'Pin',
+                        'unpin' if selected.get('pinned') else 'pin',
                         label, selected.get('version') or 'current'))
                 return
         for index, item in enumerate(visiblepythonmodules()):
@@ -4792,7 +5000,7 @@ def handlescroll(message):
 
 
 def handlekey(message):
-    global EDITFIELD, EDITBUFFER, RUNNING, DROPDOWNHOVER, DISPLAYPAGE
+    global EDITFIELD, EDITBUFFER, RUNNING, DROPDOWNHOVER, DISPLAYPAGE, NETWORKPAGE
     if str(message.get('state', 'down')).lower() not in ('down', 'repeat'):
         return
     key = str(message.get('key', '')).upper()
@@ -4807,6 +5015,10 @@ def handlekey(message):
             return
         if SECTION == 'display' and DISPLAYPAGE != 'main' and not EDITFIELD:
             DISPLAYPAGE = 'main'
+            redraw()
+            return
+        if SECTION == 'network' and NETWORKPAGE != 'connection' and not EDITFIELD:
+            NETWORKPAGE = 'connection'
             redraw()
             return
         EDITFIELD = None
@@ -4915,7 +5127,7 @@ def startmasterimagepicker():
         return True
     if PICKER_VERSION < 1 or WINID is None:
         setstatus(
-            'The Array image picker is unavailable.',
+            'the array image picker is unavailable.',
             True, section='master')
         return False
 
@@ -4945,7 +5157,7 @@ def startmasterimagepicker():
             ],
         }],
     })
-    setstatus('Opening Array…', section='master')
+    setstatus('opening array…', section='master')
     redraw()
     return True
 
@@ -4955,13 +5167,13 @@ def startpythonpicker(kind):
     if PICKER_PENDING is not None:
         return True
     if PICKER_VERSION < 1 or WINID is None:
-        setstatus('The Array file picker is unavailable.', True, section='python')
+        setstatus('the array file picker is unavailable.', True, section='python')
         return False
     kind = str(kind)
     configuration = {
-        'wheel': ('open_file', 'choose Python wheel', '.whl', 'wheels'),
-        'apply_lock': ('open_file', 'choose Python lock', '.toml', 'locks'),
-        'export_lock': ('save_as', 'export Python lock', '.toml', 'locks'),
+        'wheel': ('open_file', 'choose python wheel', '.whl', 'wheels'),
+        'apply_lock': ('open_file', 'choose python lock', '.toml', 'locks'),
+        'export_lock': ('save_as', 'export python lock', '.toml', 'locks'),
     }.get(kind)
     if configuration is None:
         return False
@@ -4984,7 +5196,7 @@ def startpythonpicker(kind):
     if mode == 'save_as':
         request['suggested_name'] = 'python modules.toml'
     sendws(request)
-    setstatus('Opening Array…', section='python')
+    setstatus('opening array…', section='python')
     redraw()
     return True
 
@@ -5005,8 +5217,8 @@ def handlepickerresult(message):
         not isinstance(paths, list) or not paths
     ):
         setstatus(
-            'File selection cancelled.' if kind.startswith('python_') else
-            'Image selection cancelled.',
+            'file selection cancelled.' if kind.startswith('python_') else
+            'image selection cancelled.',
             section='python' if kind.startswith('python_') else 'master')
         redraw()
         return True
@@ -5024,15 +5236,15 @@ def handlepickerresult(message):
                         'size': size, 'sha256': digest,
                     },
                     'descriptor': descriptor,
-                    'message': 'Install the selected Python wheel?',
+                    'message': 'install the selected python wheel?',
                     'changes': [{
                         'action': 'install',
                         'name': os.path.basename(path),
                         'from': '', 'to': 'local wheel',
                     }],
-                    'notes': ['The wheel identity and contents will be verified before installation.'],
+                    'notes': ['the wheel identity and contents will be verified before installation.'],
                 }
-                setstatus('Review the Python wheel installation.', section='python')
+                setstatus('review the python wheel installation.', section='python')
             elif kind == 'python_apply_lock':
                 descriptor, size, digest = pythoninputdescriptor(
                     path, '.toml', 1024 * 1024)
@@ -5040,21 +5252,21 @@ def handlepickerresult(message):
                     'operation': 'apply_lock',
                     'arguments': {'size': size, 'sha256': digest},
                     'descriptor': descriptor,
-                    'message': 'Apply the selected Python lock?',
+                    'message': 'apply the selected python lock?',
                     'changes': [{
                         'action': 'apply', 'name': os.path.basename(path),
                         'from': '', 'to': 'locked module set',
                     }],
-                    'notes': ['The current managed environment will be replaced by the exact lock.'],
+                    'notes': ['the current managed environment will be replaced by the exact lock.'],
                 }
-                setstatus('Review the Python lock change.', section='python')
+                setstatus('review the python lock change.', section='python')
             elif kind == 'python_export_lock':
                 if not path.casefold().endswith('.toml'):
                     path += '.toml'
                 startpythonrequest(
                     'export_lock_file', {'path': path}, timeout=30.0)
             else:
-                raise RuntimeError('The Python file request is no longer valid.')
+                raise RuntimeError('the python file request is no longer valid.')
         except Exception as error:
             setstatus(str(error), True, section='python')
         redraw()
@@ -5062,7 +5274,7 @@ def handlepickerresult(message):
     try:
         MASTER['image_path'] = validatemasterimagepath(paths[0], required=True)
         setstatus(
-            'Master image selected. Apply to update the taskbar and lock screen.',
+            'master image selected. apply to update the taskbar and lock screen.',
             section='master')
     except Exception as error:
         setstatus(str(error), True, section='master')
@@ -5232,8 +5444,8 @@ def handlews(message):
                 message.get('request_id', ''))
             pythonpicker = str(PICKER_PENDING.get('kind') or '').startswith('python_')
             setstatus(
-                'Choose the Python file in Array.' if pythonpicker else
-                'Select an image in Array.',
+                'choose the python file in array.' if pythonpicker else
+                'select an image in array.',
                 section='python' if pythonpicker else 'master')
             redraw()
     elif operation == 'PICKER_RESULT':
@@ -5241,25 +5453,25 @@ def handlews(message):
     elif operation == 'DISPLAY_SETTINGS_SET':
         if virtualboxcontrolsresolution():
             setstatus(
-                'Display settings applied. Resolution remains controlled by VirtualBox Guest Additions.',
+                'display settings applied. resolution remains controlled by virtualbox guest additions.',
                 section='display')
         elif GRAPHICSBACKEND == 'framebuffer':
             setstatus(
-                'Display settings applied. Resolution is set by the framebuffer.',
+                'display settings applied. resolution is set by the framebuffer.',
                 section='display')
         else:
             setstatus(
-                'Image settings applied. Resolution takes effect after restarting the graphics service.',
+                'image settings applied. resolution takes effect after restarting the graphics service.',
                 section='display')
     elif operation == 'MOUSE_SETTINGS_SET':
-        setstatus('Mouse settings applied.', section='mouse')
+        setstatus('mouse settings applied.', section='mouse')
     elif operation == 'ERROR' and str(message.get('code', '')).startswith('display_settings'):
         setstatus(
-            str(message.get('detail', 'Display settings could not be applied.')),
+            str(message.get('detail', 'display settings could not be applied.')),
             True, section='display')
     elif operation == 'ERROR' and str(message.get('code', '')).startswith('mouse_settings'):
         setstatus(
-            str(message.get('detail', 'Mouse settings could not be applied.')),
+            str(message.get('detail', 'mouse settings could not be applied.')),
             True, section='mouse')
     elif operation == 'ERROR' and str(message.get('code', '')).startswith('picker_'):
         pythonpicker = bool(
@@ -5269,8 +5481,8 @@ def handlews(message):
         setstatus(
             str(message.get(
                 'detail',
-                'The Array file picker is unavailable.' if pythonpicker else
-                'The Array image picker is unavailable.')),
+                'the array file picker is unavailable.' if pythonpicker else
+                'the array image picker is unavailable.')),
             True, section='python' if pythonpicker else 'master')
         redraw()
     elif operation == 'ERROR' and PASSWORDPROMPT is not None and (
@@ -5285,7 +5497,7 @@ def handlews(message):
         section = str(PASSWORDPROMPT.get('section', SECTION))
         PASSWORDPROMPT = None
         setstatus(
-            'The window server password prompt is unavailable.',
+            'the window server password prompt is unavailable.',
             True, section=section)
         redraw()
     elif operation == 'CLOSE':
@@ -5304,7 +5516,7 @@ def handlews(message):
         ):
             section = str(PASSWORDPROMPT.get('section', SECTION))
             PASSWORDPROMPT = None
-            setstatus('Password entry cancelled.', section=section)
+            setstatus('password entry cancelled.', section=section)
 
 
 def connectwindowserver():
@@ -5382,9 +5594,9 @@ def main():
 
 
 def diagnostic():
-    global SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE, TERMINALNAME, MASTER
+    global SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, FIREWALLSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE, TERMINALNAME, MASTER
     global service_secret_delete, service_secret_exists, service_secret_put, settings_account_get, settings_hostname_set, settings_master_update, settings_recovery_authorize, settings_time_set
-    global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE, CONTROLS
+    global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE, NETWORKPAGE, CONTROLS
     if os.name == 'nt':
         result = {
             'passed': False,
@@ -5396,7 +5608,7 @@ def diagnostic():
         }
         print(json.dumps(result, sort_keys=True, separators=(',', ':')))
         return 1
-    original = (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE)
+    original = (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, FIREWALLSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE)
     diagnosticoperationsoriginal = (
         service_secret_delete,
         service_secret_exists,
@@ -5540,6 +5752,7 @@ def diagnostic():
             DNSFILE = os.path.join(NETWORKDIR, 'dns.txt')
             ETHERNETNAMESFILE = os.path.join(NETWORKDIR, 'ethernet-names.json')
             NETWORKSTATE = os.path.join(root, '.ephemeral', 'network', 'connection.json')
+            FIREWALLSTATE = os.path.join(root, '.ephemeral', 'network', 'firewall.json')
             WIRELESSFILE = os.path.join(NETWORKDIR, 'wireless.txt')
             WIRELESSSCANSTATE = os.path.join(root, '.ephemeral', 'network', 'wireless.json')
             WIRELESSSCANREQUEST = os.path.join(root, '.ephemeral', 'network', 'scan.request')
@@ -5710,6 +5923,15 @@ def diagnostic():
                 [item['display_name'] for item in pythonmoduleview()]
                 == ['ExampleImage', 'example_module']
                 and pythonscrollmaximum([{}] * 24) > 0)
+            result['checks']['python_sort_marker_uses_supported_text'] = (
+                pythonsortmarker('name', 'name', False) == ' ascending'
+                and pythonsortmarker('name', 'name', True) == ' descending'
+                and pythonsortmarker('version', 'name', False) == ''
+                and all(
+                    ord(character) < 128
+                    for character in (
+                        pythonsortmarker('name', 'name', False)
+                        + pythonsortmarker('name', 'name', True))))
             result['checks']['about_footer'] = ABOUTFOOTER == 'slayer'
             loadstate()
             result['checks']['mouse_speed_default_preserves_current'] = (
@@ -5908,9 +6130,24 @@ def diagnostic():
                 (3840, 2160) in RESOLUTIONS)
             NETWORK.update({'dhcp': False, 'address': '192.168.1.20', 'netmask': '24', 'gateway': '192.168.1.1', 'dns1': '1.1.1.1', 'dns2': '8.8.8.8'})
             savenetwork()
-            result['checks']['network_persistence'] = loadkeyvalues(NETWORKFILE).get('address') == '192.168.1.20'
+            persistednetwork = loadkeyvalues(NETWORKFILE)
+            result['checks']['network_persistence'] = persistednetwork.get('address') == '192.168.1.20'
             result['checks']['dns_persistence'] = 'nameserver 1.1.1.1' in open(DNSFILE, encoding='utf-8').read()
+            result['checks']['dns_mode_persistence'] = persistednetwork.get('dns') == 'manual'
+            result['checks']['firewall_default_persistence'] = (
+                persistednetwork.get('firewall') == 'protected')
+            NETWORK.update({
+                'interface': 'eth0', 'dhcp': True,
+                'automatic_dns': True, 'firewall': 'open',
+            })
+            savenetwork()
+            persistednetwork = loadkeyvalues(NETWORKFILE)
+            result['checks']['network_host_policy_persistence'] = (
+                persistednetwork.get('interface') == 'eth0'
+                and persistednetwork.get('dns') == 'automatic'
+                and persistednetwork.get('firewall') == 'open')
             result['checks']['invalid_static_rejected'] = False
+            NETWORK['dhcp'] = False
             NETWORK['address'] = 'not-an-address'
             try:
                 savenetwork()
@@ -5997,7 +6234,7 @@ def diagnostic():
             refreshwirelessnetworks(force=True)
             result['checks']['wireless_scan_results'] = (
                 [item['ssid'] for item in WIRELESSNETWORKS] == ['Home Network', 'Guest'])
-            setstatus('2 Wi-Fi networks available.', section='network')
+            setstatus('2 wi-fi networks available.', section='network')
             result['checks']['wireless_status_scoped_to_network'] = (
                 statusvisible('network')
                 and not statusvisible('display')
@@ -6011,7 +6248,46 @@ def diagnostic():
                 'address': '192.168.1.20/24',
                 'gateway': '192.168.1.1',
                 'mac': '00:11:22:33:44:55',
+                'server': '192.168.1.2',
+                'updated': 1787184000,
             })
+            atomicjson(FIREWALLSTATE, {
+                'active': True,
+                'profile': 'open',
+                'incoming': 'allowed',
+                'forwarding': 'blocked',
+                'outgoing': 'allowed',
+                'updated': 1787184000,
+            })
+            result['checks']['firewall_runtime_status'] = (
+                firewallstatuslabel() ==
+                'active — incoming connections allowed')
+            previousnetworklayout = (SECTION, NETWORKPAGE, CONTROLS)
+            try:
+                SECTION = 'network'
+                networkpagerows = {}
+                for page in ('connection', 'dns', 'firewall', 'details'):
+                    NETWORKPAGE = page
+                    networkpagerows[page] = set(layout()['rows'])
+                result['checks']['network_feature_pages'] = (
+                    {'connection', 'interface'} <= networkpagerows['connection']
+                    and {'automatic_dns', 'dns1', 'dns2'} <= networkpagerows['dns']
+                    and {'firewall_status', 'firewall_profile'} <= networkpagerows['firewall']
+                    and {'detail_server', 'detail_updated'} <= networkpagerows['details'])
+                NETWORKPAGE = 'connection'
+                CONTROLS = layout()
+                firewalltab = CONTROLS['rows']['network_tab_firewall']
+                handlebutton({
+                    'button': 1, 'state': 'down',
+                    'x': scalepixel(firewalltab[0] + firewalltab[2] // 2),
+                    'y': scalepixel(firewalltab[1] + firewalltab[3] // 2),
+                })
+                result['checks']['network_page_buttons'] = NETWORKPAGE == 'firewall'
+                dropdownselect('firewall_profile', 'protected')
+                result['checks']['firewall_profile_control'] = (
+                    NETWORK.get('firewall') == 'protected')
+            finally:
+                SECTION, NETWORKPAGE, CONTROLS = previousnetworklayout
             result['checks']['network_connection_identity'] = (
                 networkconnectionlabel('wlan0') == 'wi-fi — MyHomeWiFi-AX')
             result['checks']['network_name_case_preserved'] = (
@@ -6085,7 +6361,7 @@ def diagnostic():
     except Exception as error:
         result['errors'].append(str(error))
     finally:
-        (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE) = original
+        (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, FIREWALLSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE) = original
         (
             service_secret_delete,
             service_secret_exists,

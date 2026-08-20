@@ -9384,7 +9384,7 @@ def createpasswordprompt(cid, req):
     request["title"] = str(
         req.get("title", "authentication required"))[:128]
     request["message"] = str(
-        req.get("message", "Enter the current master password to continue."))[:2048]
+        req.get("message", "enter the current master password to continue."))[:2048]
     request["buttons"] = [
         {
             "id": "submit",

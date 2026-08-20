@@ -90,6 +90,7 @@ SERVICESECRETNAME = re.compile(r'network\.wireless\.[0-9a-f]{24}\Z')
 MAXIMUMSERVICESECRET = 4096
 STARTUPSCRIPT = '/the one/build/startup/startup.py'
 STARTUPLOG = '/the one/logs/startup.py.log'
+STARTUPFILE = '/the one/settings/procedures/startup/startup.txt'
 MASTERFILE = '/the one/master/master.txt'
 MASTERSETTINGSFILE = '/the one/settings/master/settings.json'
 MASTERSETTINGSDIRECTORYMODE = 0o711
@@ -151,6 +152,14 @@ APPLICATIONCATALOGUE = {
 # Procedures may select only these broker-owned identifiers.  Their policy
 # files never confer authority by naming a filesystem path; Operations maps an
 # ID to the same fixed catalogue object and keeps argv empty.
+STARTUPAPPLICATIONS = frozenset((
+    'brick',
+    'calculator',
+    'operations centre',
+    'chromium',
+    'settings',
+    'snap',
+))
 PROCEDURECATALOGUE = {
     policy['name']: {
         'path': path,
@@ -159,7 +168,7 @@ PROCEDURECATALOGUE = {
         'arguments': 'none',
     }
     for path, policy in APPLICATIONCATALOGUE.items()
-    if policy.get('arguments') == 'none'
+    if policy.get('name') in STARTUPAPPLICATIONS
 }
 
 PEERUIDS = {
@@ -303,20 +312,25 @@ ACTIONDOMAINS = {
     'VM_TEST_CLOSE': frozenset(('virtualbox',)),
     'VM_TEST_STATUS': frozenset(('virtualbox',)),
     'LAUNCH_CATALOGUE': frozenset(('expanse', 'desktop', 'brick')),
+    'CATALOGUE_LIST': frozenset(('brick',)),
     'SESSION_LOGOUT': frozenset(('expanse', 'brick')),
     'SESSION_LOCK_START': frozenset(('window',)),
     'SESSION_AUTH_VERIFY': frozenset(('lockscreen',)),
     'PROCEDURE_LAUNCH': frozenset(('procedures',)),
+    'STARTUP_LIST': frozenset(('brick',)),
+    'STARTUP_ADD': frozenset(('brick',)),
+    'STARTUP_REMOVE': frozenset(('brick',)),
+    'STARTUP_CHANGE': frozenset(('brick',)),
     'SERVICE_SECRET_PUT': frozenset(('settings',)),
     'SERVICE_SECRET_DELETE': frozenset(('settings',)),
     'SERVICE_SECRET_EXISTS': frozenset(('settings',)),
     'SERVICE_SECRET_GET': frozenset(('network',)),
     'SETTINGS_AUTH_VERIFY': frozenset(('settings',)),
-    'SETTINGS_ACCOUNT_GET': frozenset(('settings',)),
-    'SETTINGS_MASTER_UPDATE': frozenset(('settings',)),
+    'SETTINGS_ACCOUNT_GET': frozenset(('settings', 'brick')),
+    'SETTINGS_MASTER_UPDATE': frozenset(('settings', 'brick')),
     'SETTINGS_RECOVERY_AUTHORIZE': frozenset(('settings',)),
-    'SETTINGS_HOSTNAME_SET': frozenset(('settings',)),
-    'SETTINGS_TIME_SET': frozenset(('settings',)),
+    'SETTINGS_HOSTNAME_SET': frozenset(('settings', 'brick')),
+    'SETTINGS_TIME_SET': frozenset(('settings', 'brick')),
     'TIME_SAMPLE_SET': frozenset(('reign',)),
     'REGISTER_PID': frozenset(('window', 'brick', 'desktop', 'video', 'settings', 'snap', 'chromium', 'picker')),
     'COMPLETE_PID': frozenset(('brick', 'desktop', 'video', 'settings', 'snap', 'chromium')),
@@ -1120,6 +1134,203 @@ def handlelaunchcatalogue(request):
     except Exception as error:
         print(f'> operations server catalogue launch error {error}', file=sys.stderr)
         return {'status': 'error', 'message': 'catalogue launch failed'}
+
+
+def handlecataloguelist(request):
+
+    """Return public application metadata without exposing launch authority."""
+
+    try:
+        if set(request) - {
+            'action', 'op', '_peer_checked', '_peer', '_peer_pid',
+            '_peer_uid', '_peer_gid',
+        }:
+            raise ValueError('unexpected catalogue list field')
+        running = {}
+        for info in activeoperations().values():
+            path = os.path.normpath(str(info.get('script') or ''))
+            running[path] = running.get(path, 0) + 1
+        applications = []
+        for path, policy in sorted(
+                APPLICATIONCATALOGUE.items(),
+                key=lambda item: str(item[1].get('name') or '').casefold()):
+            name = str(policy.get('name') or '').strip().lower()
+            applications.append({
+                'name': name,
+                'path': path,
+                'profile': str(policy.get('profile') or '').strip().lower(),
+                'handler': str(policy.get('arguments') or 'none').strip().lower(),
+                'startup': name in PROCEDURECATALOGUE,
+                'running': int(running.get(os.path.normpath(path), 0)),
+            })
+        return {'status': 'ok', 'applications': applications}
+    except (OSError, ValueError, TypeError) as error:
+        return {'status': 'error', 'message': str(error).lower()}
+    except Exception as error:
+        print(f'> operations server catalogue list error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'catalogue list failed'}
+
+
+def readstartupoperations(path=None):
+
+    path = STARTUPFILE if path is None else str(path)
+
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) |
+            getattr(os, 'O_NOFOLLOW', 0),
+        )
+    except FileNotFoundError:
+        return []
+
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not statmodule.S_ISREG(metadata.st_mode) or
+            metadata.st_nlink != 1 or metadata.st_size > 65536 or
+            metadata.st_mode & (statmodule.S_IWGRP | statmodule.S_IWOTH)
+        ):
+            raise PermissionError('unsafe startup configuration')
+        content = os.read(descriptor, 65537)
+    finally:
+        os.close(descriptor)
+
+    if len(content) > 65536:
+        raise ValueError('startup configuration is too large')
+    lines = [
+        line.strip()
+        for line in content.decode('utf-8', errors='strict').splitlines()
+        if line.strip() and not line.lstrip().startswith('#')
+    ]
+    if len(lines) % 2:
+        raise ValueError('startup configuration is incomplete')
+    bypath = {
+        os.path.normpath(policy['path']): name
+        for name, policy in PROCEDURECATALOGUE.items()
+    }
+    entries = []
+    seen = set()
+    for index in range(0, len(lines), 2):
+        storedpath = os.path.normpath(lines[index])
+        name = bypath.get(storedpath)
+        mode = lines[index + 1].strip().lower()
+        if name is None or mode not in ('front', 'behind') or name in seen:
+            raise ValueError('startup configuration contains a denied operation')
+        seen.add(name)
+        entries.append({
+            'software': name,
+            'path': PROCEDURECATALOGUE[name]['path'],
+            'mode': mode,
+        })
+    return entries
+
+
+def writestartupoperations(entries, path=None):
+
+    path = STARTUPFILE if path is None else str(path)
+
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o755, exist_ok=True)
+    lines = []
+    for entry in entries:
+        name = str(entry.get('software') or '').strip().lower()
+        policy = PROCEDURECATALOGUE.get(name)
+        mode = str(entry.get('mode') or '').strip().lower()
+        if policy is None or mode not in ('front', 'behind'):
+            raise ValueError('startup operation denied')
+        lines.extend((policy['path'], mode))
+    content = (''.join(line + '\n' for line in lines)).encode('utf-8')
+    temporary = '{}.new.{}.{}'.format(path, os.getpid(), threading.get_ident())
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0),
+            0o644,
+        )
+        try:
+            offset = 0
+            while offset < len(content):
+                written = os.write(descriptor, content[offset:])
+                if written <= 0:
+                    raise OSError('short startup configuration write')
+                offset += written
+            os.fchmod(descriptor, 0o644)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, path)
+        directorydescriptor = os.open(
+            directory,
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+            getattr(os, 'O_CLOEXEC', 0),
+        )
+        try:
+            os.fsync(directorydescriptor)
+        finally:
+            os.close(directorydescriptor)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+def handlestartupconfiguration(request, action):
+
+    try:
+        allowedfields = {
+            'action', 'op', '_peer_checked', '_peer', '_peer_pid',
+            '_peer_uid', '_peer_gid',
+        }
+        if action != 'STARTUP_LIST':
+            allowedfields.add('software')
+        if action in ('STARTUP_ADD', 'STARTUP_CHANGE'):
+            allowedfields.add('mode')
+        if set(request) - allowedfields:
+            raise ValueError('unexpected startup field')
+
+        entries = readstartupoperations()
+        if action == 'STARTUP_LIST':
+            return {'status': 'ok', 'operations': entries}
+
+        software = str(request.get('software') or '').strip().lower()
+        if software not in PROCEDURECATALOGUE:
+            raise ValueError('startup software denied')
+        position = next((
+            index for index, entry in enumerate(entries)
+            if entry.get('software') == software
+        ), None)
+
+        if action == 'STARTUP_ADD':
+            if position is not None:
+                raise ValueError('startup operation already exists')
+            mode = str(request.get('mode') or '').strip().lower()
+            if mode not in ('front', 'behind'):
+                raise ValueError('startup mode denied')
+            entries.append({'software': software, 'mode': mode})
+        elif action == 'STARTUP_REMOVE':
+            if position is None:
+                raise ValueError('startup operation not found')
+            del entries[position]
+        elif action == 'STARTUP_CHANGE':
+            if position is None:
+                raise ValueError('startup operation not found')
+            mode = str(request.get('mode') or '').strip().lower()
+            if mode not in ('front', 'behind'):
+                raise ValueError('startup mode denied')
+            entries[position]['mode'] = mode
+        else:
+            raise ValueError('startup action denied')
+
+        writestartupoperations(entries)
+        return {'status': 'ok', 'operations': readstartupoperations()}
+    except (OSError, ValueError, TypeError, UnicodeError, PermissionError) as error:
+        return {'status': 'error', 'message': str(error).lower()}
+    except Exception as error:
+        print(f'> operations server startup configuration error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'startup configuration failed'}
 
 
 def vmtestfields(request, allowed):
@@ -4123,8 +4334,14 @@ def handlerequest(request):
     if op == 'LAUNCH_CATALOGUE':
         return handlelaunchcatalogue(request)
 
+    if op == 'CATALOGUE_LIST':
+        return handlecataloguelist(request)
+
     if op == 'PROCEDURE_LAUNCH':
         return handleprocedurelaunch(request)
+
+    if op.startswith('STARTUP_'):
+        return handlestartupconfiguration(request, op)
 
     if op == 'SESSION_LOGOUT':
         return handlesessionlogout(request)
@@ -4381,7 +4598,7 @@ def diagnostic():
 
     global OPERATIONSROOT, OPERATIONSSTATE, PROCESSES, OPMETA, COMPLETED, READYPENDING
     global GRAPHICSSTATEPATH, GRAPHICSPREVIOUS, GRAPHICSCURRENT, TELEMETRY
-    global processstat, processrecords, processdomain
+    global STARTUPFILE, processstat, processrecords, processdomain
 
     result = {'passed': False, 'checks': {}, 'errors': []}
     # The CLI diagnostic is launched by Brick and deliberately retains the
@@ -4390,6 +4607,7 @@ def diagnostic():
     root = f'/.ephemeral/brick/operations-diagnostic-{os.getpid()}'
     originalroot = OPERATIONSROOT
     originalstate = OPERATIONSSTATE
+    originalstartupfile = STARTUPFILE
     originalgraphicspath = GRAPHICSSTATEPATH
     originalgraphicsprevious = dict(GRAPHICSPREVIOUS)
     originalgraphicscurrent = {
@@ -4458,6 +4676,56 @@ def diagnostic():
         OPERATIONSROOT = root
         OPERATIONSSTATE = os.path.join(root, 'state.json')
         GRAPHICSSTATEPATH = os.path.join(root, 'graphics.json')
+        STARTUPFILE = os.path.join(root, 'startup', 'startup.txt')
+
+        catalogue = handlecataloguelist({'action': 'CATALOGUE_LIST'})
+        applications = catalogue.get('applications', [])
+        startupnames = {
+            str(item.get('name') or '')
+            for item in applications
+            if isinstance(item, dict) and item.get('startup') is True
+        }
+        if (
+            catalogue.get('status') != 'ok' or not applications or
+            not all(isinstance(item, dict) for item in applications) or
+            not all(str(item.get('name', '')).lower() == item.get('name', '')
+                    for item in applications) or
+            startupnames != set(STARTUPAPPLICATIONS)
+        ):
+            raise RuntimeError('public application catalogue is incomplete')
+        result['checks']['application_catalogue'] = True
+
+        startupsoftware = sorted(PROCEDURECATALOGUE)[0]
+        addedstartup = handlestartupconfiguration({
+            'action': 'STARTUP_ADD', 'software': startupsoftware,
+            'mode': 'behind',
+        }, 'STARTUP_ADD')
+        changedstartup = handlestartupconfiguration({
+            'action': 'STARTUP_CHANGE', 'software': startupsoftware,
+            'mode': 'front',
+        }, 'STARTUP_CHANGE')
+        listedstartup = handlestartupconfiguration(
+            {'action': 'STARTUP_LIST'}, 'STARTUP_LIST')
+        duplicate = handlestartupconfiguration({
+            'action': 'STARTUP_ADD', 'software': startupsoftware,
+            'mode': 'behind',
+        }, 'STARTUP_ADD')
+        removedstartup = handlestartupconfiguration({
+            'action': 'STARTUP_REMOVE', 'software': startupsoftware,
+        }, 'STARTUP_REMOVE')
+        if (
+            addedstartup.get('status') != 'ok' or
+            changedstartup.get('status') != 'ok' or
+            listedstartup.get('operations') != [{
+                'software': startupsoftware,
+                'path': PROCEDURECATALOGUE[startupsoftware]['path'],
+                'mode': 'front',
+            }] or
+            duplicate.get('status') != 'error' or
+            removedstartup.get('operations') != []
+        ):
+            raise RuntimeError('startup operation management failed')
+        result['checks']['startup_management'] = True
 
         diagnosticsettings = os.path.join(root, 'master-settings', 'settings.json')
         writemastersettings({
@@ -4806,6 +5074,7 @@ def diagnostic():
 
         OPERATIONSROOT = originalroot
         OPERATIONSSTATE = originalstate
+        STARTUPFILE = originalstartupfile
         GRAPHICSSTATEPATH = originalgraphicspath
 
         with GRAPHICSLOCK:

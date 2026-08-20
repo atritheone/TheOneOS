@@ -112,6 +112,42 @@ def requestsessionlogout(timeout=10.0):
     return requestoperations({'action': 'SESSION_LOGOUT'}, timeout=timeout)
 
 
+def listcatalogueapplications(timeout=3.0):
+
+    return requestoperations({'action': 'CATALOGUE_LIST'}, timeout=timeout)
+
+
+def startupoperations(timeout=3.0):
+
+    return requestoperations({'action': 'STARTUP_LIST'}, timeout=timeout)
+
+
+def addstartupoperation(software, mode='behind', timeout=3.0):
+
+    return requestoperations({
+        'action': 'STARTUP_ADD',
+        'software': str(software),
+        'mode': str(mode),
+    }, timeout=timeout)
+
+
+def removestartupoperation(software, timeout=3.0):
+
+    return requestoperations({
+        'action': 'STARTUP_REMOVE',
+        'software': str(software),
+    }, timeout=timeout)
+
+
+def changestartupoperation(software, mode, timeout=3.0):
+
+    return requestoperations({
+        'action': 'STARTUP_CHANGE',
+        'software': str(software),
+        'mode': str(mode),
+    }, timeout=timeout)
+
+
 def normaliseaction(action):
 
     action = str(action or "").strip().lower()

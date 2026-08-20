@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Focused adversarial tests for the T1OS userspace DNS resolver."""
+"""Focused adversarial tests for the T1OS network service."""
 
 from __future__ import annotations
 
@@ -303,6 +303,88 @@ def main():
         not network.verifyhostfirewall(lambda: nft),
         'firewall verification accepted a missing admission rule',
     )
+
+    opennft = FakeNFTables()
+    require(
+        network.applyhostfirewall(lambda: opennft, profile='open'),
+        'open incoming firewall profile did not apply',
+    )
+    openrules = [
+        kwargs for command, kwargs in opennft.commands
+        if command == 'rule:add'
+    ]
+    require(
+        len(openrules) == 6,
+        'open incoming profile did not add exactly one final input admission rule',
+    )
+    require(
+        network.verifyhostfirewall(lambda: opennft, profile='open'),
+        'firewall verification rejected the open incoming profile',
+    )
+    require(
+        not network.verifyhostfirewall(lambda: opennft, profile='protected'),
+        'protected firewall verification accepted the open incoming profile',
+    )
+
+    with tempfile.TemporaryDirectory(prefix='t1os-network-policy-') as directory:
+        configpath = pathlib.Path(directory) / 'network.txt'
+        originalconfig = network.GLOBALCONF
+        try:
+            network.GLOBALCONF = str(configpath)
+            configpath.write_text(
+                'interface=wlan0\ndns=manual\nfirewall=open\n',
+                encoding='utf-8',
+            )
+            require(
+                network.hostnetworksettings() == {
+                    'interface': 'wlan0',
+                    'dns': 'manual',
+                    'firewall': 'open',
+                },
+                'host network policy was not loaded from persisted settings',
+            )
+            links = [{'name': 'eth0'}, {'name': 'wlan0'}]
+            require(
+                network.configuredinterface(links) is links[1],
+                'preferred interface was not resolved from persisted settings',
+            )
+            configpath.write_text(
+                'interface=../../bad\ndns=invalid\nfirewall=disabled\n',
+                encoding='utf-8',
+            )
+            require(
+                network.hostnetworksettings() == {
+                    'interface': '',
+                    'dns': 'automatic',
+                    'firewall': 'protected',
+                },
+                'invalid host network policy did not fail closed',
+            )
+        finally:
+            network.GLOBALCONF = originalconfig
+
+    dnswrites = []
+    originalconfiguredns = network.configuredns
+    originaldnsserversforlease = network.dnsserversforlease
+    try:
+        network.configuredns = lambda servers: dnswrites.append(list(servers)) or True
+        network.dnsserversforlease = lambda router, servers: list(servers)
+        require(
+            not network.applyleasedns('192.0.2.1', ['192.0.2.53'], False),
+            'manual DNS mode did not report that DHCP DNS was retained',
+        )
+        require(not dnswrites, 'manual DNS mode overwrote the configured DNS file')
+        require(
+            network.applyleasedns('192.0.2.1', ['192.0.2.53'], True),
+            'automatic DNS mode did not apply DHCP DNS',
+        )
+        require(
+            dnswrites == [['192.0.2.53']],
+            'automatic DNS mode wrote unexpected DNS servers',
+        )
+    finally:
+        network.configuredns = originalconfiguredns
+        network.dnsserversforlease = originaldnsserversforlease
 
     print('network security tests passed')
 

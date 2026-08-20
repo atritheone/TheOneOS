@@ -1416,11 +1416,11 @@ def buildconfirm(commands):
     message = f'{entry.get("name", "operation")}  PID {entry.get("pid", SELECTED)}'
     resources = entry.get('resources', {})
     children = int(resources.get('children', 0) or 0)
-    detail = f'This will signal the operation and {children} child process{"es" if children != 1 else ""}.'
+    detail = f'this will signal the operation and {children} child process{"es" if children != 1 else ""}.'
     addtext(commands, left + PAD, top + PAD, title, COLOURERROR if CONFIRM.get('force') else COLOURTEXT, TITLEFONT, rect)
     addtext(commands, left + PAD, top + PAD + ROWH + scale(12), fittext(message, width - (PAD * 2), FONTSIZE), COLOURTEXT, FONTSIZE, rect)
     addtext(commands, left + PAD, top + PAD + (ROWH * 2) + scale(12), fittext(detail, width - (PAD * 2), SMALLFONT), COLOURMUTED, SMALLFONT, rect)
-    addtext(commands, left + PAD, top + height - PAD - SMALLFONT, 'Enter to confirm   Esc to cancel', COLOURMUTED, SMALLFONT, rect)
+    addtext(commands, left + PAD, top + height - PAD - SMALLFONT, 'enter to confirm   esc to cancel', COLOURMUTED, SMALLFONT, rect)
 
 
 def buildcontext(commands):

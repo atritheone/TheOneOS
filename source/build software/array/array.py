@@ -2326,12 +2326,12 @@ def jobpump():
         if event.get("event") == "started":
             ACTIVEJOB = event.get("id")
             job["status"] = "running"
-            setstatus(f"{kind} started — Esc to cancel", duration=60000)
+            setstatus(f"{kind} started — esc to cancel", duration=60000)
         elif event.get("event") == "progress":
             total = int(event.get("total", 0))
             done = int(event.get("done", 0))
             percent = int((done * 100) / total) if total > 0 else 0
-            setstatus(f"{kind} {percent}%  {os.path.basename(str(event.get('current', '')))} — Esc to cancel", duration=60000)
+            setstatus(f"{kind} {percent}%  {os.path.basename(str(event.get('current', '')))} — esc to cancel", duration=60000)
         elif event.get("event") == "done":
             job["status"] = "done"
             result = event.get("result", {})
@@ -3199,7 +3199,7 @@ def drawinput():
     drawrect(x + PAD, boxy, width - (PAD * 2), ROWH, COLOURTEXT)
     shown = textview(INPUTTEXT, FONTSIZEROW, FONT, 0, width - (PAD * 4))
     drawtextttf(x + PAD * 2, boxy + (ROWH // 2) - (FONTSIZEROW // 2), shown, COLOURTEXT, FONTSIZEROW, FONT)
-    drawtextttf(x + PAD, y + height - PAD - FONTSIZESTATUS, "Enter to save   Esc to cancel", COLOURMUTED, FONTSIZESTATUS, FONT)
+    drawtextttf(x + PAD, y + height - PAD - FONTSIZESTATUS, "enter to save   esc to cancel", COLOURMUTED, FONTSIZESTATUS, FONT)
 
 
 def hiddenattribute(path):
@@ -3381,7 +3381,7 @@ def drawproperties():
             drawline(box[0] + 3, box[1] + box[3] // 2, box[0] + box[2] // 2, box[1] + box[3] - 4, COLOURTEXT)
             drawline(box[0] + box[2] // 2, box[1] + box[3] - 4, box[0] + box[2] - 3, box[1] + 3, COLOURTEXT)
         PROPERTIESCONTROLS["hidden"] = [valuex, liney - PAD, valuew, ROWH + PAD]
-    drawtextttf(x + PAD, footer_y, "Esc to close", COLOURMUTED, FONTSIZESTATUS, FONT)
+    drawtextttf(x + PAD, footer_y, "esc to close", COLOURMUTED, FONTSIZESTATUS, FONT)
     if PROPERTIESDROPDOWN and PROPERTIESCONTROLS.get("mode"):
         options = propertiesmodeoptions(PROPERTIESISDIR)
         popup, _ = gfx.dropdownpopuprect(PROPERTIESCONTROLS["mode"], len(options), WINH, rowheight=ROWH, maximumvisible=8)
@@ -9891,7 +9891,7 @@ def opsrun(path, args, name, _log, user, mode, await_window=False, environment=N
     resp = opsrequest(payload)
 
     if not resp:
-        setstatus('Operations Server is unavailable', error=True)
+        setstatus('operations server is unavailable', error=True)
         return None
 
     try:
@@ -9905,7 +9905,7 @@ def opsrun(path, args, name, _log, user, mode, await_window=False, environment=N
 
     except Exception:
 
-        setstatus('Operations Server returned an invalid launch response', error=True)
+        setstatus('operations server returned an invalid launch response', error=True)
         return None
 
 
@@ -15222,7 +15222,7 @@ def openarraywindow(folder):
         )
         return True
     except Exception:
-        setstatus("could not open a new Array window", error=True)
+        setstatus("could not open a new array window", error=True)
         return False
 
 

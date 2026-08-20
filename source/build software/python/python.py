@@ -130,7 +130,7 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
 
     if len(encoded) > MAXIMUM_REQUEST:
         raise PythonManagerError(
-            'The Python manager request is too large.', 'request_too_large')
+            'the python manager request is too large.', 'request_too_large')
 
     channel = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     channel.settimeout(float(timeout))
@@ -140,7 +140,7 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
         ready = channel.recv(1)
         if ready != PROTOCOL_READY:
             raise PythonManagerError(
-                'The Python manager did not complete its request handshake.',
+                'the python manager did not complete its request handshake.',
                 'handshake_failed',
             )
         if descriptor is None:
@@ -150,12 +150,12 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
                 expected = int(payload['arguments']['size'])
             except (KeyError, TypeError, ValueError) as error:
                 raise PythonManagerError(
-                    'The Python lock stream size is invalid.',
+                    'the python lock stream size is invalid.',
                     'invalid_arguments',
                 ) from error
             if expected <= 0 or expected > 1024 * 1024:
                 raise PythonManagerError(
-                    'The Python lock stream size is invalid.',
+                    'the python lock stream size is invalid.',
                     'invalid_arguments',
                 )
             channel.sendall(encoded)
@@ -164,7 +164,7 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
                 block = os.read(int(descriptor), min(65536, remaining))
                 if not block:
                     raise PythonManagerError(
-                        'The Python lock stream ended early.',
+                        'the python lock stream ended early.',
                         'short_request',
                     )
                 channel.sendall(block)
@@ -177,7 +177,7 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
             )
             if sent != len(encoded):
                 raise PythonManagerError(
-                    'The Python manager descriptor request was incomplete.',
+                    'the python manager descriptor request was incomplete.',
                     'short_request',
                 )
         received = bytearray()
@@ -189,14 +189,14 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
             received.extend(block)
             if len(received) >= MAXIMUM_RESPONSE:
                 raise PythonManagerError(
-                    'The Python manager response is too large.',
+                    'the python manager response is too large.',
                     'response_too_large',
                 )
     except PythonManagerError:
         raise
     except (OSError, TimeoutError) as error:
         raise PythonManagerError(
-            'The Python manager is unavailable. ' + str(error),
+            'the python manager is unavailable. ' + str(error),
             'manager_unavailable',
         ) from error
     finally:
@@ -205,7 +205,7 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
     line = bytes(received).split(b'\n', 1)[0]
     if not line:
         raise PythonManagerError(
-            'The Python manager closed the request without a response.',
+            'the python manager closed the request without a response.',
             'empty_response',
         )
 
@@ -213,20 +213,20 @@ def request(operation, arguments=None, timeout=5.0, socket_path=None,
         response = json.loads(line.decode('utf-8'))
     except (UnicodeError, ValueError, TypeError) as error:
         raise PythonManagerError(
-            'The Python manager returned an invalid response.',
+            'the python manager returned an invalid response.',
             'invalid_response',
         ) from error
 
     if not isinstance(response, dict) or int(response.get('format', 0)) != PROTOCOL:
         raise PythonManagerError(
-            'The Python manager returned an unsupported response.',
+            'the python manager returned an unsupported response.',
             'unsupported_response',
             response if isinstance(response, dict) else None,
         )
 
     if not bool(response.get('ok')):
         raise PythonManagerError(
-            response.get('message') or 'The Python manager rejected the request.',
+            response.get('message') or 'the python manager rejected the request.',
             response.get('code') or 'failed',
             response,
         )
@@ -359,14 +359,14 @@ def sha256(path):
 def normalise_name(value):
     name = str(value or '').strip()
     if not PROJECT_NAME.fullmatch(name):
-        raise ManagerError('Use a valid Python distribution name.', 'invalid_name')
+        raise ManagerError('use a valid python distribution name.', 'invalid_name')
     return re.sub(r'[-_.]+', '-', name).lower()
 
 
 def exact_version(value):
     version = str(value or '').strip()
     if not EXACT_VERSION.fullmatch(version):
-        raise ManagerError('Use one exact Python module version.', 'invalid_version')
+        raise ManagerError('use one exact python module version.', 'invalid_version')
     return version
 
 
@@ -439,7 +439,7 @@ def require_trusted_mutation_peer(peer):
 
     if not isinstance(peer, dict):
         raise ManagerError(
-            'Start this Python change from Settings or Brick.',
+            'start this python change from settings or brick.',
             'operation_denied')
     if (
         int(peer.get('uid', -1)) != 1000 or
@@ -449,7 +449,7 @@ def require_trusted_mutation_peer(peer):
         int(peer.get('started', 0)) <= 0
     ):
         raise ManagerError(
-            'This application cannot change Python modules.',
+            'this application cannot change python modules.',
             'operation_denied')
 
 
@@ -465,13 +465,13 @@ def safe_relative(value):
         not value or value.startswith('/') or not SAFE_RELATIVE.fullmatch(value)
         or any(part in ('', '.', '..') for part in value.split('/'))
     ):
-        raise ManagerError('A package contains an unsafe path.', 'unsafe_path')
+        raise ManagerError('a package contains an unsafe path.', 'unsafe_path')
     return value
 
 
 def safe_remove_tree(path, parent):
     if not contained(path, parent) or os.path.realpath(path) == os.path.realpath(parent):
-        raise ManagerError('Refusing an unsafe cleanup path.', 'unsafe_path')
+        raise ManagerError('refusing an unsafe cleanup path.', 'unsafe_path')
     if not os.path.lexists(path):
         return
     status = os.lstat(path)
@@ -489,7 +489,7 @@ def read_json(path, default=None):
         return default
     except (OSError, ValueError, TypeError) as error:
         raise ManagerError(
-            'T1OS Python package state is unreadable — ' + str(error),
+            't1os python package state is unreadable — ' + str(error),
             'state_invalid',
         ) from error
 
@@ -582,7 +582,7 @@ def validate_state(value):
     if value is None:
         return default_state()
     if not isinstance(value, dict) or int(value.get('format', 0)) not in (2, STATE_FORMAT):
-        raise ManagerError('T1OS Python package state has an unsupported format.', 'state_invalid')
+        raise ManagerError('t1os python package state has an unsupported format.', 'state_invalid')
     value = dict(value)
     if int(value.get('format', 0)) == 2:
         migrated_at = value.get('updated_at')
@@ -597,13 +597,13 @@ def validate_state(value):
         value['format'] = STATE_FORMAT
     for field in ('requested', 'artifacts', 'packages', 'files', 'catalogue_files'):
         if not isinstance(value.get(field), list):
-            raise ManagerError('T1OS Python package state is malformed.', 'state_invalid')
+            raise ManagerError('t1os python package state is malformed.', 'state_invalid')
     for record in value.get('files', []) + value.get('catalogue_files', []):
         if not isinstance(record, dict):
-            raise ManagerError('T1OS Python ownership state is malformed.', 'state_invalid')
+            raise ManagerError('t1os python ownership state is malformed.', 'state_invalid')
         safe_relative(record.get('path'))
         if not HASH.fullmatch(str(record.get('sha256') or '')):
-            raise ManagerError('T1OS Python ownership state has an invalid hash.', 'state_invalid')
+            raise ManagerError('t1os python ownership state has an invalid hash.', 'state_invalid')
     return value
 
 
@@ -614,19 +614,19 @@ def load_state(path=None):
 def ensure_store():
     root = management_root()
     if os.path.lexists(root) and stat.S_ISLNK(os.lstat(root).st_mode):
-        raise ManagerError('The Python module state cannot be a link.', 'unsafe_store')
+        raise ManagerError('the python module state cannot be a link.', 'unsafe_store')
     for path in (root, cache_path(), transactions_path()):
         os.makedirs(path, exist_ok=True)
         status = os.lstat(path)
         if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode):
-            raise ManagerError('The Python module state is unsafe.', 'unsafe_store')
+            raise ManagerError('the python module state is unsafe.', 'unsafe_store')
 
 
 def requested_mapping(state):
     mapping = {}
     for source in state.get('requested', []):
         if not isinstance(source, dict):
-            raise ManagerError('Requested package state is invalid.', 'state_invalid')
+            raise ManagerError('requested package state is invalid.', 'state_invalid')
         item = dict(source)
         item['name'] = normalise_name(item.get('name'))
         mapping[item['name']] = item
@@ -834,7 +834,7 @@ def verified_tool(record_name, suffix=''):
     record = configuration.get(record_name, {})
     filename = str(record.get('filename') or '')
     if os.path.basename(filename) != filename or (suffix and not filename.endswith(suffix)):
-        raise ManagerError('The private Python tool lock is invalid.', 'tool_invalid')
+        raise ManagerError('the private python tool lock is invalid.', 'tool_invalid')
     configured_path = str(record.get('path') or '')
     if configured_path:
         if (
@@ -842,19 +842,19 @@ def verified_tool(record_name, suffix=''):
             or os.path.normpath(configured_path) != configured_path
             or os.path.basename(configured_path) != filename
         ):
-            raise ManagerError('The private Python tool path is invalid.', 'tool_invalid')
+            raise ManagerError('the private python tool path is invalid.', 'tool_invalid')
         path = configured_path
     else:
         path = os.path.join(tool_directory(), filename)
     try:
         status = os.stat(path, follow_symlinks=False)
     except OSError as error:
-        raise ManagerError('A private Python tool is missing.', 'tool_missing') from error
+        raise ManagerError('a private python tool is missing.', 'tool_missing') from error
     if not stat.S_ISREG(status.st_mode) or status.st_size != int(record.get('size', -1)):
-        raise ManagerError('A private Python tool has an invalid size.', 'tool_invalid')
+        raise ManagerError('a private python tool has an invalid size.', 'tool_invalid')
     expected = str(record.get('sha256') or '').lower()
     if not HASH.fullmatch(expected) or sha256(path) != expected:
-        raise ManagerError('A private Python tool has an invalid hash.', 'tool_invalid')
+        raise ManagerError('a private python tool has an invalid hash.', 'tool_invalid')
     return path, configuration
 
 
@@ -880,7 +880,7 @@ def packaging_api():
         from pip._vendor.packaging.tags import sys_tags
         from pip._vendor.packaging.version import Version, InvalidVersion
     except Exception as error:
-        raise ManagerError('The private packaging library is unusable.', 'tool_invalid') from error
+        raise ManagerError('the private packaging library is unusable.', 'tool_invalid') from error
     return Requirement, Version, InvalidVersion, default_environment, sys_tags
 
 
@@ -946,13 +946,13 @@ def run_command(command, timeout, environment=None, code='tool_failed'):
             close_fds=True,
         )
     except subprocess.TimeoutExpired as error:
-        raise ManagerError('The Python package operation timed out.', 'timeout') from error
+        raise ManagerError('the python package operation timed out.', 'timeout') from error
     except OSError as error:
-        raise ManagerError('A Python package tool could not start — ' + str(error), code) from error
+        raise ManagerError('a python package tool could not start — ' + str(error), code) from error
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or '').strip()
         lines = [line.strip() for line in detail.splitlines() if line.strip()]
-        message = lines[-1] if lines else 'The Python package tool failed.'
+        message = lines[-1] if lines else 'the python package tool failed.'
         raise ManagerError(message[:2000], code, {'output': detail[-16000:]})
     return result
 
@@ -986,13 +986,13 @@ def manager_python_command(extra_library_paths=None):
     try:
         values = json.loads(encoded)
     except (ValueError, TypeError) as error:
-        raise ManagerError('The Python test launcher is malformed.', 'tool_invalid') from error
+        raise ManagerError('the python test launcher is malformed.', 'tool_invalid') from error
     if (
         not isinstance(values, list) or not values
         or any(not isinstance(value, str) or not value for value in values)
         or not os.path.isabs(values[0]) or not os.path.isfile(values[0])
     ):
-        raise ManagerError('The Python test launcher is unsafe.', 'tool_invalid')
+        raise ManagerError('the python test launcher is unsafe.', 'tool_invalid')
     values = list(values)
     extra_library_paths = [
         os.path.abspath(path) for path in (extra_library_paths or []) if path
@@ -1000,7 +1000,7 @@ def manager_python_command(extra_library_paths=None):
     if extra_library_paths and '--library-path' in values:
         index = values.index('--library-path')
         if index + 1 >= len(values):
-            raise ManagerError('The Python test launcher is malformed.', 'tool_invalid')
+            raise ManagerError('the python test launcher is malformed.', 'tool_invalid')
         values[index + 1] = os.pathsep.join(extra_library_paths + [values[index + 1]])
     return values
 
@@ -1017,15 +1017,15 @@ def private_pip_command(pip_path, *arguments):
 def copy_local_wheel(path):
     source = os.path.abspath(str(path or ''))
     if not source.lower().endswith('.whl'):
-        raise ManagerError('Choose a Python wheel file.', 'wheel_required')
+        raise ManagerError('choose a python wheel file.', 'wheel_required')
     try:
         status = os.stat(source, follow_symlinks=False)
     except OSError as error:
-        raise ManagerError('The Python wheel is unavailable.', 'wheel_missing') from error
+        raise ManagerError('the python wheel is unavailable.', 'wheel_missing') from error
     if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-        raise ManagerError('The Python wheel file is unsafe.', 'unsafe_wheel')
+        raise ManagerError('the python wheel file is unsafe.', 'unsafe_wheel')
     if status.st_size <= 0 or status.st_size > MAXIMUM_FILE_BYTES:
-        raise ManagerError('The Python wheel file has an unsafe size.', 'size_limit')
+        raise ManagerError('the python wheel file has an unsafe size.', 'size_limit')
     ensure_store()
     digest = sha256(source)
     directory = os.path.join(cache_path(), digest)
@@ -1036,7 +1036,7 @@ def copy_local_wheel(path):
         shutil.copyfile(source, temporary, follow_symlinks=False)
         if sha256(temporary) != digest:
             os.unlink(temporary)
-            raise ManagerError('The Python wheel changed while being copied.', 'wheel_changed')
+            raise ManagerError('the python wheel changed while being copied.', 'wheel_changed')
         os.replace(temporary, destination)
         fsync_directory(directory)
     return destination, digest
@@ -1100,7 +1100,7 @@ def copy_descriptor_wheel(descriptor, arguments):
     filename = os.path.basename(str(arguments.get('filename') or ''))
     if (not filename or filename != str(arguments.get('filename') or '')
             or not filename.lower().endswith('.whl')):
-        raise ManagerError('Choose a Python wheel file.', 'wheel_required')
+        raise ManagerError('choose a python wheel file.', 'wheel_required')
     _, expected_size, digest = descriptor_identity(
         descriptor, MAXIMUM_FILE_BYTES, arguments, 'Python wheel')
     ensure_store()
@@ -1144,7 +1144,7 @@ def copy_descriptor_wheel(descriptor, arguments):
         os.close(output)
     if copied != expected_size or actual.hexdigest() != digest:
         os.unlink(temporary)
-        raise ManagerError('Python wheel changed before it was received.',
+        raise ManagerError('python wheel changed before it was received.',
                            'file_changed')
     if not os.path.exists(destination):
         os.replace(temporary, destination)
@@ -1152,7 +1152,7 @@ def copy_descriptor_wheel(descriptor, arguments):
     else:
         os.unlink(temporary)
     if sha256(destination) != digest:
-        raise ManagerError('The cached Python wheel has changed.', 'wheel_changed')
+        raise ManagerError('the cached python wheel has changed.', 'wheel_changed')
     return destination, digest
 
 
@@ -1161,7 +1161,7 @@ def requirement_argument(item):
     if kind == 'wheel':
         path = str(item.get('path') or '')
         if not contained(path, cache_path()) or not os.path.isfile(path):
-            raise ManagerError('A cached Python wheel is missing.', 'wheel_missing')
+            raise ManagerError('a cached python wheel is missing.', 'wheel_missing')
         return path
     name = normalise_name(item.get('name'))
     requirement = str(item.get('requirement') or name).strip()
@@ -1169,9 +1169,9 @@ def requirement_argument(item):
     try:
         parsed = Requirement(requirement)
     except Exception as error:
-        raise ManagerError('Use a valid Python package requirement.', 'invalid_requirement') from error
+        raise ManagerError('use a valid python package requirement.', 'invalid_requirement') from error
     if normalise_name(parsed.name) != name or parsed.url or parsed.marker:
-        raise ManagerError('Use a package name with an optional version constraint.', 'invalid_requirement')
+        raise ManagerError('use a package name with an optional version constraint.', 'invalid_requirement')
     return requirement
 
 
@@ -1189,7 +1189,7 @@ def report_artifacts(report):
         if not digest and str(archive.get('hash') or '').startswith('sha256='):
             digest = str(archive['hash']).split('=', 1)[1].lower()
         if not version or not url or not HASH.fullmatch(digest):
-            raise ManagerError('The resolver omitted an artifact identity.', 'report_invalid')
+            raise ManagerError('the resolver omitted an artifact identity.', 'report_invalid')
         artifacts.append({
             'name': name,
             'version': version,
@@ -1214,18 +1214,18 @@ def file_manifest(base):
         for name in directories:
             status = os.lstat(os.path.join(root, name))
             if not stat.S_ISDIR(status.st_mode) or stat.S_ISLNK(status.st_mode):
-                raise ManagerError('A package contains an unsafe directory.', 'unsafe_wheel')
+                raise ManagerError('a package contains an unsafe directory.', 'unsafe_wheel')
         for name in files:
             path = os.path.join(root, name)
             status = os.lstat(path)
             if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-                raise ManagerError('A package contains a link or special file.', 'unsafe_wheel')
+                raise ManagerError('a package contains a link or special file.', 'unsafe_wheel')
             if status.st_size > MAXIMUM_FILE_BYTES:
-                raise ManagerError('A Python package file is too large.', 'size_limit')
+                raise ManagerError('a python package file is too large.', 'size_limit')
             count += 1
             total += status.st_size
             if count > MAXIMUM_FILES or total > MAXIMUM_BYTES:
-                raise ManagerError('The Python package installation is too large.', 'size_limit')
+                raise ManagerError('the python package installation is too large.', 'size_limit')
             records.append({
                 'path': os.path.relpath(path, base).replace(os.sep, '/'),
                 'size': status.st_size,
@@ -1247,10 +1247,10 @@ def validate_elf_header(path):
     with open(path, 'rb') as stream:
         header = stream.read(64)
     if len(header) < 64 or header[:4] != b'\x7fELF':
-        raise ManagerError('A native package file has an invalid ELF header.', 'native_invalid')
+        raise ManagerError('a native package file has an invalid elf header.', 'native_invalid')
     if header[4] != 2 or header[5] != 1 or struct.unpack_from('<H', header, 18)[0] != 62:
         raise ManagerError(
-            'A native package is not ELF64 little-endian x86-64.',
+            'a native package is not elf64 little-endian x86-64.',
             'native_architecture',
         )
     versions = []
@@ -1261,7 +1261,7 @@ def validate_elf_header(path):
     if versions and max(versions) > GLIBC_MAXIMUM:
         maximum = '.'.join(map(str, max(versions)))
         raise ManagerError(
-            f'A native package requires GLIBC {maximum}; T1OS provides 2.41.',
+            f'a native package requires glibc {maximum}; t1os provides 2.41.',
             'native_glibc',
         )
 
@@ -1271,27 +1271,27 @@ def elf_dynamic_layout(path, data=None):
     if data is None:
         data = Path(path).read_bytes()
     if len(data) < 64 or data[:6] != b'\x7fELF\x02\x01':
-        raise ManagerError('A native package has an invalid ELF layout.', 'native_invalid')
+        raise ManagerError('a native package has an invalid elf layout.', 'native_invalid')
     try:
         program_offset = struct.unpack_from('<Q', data, 32)[0]
         program_size = struct.unpack_from('<H', data, 54)[0]
         program_count = struct.unpack_from('<H', data, 56)[0]
     except struct.error as error:
-        raise ManagerError('A native package has a truncated ELF header.', 'native_invalid') from error
+        raise ManagerError('a native package has a truncated elf header.', 'native_invalid') from error
     if program_size < 56 or program_count > 4096:
-        raise ManagerError('A native package has an unsafe ELF program table.', 'native_invalid')
+        raise ManagerError('a native package has an unsafe elf program table.', 'native_invalid')
     loads = []
     dynamic = None
     interpreter = None
     for index in range(program_count):
         offset = program_offset + index * program_size
         if offset < 0 or offset + 56 > len(data):
-            raise ManagerError('A native package has a truncated ELF program table.', 'native_invalid')
+            raise ManagerError('a native package has a truncated elf program table.', 'native_invalid')
         kind, _, file_offset, virtual, _, file_size, memory_size, _ = struct.unpack_from(
             '<IIQQQQQQ', data, offset
         )
         if file_offset + file_size > len(data):
-            raise ManagerError('A native package maps data beyond the file.', 'native_invalid')
+            raise ManagerError('a native package maps data beyond the file.', 'native_invalid')
         if kind == 1:
             loads.append((virtual, file_offset, file_size, memory_size))
         elif kind == 2:
@@ -1299,24 +1299,24 @@ def elf_dynamic_layout(path, data=None):
         elif kind == 3:
             interpreter = (file_offset, file_size)
     if dynamic is None:
-        raise ManagerError('A native package has no dynamic table.', 'native_invalid')
+        raise ManagerError('a native package has no dynamic table.', 'native_invalid')
 
     entries = []
     dynamic_offset, dynamic_size = dynamic
     for offset in range(dynamic_offset, dynamic_offset + dynamic_size, 16):
         if offset + 16 > len(data):
-            raise ManagerError('A native package has a truncated dynamic table.', 'native_invalid')
+            raise ManagerError('a native package has a truncated dynamic table.', 'native_invalid')
         tag, value = struct.unpack_from('<QQ', data, offset)
         entries.append((tag, value))
         if tag == 0:
             break
     else:
-        raise ManagerError('A native package dynamic table is not terminated.', 'native_invalid')
+        raise ManagerError('a native package dynamic table is not terminated.', 'native_invalid')
     values = {}
     for tag, value in entries:
         values.setdefault(tag, []).append(value)
     if 5 not in values or 10 not in values:
-        raise ManagerError('A native package has no dynamic string table.', 'native_invalid')
+        raise ManagerError('a native package has no dynamic string table.', 'native_invalid')
     string_virtual = values[5][0]
     string_size = values[10][0]
     string_offset = None
@@ -1326,16 +1326,16 @@ def elf_dynamic_layout(path, data=None):
             break
     if string_offset is None or string_offset + string_size > len(data):
         raise ManagerError(
-            'A native package has a dynamic string table outside a loadable segment.',
+            'a native package has a dynamic string table outside a loadable segment.',
             'native_invalid',
         )
     for tag in (1, 14, 15, 29):
         for value in values.get(tag, []):
             if value >= string_size:
-                raise ManagerError('A native package has an invalid dynamic string.', 'native_invalid')
+                raise ManagerError('a native package has an invalid dynamic string.', 'native_invalid')
             start = string_offset + value
             if data.find(b'\0', start, string_offset + string_size) < 0:
-                raise ManagerError('A native package has an unterminated dynamic string.', 'native_invalid')
+                raise ManagerError('a native package has an unterminated dynamic string.', 'native_invalid')
     return {
         'data': data,
         'entries': entries,
@@ -1351,7 +1351,7 @@ def replace_needed_in_place(path, old_name, new_name):
     old = old_name.encode('ascii')
     new = new_name.encode('ascii')
     if len(new) > len(old):
-        raise ManagerError('A native dependency replacement is too long.', 'native_patch_failed')
+        raise ManagerError('a native dependency replacement is too long.', 'native_patch_failed')
     data = bytearray(Path(path).read_bytes())
     layout = elf_dynamic_layout(path, data)
     changed = False
@@ -1451,15 +1451,15 @@ def verify_distribution_record(site, distribution):
         record_text = distribution.read_text('RECORD')
         metadata_path = os.path.abspath(str(distribution._path))
     except Exception as error:
-        raise ManagerError('A wheel has no readable installation record.', 'record_missing') from error
+        raise ManagerError('a wheel has no readable installation record.', 'record_missing') from error
     if not record_text or not contained(metadata_path, site):
-        raise ManagerError('A wheel has an unsafe installation record.', 'record_invalid')
+        raise ManagerError('a wheel has an unsafe installation record.', 'record_invalid')
     owners = set()
     seen = set()
     record_file = os.path.join(metadata_path, 'RECORD')
     for row in csv.reader(io.StringIO(record_text)):
         if len(row) != 3 or not row[0]:
-            raise ManagerError('A wheel RECORD is malformed.', 'record_invalid')
+            raise ManagerError('a wheel record is malformed.', 'record_invalid')
         relative, encoded_hash, encoded_size = row
         owner_relative = relative.replace('\\', '/')
         # pip represents scripts with scheme-relative ../../bin paths even
@@ -1469,37 +1469,37 @@ def verify_distribution_record(site, distribution):
         if script_match:
             owner_relative = 'bin/' + script_match.group(1)
         elif owner_relative.startswith('../'):
-            raise ManagerError('A wheel RECORD escapes site-packages.', 'record_invalid')
+            raise ManagerError('a wheel record escapes site-packages.', 'record_invalid')
         candidate = os.path.realpath(os.path.join(site, owner_relative.replace('/', os.sep)))
         if not contained(candidate, site):
-            raise ManagerError('A wheel RECORD escapes site-packages.', 'record_invalid')
+            raise ManagerError('a wheel record escapes site-packages.', 'record_invalid')
         key = os.path.normcase(candidate)
         if key in seen:
-            raise ManagerError('A wheel RECORD repeats a path.', 'record_invalid')
+            raise ManagerError('a wheel record repeats a path.', 'record_invalid')
         seen.add(key)
         if os.path.normcase(candidate) == os.path.normcase(record_file):
             owners.add(os.path.relpath(candidate, site).replace(os.sep, '/'))
             continue
         if not encoded_hash or not encoded_size:
-            raise ManagerError('A wheel RECORD omits a file hash.', 'record_invalid')
+            raise ManagerError('a wheel record omits a file hash.', 'record_invalid')
         try:
             size = int(encoded_size)
             algorithm, value = encoded_hash.split('=', 1)
         except (ValueError, TypeError) as error:
-            raise ManagerError('A wheel RECORD hash is malformed.', 'record_invalid') from error
+            raise ManagerError('a wheel record hash is malformed.', 'record_invalid') from error
         if algorithm.lower() not in ('sha256', 'sha384', 'sha512'):
-            raise ManagerError('A wheel RECORD uses a weak hash.', 'record_invalid')
+            raise ManagerError('a wheel record uses a weak hash.', 'record_invalid')
         if not os.path.isfile(candidate) or os.path.islink(candidate):
-            raise ManagerError('A wheel RECORD file is missing.', 'record_invalid')
+            raise ManagerError('a wheel record file is missing.', 'record_invalid')
         if os.path.getsize(candidate) != size:
-            raise ManagerError('A wheel RECORD size does not match.', 'record_invalid')
+            raise ManagerError('a wheel record size does not match.', 'record_invalid')
         digest = hashlib.new(algorithm)
         with open(candidate, 'rb') as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b''):
                 digest.update(block)
         actual = base64.urlsafe_b64encode(digest.digest()).rstrip(b'=').decode('ascii')
         if actual != value:
-            raise ManagerError('A wheel RECORD hash does not match.', 'record_invalid')
+            raise ManagerError('a wheel record hash does not match.', 'record_invalid')
         owners.add(os.path.relpath(candidate, site).replace(os.sep, '/'))
     return metadata_path, owners
 
@@ -1508,14 +1508,14 @@ def validate_pth(path):
     try:
         lines = Path(path).read_text(encoding='utf-8').splitlines()
     except (OSError, UnicodeError) as error:
-        raise ManagerError('A package path file is unreadable.', 'startup_code_forbidden') from error
+        raise ManagerError('a package path file is unreadable.', 'startup_code_forbidden') from error
     for line in lines:
         value = line.strip()
         if not value or value.startswith('#'):
             continue
         if value.startswith(('import ', 'import\t')):
             raise ManagerError(
-                os.path.basename(path) + ' executes during Python startup and is not allowed.',
+                os.path.basename(path) + ' executes during python startup and is not allowed.',
                 'startup_code_forbidden',
             )
         if os.path.isabs(value) or '..' in value.replace('\\', '/').split('/'):
@@ -1528,7 +1528,7 @@ def validate_pth(path):
 def collect_staged_distributions(site, previous_state):
     distributions = distributions_at([site])
     if not distributions and any(Path(site).iterdir()):
-        raise ManagerError('Installed wheels contain no distribution metadata.', 'metadata_missing')
+        raise ManagerError('installed wheels contain no distribution metadata.', 'metadata_missing')
     packages = []
     owners = {}
     seen = set()
@@ -1541,10 +1541,10 @@ def collect_staged_distributions(site, previous_state):
     for distribution in distributions:
         name = normalise_name(distribution.metadata.get('Name'))
         if name in seen:
-            raise ManagerError('The resolver produced a duplicate package.', 'duplicate_module')
+            raise ManagerError('the resolver produced a duplicate package.', 'duplicate_module')
         if name in protected:
             raise ManagerError(
-                name + ' would replace an essential T1OS package.',
+                name + ' would replace an essential t1os package.',
                 'protected_collision',
             )
         seen.add(name)
@@ -1578,26 +1578,26 @@ def validate_staged_paths(site, owners, previous_state):
         lowered = relative.casefold()
         if lowered.endswith(DISALLOWED_SUFFIXES):
             raise ManagerError(
-                os.path.basename(relative) + ' is not supported by T1OS Python.',
+                os.path.basename(relative) + ' is not supported by t1os python.',
                 'startup_code_forbidden',
             )
         if lowered.endswith('.pth'):
             validate_pth(os.path.join(site, relative.replace('/', os.sep)))
         if prefix + relative in base_software and ('site', relative) not in managed_before:
             raise ManagerError(
-                relative + ' would replace protected system Python code.',
+                relative + ' would replace protected system python code.',
                 'protected_collision',
             )
         first = relative.split('/', 1)[0]
         stem = first[:-3] if first.endswith('.py') else first
         if stem in sys.stdlib_module_names or stem in DISALLOWED_TOP_LEVEL:
             raise ManagerError(
-                stem + ' would replace protected system Python code.',
+                stem + ' would replace protected system python code.',
                 'protected_collision',
             )
         if relative not in owners:
             raise ManagerError(
-                relative + ' is not owned by a wheel RECORD.',
+                relative + ' is not owned by a wheel record.',
                 'unowned_file',
             )
 
@@ -1620,7 +1620,7 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
         validate_elf_header(path)
         file_owners = set(owners.get(relative, ()))
         if not file_owners:
-            raise ManagerError('A native file has no package owner.', 'unowned_file')
+            raise ManagerError('a native file has no package owner.', 'unowned_file')
         if native_library_candidate(relative, path):
             old_names = {os.path.basename(relative)}
             soname = elf_soname(path)
@@ -1634,7 +1634,7 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
                 if any(name.encode('utf-8') in data for name in old_names):
                     raise ManagerError(
                         os.path.basename(relative)
-                        + ' is loaded by path and requires a T1OS compatibility recipe.',
+                        + ' is loaded by path and requires a t1os compatibility recipe.',
                         'native_recipe_required',
                     )
             digest = sha256(path)
@@ -1683,7 +1683,7 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
         if elf_dynamic_layout(path)['interpreter'] is not None:
             raise ManagerError(
                 os.path.basename(path)
-                + ' is a native executable and requires a T1OS compatibility recipe.',
+                + ' is a native executable and requires a t1os compatibility recipe.',
                 'native_recipe_required',
             )
         needed = elf_needed(path)
@@ -1691,14 +1691,14 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
             if old_name in needed:
                 if not replace_needed_in_place(path, old_name, new_name):
                     raise ManagerError(
-                        old_name + ' could not be merged safely into T1OS libc.',
+                        old_name + ' could not be merged safely into t1os libc.',
                         'native_patch_failed',
                     )
                 needed = [new_name if value == old_name else value for value in needed]
         patchelf(['--set-rpath', catalogue_path()], path, allow_empty=True)
         elf_dynamic_layout(path)
         if patchelf(['--print-rpath'], path, allow_empty=True) != catalogue_path():
-            raise ManagerError('A native package RUNPATH was not patched.', 'native_patch_failed')
+            raise ManagerError('a native package runpath was not patched.', 'native_patch_failed')
 
     providers = set()
     for provider_catalogue in provider_catalogues():
@@ -1726,7 +1726,7 @@ def patch_native_payload(site, catalogue_stage, owners, packages):
             unresolved[relative] = missing
     if unresolved:
         raise ManagerError(
-            'A native package has unresolved T1OS libraries.',
+            'a native package has unresolved t1os libraries.',
             'native_closure',
             {'unresolved': unresolved},
         )
@@ -1803,13 +1803,13 @@ def install_entry_points(site, bin_stage, distributions, owners):
                 continue
             command = str(entry.name or '').strip()
             if not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]{0,126}', command):
-                raise ManagerError('A package defines an unsafe command name.', 'unsafe_script')
+                raise ManagerError('a package defines an unsafe command name.', 'unsafe_script')
             module, separator, attribute = str(entry.value).partition(':')
             if not separator or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', module):
-                raise ManagerError('A package defines an unsupported console command.', 'unsafe_script')
+                raise ManagerError('a package defines an unsupported console command.', 'unsafe_script')
             attributes = [part for part in attribute.split('.') if part]
             if not attributes or any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', part) for part in attributes):
-                raise ManagerError('A package defines an unsupported console command.', 'unsafe_script')
+                raise ManagerError('a package defines an unsupported console command.', 'unsafe_script')
             destination = os.path.join(bin_stage, command)
             if os.path.exists(destination):
                 raise ManagerError(command + ' is provided by more than one package.', 'script_collision')
@@ -1918,7 +1918,7 @@ def finalise_metadata(
         actual = {item['path']: item for item in file_manifest(root)}
         if set(actual) != set(mapping):
             missing = sorted(set(actual) ^ set(mapping))
-            raise ManagerError('Package ownership is incomplete.', 'unowned_file', {'paths': missing[:50]})
+            raise ManagerError('package ownership is incomplete.', 'unowned_file', {'paths': missing[:50]})
         for relative, record in actual.items():
             file_records.append({
                 'area': area,
@@ -1930,7 +1930,7 @@ def finalise_metadata(
     catalogue_records = []
     actual_catalogue = {item['path']: item for item in file_manifest(catalogue_stage)}
     if set(actual_catalogue) != set(catalogue_owners):
-        raise ManagerError('Native catalogue ownership is incomplete.', 'unowned_file')
+        raise ManagerError('native catalogue ownership is incomplete.', 'unowned_file')
     for relative, record in actual_catalogue.items():
         catalogue_records.append({
             'path': relative,
@@ -1981,16 +1981,16 @@ def read_pylock(path):
         with open(path, 'rb') as stream:
             value = tomllib.load(stream)
     except (OSError, ValueError, TypeError) as error:
-        raise ManagerError('The Python lock file is unreadable — ' + str(error), 'lock_invalid') from error
+        raise ManagerError('the python lock file is unreadable — ' + str(error), 'lock_invalid') from error
     if not isinstance(value, dict) or int(value.get('format', 0)) != 1:
-        raise ManagerError('The Python lock file has an unsupported format.', 'lock_invalid')
+        raise ManagerError('the python lock file has an unsupported format.', 'lock_invalid')
     abi = f'cp{sys.version_info.major}{sys.version_info.minor}'
     if str(value.get('abi') or '') != abi:
-        raise ManagerError('The Python lock file is for another Python ABI.', 'lock_invalid')
+        raise ManagerError('the python lock file is for another python abi.', 'lock_invalid')
     requested = []
     for raw in value.get('requested', []):
         if not isinstance(raw, dict):
-            raise ManagerError('The Python lock file is malformed.', 'lock_invalid')
+            raise ManagerError('the python lock file is malformed.', 'lock_invalid')
         name = normalise_name(raw.get('name'))
         requested.append({
             'name': name,
@@ -2001,10 +2001,10 @@ def read_pylock(path):
     artifacts = []
     for raw in value.get('artifact', []):
         if not isinstance(raw, dict):
-            raise ManagerError('The Python lock file is malformed.', 'lock_invalid')
+            raise ManagerError('the python lock file is malformed.', 'lock_invalid')
         digest = str(raw.get('sha256') or '').lower()
         if not HASH.fullmatch(digest):
-            raise ManagerError('The Python lock file has an invalid hash.', 'lock_invalid')
+            raise ManagerError('the python lock file has an invalid hash.', 'lock_invalid')
         artifacts.append({
             'name': normalise_name(raw.get('name')),
             'version': exact_version(raw.get('version')),
@@ -2019,7 +2019,7 @@ def read_pylock(path):
             version = artifact_versions.get(item['name'])
             if not version:
                 raise ManagerError(
-                    'A local-wheel lock is missing its artifact.',
+                    'a local-wheel lock is missing its artifact.',
                     'lock_invalid')
             # Imported locks deliberately contain no privileged cache path.
             # Preserve the exact distribution version as an index request;
@@ -2036,10 +2036,10 @@ def locked_artifact_argument(item):
     url = str(item.get('url') or '')
     digest = str(item.get('sha256') or '').lower()
     if not HASH.fullmatch(digest):
-        raise ManagerError('A locked artifact hash is invalid.', 'lock_invalid')
+        raise ManagerError('a locked artifact hash is invalid.', 'lock_invalid')
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ('https', 'file'):
-        raise ManagerError('A locked artifact uses an unsafe URL.', 'lock_invalid')
+        raise ManagerError('a locked artifact uses an unsafe url.', 'lock_invalid')
     return url.split('#', 1)[0] + '#sha256=' + digest
 
 
@@ -2095,7 +2095,7 @@ def resolve_environment(requested, previous_state, locked_artifacts=None, operat
                 for item in locked_artifacts
             }
             if actual != expected:
-                raise ManagerError('The locked wheel set did not reproduce exactly.', 'lock_mismatch')
+                raise ManagerError('the locked wheel set did not reproduce exactly.', 'lock_mismatch')
         artifact_by_name = {item['name']: item for item in artifacts}
         requested_names = {normalise_name(item['name']) for item in requested}
         for package in packages:
@@ -2145,7 +2145,7 @@ def resolve_environment(requested, previous_state, locked_artifacts=None, operat
         problems = dependency_problems(system_modules + staged_modules(packages))
         if problems:
             raise ManagerError(
-                'The resolved packages have unsatisfied dependencies.',
+                'the resolved packages have unsatisfied dependencies.',
                 'dependency_conflict', {'problems': problems},
             )
         lock_path = os.path.join(root, 'pylock.toml')
@@ -2186,7 +2186,7 @@ def area_root(area):
     try:
         return roots[area]
     except KeyError as error:
-        raise ManagerError('Package state names an unknown installation area.', 'state_invalid') from error
+        raise ManagerError('package state names an unknown installation area.', 'state_invalid') from error
 
 
 def state_file_map(state):
@@ -2219,7 +2219,7 @@ def journal_write(path, value):
 def recover_transactions(_service=False):
     if not _service:
         raise ManagerError(
-            'Python transaction recovery is restricted to service startup.',
+            'python transaction recovery is restricted to service startup.',
             'operation_denied')
     ensure_store()
     live = load_state()
@@ -2251,7 +2251,7 @@ def recover_transactions(_service=False):
             expected = str(action.get('sha256') or '')
             if not os.path.isfile(target) or (expected and sha256(target) != expected):
                 raise ManagerError(
-                    'Interrupted Python transaction contains an unexpected live file — '
+                    'interrupted python transaction contains an unexpected live file — '
                     + relative, 'recovery_required',
                 )
             os.unlink(target)
@@ -2265,12 +2265,12 @@ def recover_transactions(_service=False):
                 expected = str(action.get('sha256') or '')
                 if expected and sha256(backup) != expected:
                     raise ManagerError(
-                        'Interrupted Python transaction backup is damaged — ' + relative,
+                        'interrupted python transaction backup is damaged — ' + relative,
                         'recovery_required',
                     )
                 if os.path.lexists(target):
                     raise ManagerError(
-                        'Interrupted Python transaction cannot restore — ' + relative,
+                        'interrupted python transaction cannot restore — ' + relative,
                         'recovery_required',
                     )
                 os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -2312,7 +2312,7 @@ def commit_environment(stage, operation):
         target = os.path.join(area_root(area), relative.replace('/', os.sep))
         if not os.path.isfile(target) or os.path.islink(target) or sha256(target) != record['sha256']:
             raise ManagerError(
-                relative + ' changed outside the Python module manager. Run repair or restore it first.',
+                relative + ' changed outside the python module manager. run repair or restore it first.',
                 'managed_file_changed',
             )
     for area, relative in new_files:
@@ -2335,7 +2335,7 @@ def commit_environment(stage, operation):
             source = os.path.join(stage[area], relative.replace('/', os.sep))
             target = os.path.join(area_root(area), relative.replace('/', os.sep))
             if not os.path.isfile(source) or sha256(source) != record['sha256']:
-                raise ManagerError('A staged package file changed before commit.', 'staging_changed')
+                raise ManagerError('a staged package file changed before commit.', 'staging_changed')
             os.makedirs(os.path.dirname(target), exist_ok=True)
             os.replace(source, target)
             journal['installed'].append({'area': area, 'path': relative})
@@ -2398,7 +2398,7 @@ def replace_environment(requested, operation, locked_artifacts=None):
             # failure. Preserve the package result and leave diagnostic detail
             # in the service log for recovery tooling.
             print(
-                f'> Python automatic cache cleanup failed — {error}',
+                f'> python automatic cache cleanup failed — {error}',
                 file=sys.stderr,
             )
         return state
@@ -2452,7 +2452,7 @@ def wheel_request(path):
         from pip._vendor.packaging.utils import parse_wheel_filename
         name, version, _, _ = parse_wheel_filename(os.path.basename(cached))
     except Exception as error:
-        raise ManagerError('The wheel filename is invalid.', 'wheel_invalid') from error
+        raise ManagerError('the wheel filename is invalid.', 'wheel_invalid') from error
     return {
         'name': normalise_name(str(name)),
         'requirement': normalise_name(str(name)),
@@ -2471,7 +2471,7 @@ def wheel_request_descriptor(descriptor, arguments):
         from pip._vendor.packaging.utils import parse_wheel_filename
         name, version, _, _ = parse_wheel_filename(os.path.basename(cached))
     except Exception as error:
-        raise ManagerError('The wheel filename is invalid.', 'wheel_invalid') from error
+        raise ManagerError('the wheel filename is invalid.', 'wheel_invalid') from error
     return {
         'name': normalise_name(str(name)),
         'requirement': normalise_name(str(name)),
@@ -2532,21 +2532,21 @@ def pypi_project(name):
     configuration = read_json(tools_configuration(), {}) or {}
     template = str(configuration.get('project_json_url') or PROJECT_JSON_URL)
     if template.count('{name}') != 1:
-        raise ManagerError('The Python project catalogue URL is invalid.', 'tool_invalid')
+        raise ManagerError('the python project catalogue url is invalid.', 'tool_invalid')
     url = template.replace('{name}', urllib.parse.quote(name))
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ('https', 'file') or parsed.username or parsed.password:
-        raise ManagerError('The Python project catalogue URL is unsafe.', 'tool_invalid')
+        raise ManagerError('the python project catalogue url is unsafe.', 'tool_invalid')
     request = urllib.request.Request(url, headers={'User-Agent': 'T1OS-Python/1'})
     try:
         with urllib.request.urlopen(request, timeout=30) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            raise ManagerError(name + ' was not found on PyPI.', 'module_missing') from error
-        raise ManagerError('PyPI could not be reached.', 'network_failed') from error
+            raise ManagerError(name + ' was not found on pypi.', 'module_missing') from error
+        raise ManagerError('pypi could not be reached.', 'network_failed') from error
     except (OSError, ValueError, urllib.error.URLError) as error:
-        raise ManagerError('PyPI could not be reached — ' + str(error), 'network_failed') from error
+        raise ManagerError('pypi could not be reached — ' + str(error), 'network_failed') from error
 
 
 def compatible_wheel(filename):
@@ -2617,13 +2617,13 @@ def op_preview_change(arguments):
     operation = str(arguments.get('change_operation') or '').strip()
     change_arguments = arguments.get('change_arguments', {})
     if not isinstance(change_arguments, dict):
-        raise ManagerError('The Python change preview is invalid.', 'invalid_arguments')
+        raise ManagerError('the python change preview is invalid.', 'invalid_arguments')
     allowed = {
         'install_module', 'remove_module', 'pin_module', 'unpin_module',
         'update_module', 'update_modules', 'repair_modules', 'restore_modules',
     }
     if operation not in allowed or frozenset(change_arguments) not in OPERATION_ARGUMENT_KEYS.get(operation, ()):
-        raise ManagerError('The Python change preview is invalid.', 'invalid_arguments')
+        raise ManagerError('the python change preview is invalid.', 'invalid_arguments')
     state, modules = installed_modules()
     installed = {item['name']: item for item in modules}
     changes = []
@@ -2640,7 +2640,7 @@ def op_preview_change(arguments):
             'from': str(current.get('version') or ''),
             'to': target,
         })
-        notes.append('Required dependencies will be resolved from compatible binary wheels.')
+        notes.append('required dependencies will be resolved from compatible binary wheels.')
     elif operation == 'remove_module':
         name = normalise_name(change_arguments.get('name'))
         current = installed.get(name)
@@ -2650,7 +2650,7 @@ def op_preview_change(arguments):
             'action': 'remove', 'name': current['display_name'],
             'from': current['version'], 'to': '',
         })
-        notes.append('Dependencies no longer required by another module will also be removed.')
+        notes.append('dependencies no longer required by another module will also be removed.')
     elif operation == 'update_module':
         name = normalise_name(change_arguments.get('name'))
         current = installed.get(name)
@@ -2680,10 +2680,10 @@ def op_preview_change(arguments):
                     'from': item['installed'], 'to': item['latest'],
                 })
         if not changes:
-            notes.append('Every requested module is already current or pinned.')
+            notes.append('every requested module is already current or pinned.')
     elif operation == 'repair_modules':
         changes.append({'action': 'repair', 'name': 'managed modules', 'from': '', 'to': ''})
-        notes.append('Every managed file will be rebuilt from the exact current lock.')
+        notes.append('every managed file will be rebuilt from the exact current lock.')
     elif operation == 'restore_modules':
         previous = load_state(previous_path())
         changes.append({
@@ -2691,19 +2691,19 @@ def op_preview_change(arguments):
             'from': str(len(state.get('packages', []))),
             'to': str(len(previous.get('packages', []))),
         })
-        notes.append('The immediately previous committed module set will become active.')
+        notes.append('the immediately previous committed module set will become active.')
     return {
         'change_operation': operation,
         'change_arguments': dict(change_arguments),
         'changes': changes,
         'notes': notes,
-        'message': 'Review the Python module change.',
+        'message': 'review the python module change.',
     }
 
 
 def op_install_module(arguments):
     state = replace_environment(requested_for_install(arguments), 'install')
-    return operation_result(state, 'Python module installed.')
+    return operation_result(state, 'python module installed.')
 
 
 def op_install_wheel(arguments, descriptor):
@@ -2712,7 +2712,7 @@ def op_install_wheel(arguments, descriptor):
     item = wheel_request_descriptor(descriptor, arguments)
     mapping[item['name']] = item
     result = replace_environment(list(mapping.values()), 'install wheel')
-    return operation_result(result, 'Python wheel installed.')
+    return operation_result(result, 'python wheel installed.')
 
 
 def change_requested(name, action):
@@ -2745,22 +2745,22 @@ def change_requested(name, action):
 
 def op_remove_module(arguments):
     state = replace_environment(change_requested(arguments.get('name'), 'remove'), 'remove')
-    return operation_result(state, 'Python module removed.')
+    return operation_result(state, 'python module removed.')
 
 
 def op_pin_module(arguments):
     state = replace_environment(change_requested(arguments.get('name'), 'pin'), 'pin')
-    return operation_result(state, 'Python module pinned.')
+    return operation_result(state, 'python module pinned.')
 
 
 def op_unpin_module(arguments):
     state = replace_environment(change_requested(arguments.get('name'), 'unpin'), 'unpin')
-    return operation_result(state, 'Python module unpinned.')
+    return operation_result(state, 'python module unpinned.')
 
 
 def op_update_module(arguments):
     state = replace_environment(change_requested(arguments.get('name'), 'update'), 'update')
-    return operation_result(state, 'Python module updated.')
+    return operation_result(state, 'python module updated.')
 
 
 def op_update_modules(arguments):
@@ -2774,7 +2774,7 @@ def op_update_modules(arguments):
             item['requirement'] = item['name']
         requested.append(item)
     result = replace_environment(requested, 'update all')
-    return operation_result(result, 'Python modules updated.')
+    return operation_result(result, 'python modules updated.')
 
 
 def op_repair_modules(arguments):
@@ -2782,7 +2782,7 @@ def op_repair_modules(arguments):
     result = replace_environment(
         state.get('requested', []), 'repair', state.get('artifacts', []),
     )
-    return operation_result(result, 'Python modules repaired from their exact lock.')
+    return operation_result(result, 'python modules repaired from their exact lock.')
 
 
 def op_restore_modules(arguments):
@@ -2790,14 +2790,14 @@ def op_restore_modules(arguments):
     result = replace_environment(
         previous.get('requested', []), 'restore', previous.get('artifacts', []),
     )
-    return operation_result(result, 'The previous Python module set was restored.')
+    return operation_result(result, 'the previous python module set was restored.')
 
 
 def op_check_modules(arguments):
     state = load_state()
     problems = state_health(state)
     if problems:
-        raise ManagerError('Python module verification failed.', 'check_failed', {'problems': problems})
+        raise ManagerError('python module verification failed.', 'check_failed', {'problems': problems})
     return {
         'files': len(state.get('files', [])) + len(state.get('catalogue_files', [])),
         'packages': len(state.get('packages', [])),
@@ -2811,7 +2811,7 @@ def op_history(arguments):
 
 def op_export_lock(arguments):
     if arguments:
-        raise ManagerError('Python lock export takes no path.', 'invalid_arguments')
+        raise ManagerError('python lock export takes no path.', 'invalid_arguments')
     state = load_state()
     with tempfile.TemporaryDirectory(
             prefix='t1os-pylock-export-', dir=management_root()) as directory:
@@ -2820,12 +2820,12 @@ def op_export_lock(arguments):
         with open(path, 'rb') as stream:
             content = stream.read(1024 * 1024 + 1)
     if len(content) > 1024 * 1024:
-        raise ManagerError('Python lock export is too large.', 'response_too_large')
+        raise ManagerError('python lock export is too large.', 'response_too_large')
     return {
         'content': base64.b64encode(content).decode('ascii'),
         'sha256': hashlib.sha256(content).hexdigest(),
         'encoding': 'base64',
-        'message': 'Python lock prepared for the requesting application.',
+        'message': 'python lock prepared for the requesting application.',
     }
 
 
@@ -2839,7 +2839,7 @@ def op_apply_lock(arguments, descriptor):
         atomic_bytes(path, content, mode=0o600)
         requested, artifacts = read_pylock(path)
     result = replace_environment(requested, 'apply lock', artifacts)
-    return operation_result(result, 'Python lock applied.')
+    return operation_result(result, 'python lock applied.')
 
 
 def prune_unused_cache():
@@ -2861,7 +2861,7 @@ def prune_unused_cache():
 
 def op_clear_cache(arguments):
     removed = prune_unused_cache()
-    return {'removed': removed, 'message': 'Unused Python downloads cleared.'}
+    return {'removed': removed, 'message': 'unused python downloads cleared.'}
 
 
 OPERATIONS = {
@@ -2924,26 +2924,26 @@ OPERATION_ARGUMENT_KEYS = {
 
 def dispatch(request, peer, descriptors=None):
     if not isinstance(request, dict) or int(request.get('format', 0)) != PROTOCOL:
-        raise ManagerError('The Python manager request is unsupported.', 'unsupported_request')
+        raise ManagerError('the python manager request is unsupported.', 'unsupported_request')
     operation = str(request.get('operation') or '').strip()
     arguments = request.get('arguments', {})
     if operation not in OPERATIONS or not isinstance(arguments, dict):
-        raise ManagerError('The Python manager operation is unknown.', 'unknown_operation')
+        raise ManagerError('the python manager operation is unknown.', 'unknown_operation')
     if frozenset(arguments) not in OPERATION_ARGUMENT_KEYS.get(operation, ()):
-        raise ManagerError('The Python manager arguments are invalid.', 'invalid_arguments')
+        raise ManagerError('the python manager arguments are invalid.', 'invalid_arguments')
     descriptors = list(descriptors or [])
     if operation in DESCRIPTOR_OPERATIONS:
         if len(descriptors) != 1:
             raise ManagerError(
-                'This operation requires exactly one file descriptor.',
+                'this operation requires exactly one file descriptor.',
                 'descriptor_required')
     elif descriptors:
-        raise ManagerError('This operation does not accept file descriptors.',
+        raise ManagerError('this operation does not accept file descriptors.',
                            'unexpected_descriptor')
     if operation in MUTATION_OPERATIONS:
         require_trusted_mutation_peer(peer)
     elif operation not in READ_OPERATIONS:
-        raise ManagerError('The Python manager operation is denied.', 'operation_denied')
+        raise ManagerError('the python manager operation is denied.', 'operation_denied')
     try:
         if operation in DESCRIPTOR_OPERATIONS:
             data = OPERATIONS[operation](arguments, descriptors[0])
@@ -2973,7 +2973,7 @@ def error_response(error, operation=''):
     else:
         code = 'internal_error'
         data = {}
-        message = 'The Python manager encountered an internal error.'
+        message = 'the python manager encountered an internal error.'
         log(traceback.format_exc().rstrip())
     return {
         'format': PROTOCOL, 'ok': False, 'operation': str(operation),
@@ -3048,25 +3048,25 @@ def receive_request(channel):
                     detail, sort_keys=True, separators=(',', ':')))
                 truncation = detail
             if len(descriptors) > 4:
-                raise ManagerError('Too many file descriptors were supplied.',
+                raise ManagerError('too many file descriptors were supplied.',
                                    'unexpected_descriptor')
             if not block:
                 break
             payload.extend(block)
             if len(payload) > MAXIMUM_REQUEST:
-                raise ManagerError('The Python manager request is too large.',
+                raise ManagerError('the python manager request is too large.',
                                    'request_too_large')
         line, separator, remainder = bytes(payload).partition(b'\n')
         if not line:
-            raise ManagerError('The Python manager request is empty.',
+            raise ManagerError('the python manager request is empty.',
                                'empty_request')
         if not separator:
-            raise ManagerError('The Python manager request is incomplete.',
+            raise ManagerError('the python manager request is incomplete.',
                                'short_request')
         try:
             request = json.loads(line.decode('utf-8'))
         except (UnicodeError, ValueError, TypeError) as error:
-            raise ManagerError('The Python manager request is invalid.',
+            raise ManagerError('the python manager request is invalid.',
                                'invalid_request') from error
         operation = str(request.get('operation') or '') if isinstance(request, dict) else ''
         if operation == 'apply_lock' and not descriptors:
@@ -3074,19 +3074,19 @@ def receive_request(channel):
             try:
                 expected = int(arguments.get('size', -1))
             except (AttributeError, TypeError, ValueError) as error:
-                raise ManagerError('The Python lock stream size is invalid.',
+                raise ManagerError('the python lock stream size is invalid.',
                                    'invalid_arguments') from error
             if expected <= 0 or expected > 1024 * 1024:
-                raise ManagerError('The Python lock stream size is invalid.',
+                raise ManagerError('the python lock stream size is invalid.',
                                    'invalid_arguments')
             content = bytearray(remainder)
             if len(content) > expected:
-                raise ManagerError('The Python lock stream is too large.',
+                raise ManagerError('the python lock stream is too large.',
                                    'request_too_large')
             while len(content) < expected:
                 block = channel.recv(min(65536, expected - len(content)))
                 if not block:
-                    raise ManagerError('The Python lock stream ended early.',
+                    raise ManagerError('the python lock stream ended early.',
                                        'short_request')
                 content.extend(block)
             with tempfile.TemporaryFile(
@@ -3098,7 +3098,7 @@ def receive_request(channel):
                 descriptors.append(os.dup(stream.fileno()))
         elif truncation is not None and not descriptors:
             raise ManagerError(
-                'The Python manager descriptor was truncated.',
+                'the python manager descriptor was truncated.',
                 'ancillary_truncated', truncation)
         return request, descriptors
     except BaseException:
@@ -3128,7 +3128,7 @@ def handle_client(channel, peer):
     encoded = (json.dumps(response, sort_keys=True, separators=(',', ':')) + '\n').encode('utf-8')
     if len(encoded) > MAXIMUM_RESPONSE:
         encoded = (json.dumps(error_response(
-            ManagerError('The Python manager response is too large.', 'response_too_large'),
+            ManagerError('the python manager response is too large.', 'response_too_large'),
             operation,
         ), separators=(',', ':')) + '\n').encode('utf-8')
     try:
@@ -3152,7 +3152,7 @@ def prepare_socket_directory(directory):
     parent = os.path.dirname(directory)
     name = os.path.basename(directory)
     if not name or name in ('.', '..'):
-        raise ManagerError('The Python manager socket directory is unsafe.',
+        raise ManagerError('the python manager socket directory is unsafe.',
                            'unsafe_socket')
 
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
@@ -3169,7 +3169,7 @@ def prepare_socket_directory(directory):
         if (not stat.S_ISDIR(parent_status.st_mode) or
                 (not trusted_ephemeral and
                  (parent_status.st_uid != 0 or parent_mode & 0o022))):
-            raise ManagerError('The Python manager socket parent is unsafe.',
+            raise ManagerError('the python manager socket parent is unsafe.',
                                'unsafe_socket')
         try:
             os.mkdir(name, mode=0o710, dir_fd=parent_descriptor)
@@ -3179,7 +3179,7 @@ def prepare_socket_directory(directory):
             name, dir_fd=parent_descriptor, follow_symlinks=False)
         if (not stat.S_ISDIR(child_status.st_mode) or
                 child_status.st_uid != 0):
-            raise ManagerError('The Python manager socket directory is unsafe.',
+            raise ManagerError('the python manager socket directory is unsafe.',
                                'unsafe_socket')
         child_descriptor = os.open(
             name, flags | nofollow, dir_fd=parent_descriptor)
@@ -3201,7 +3201,7 @@ def serve():
     if os.path.lexists(path):
         status = os.lstat(path)
         if not stat.S_ISSOCK(status.st_mode):
-            raise ManagerError('The Python manager socket path is unsafe.', 'unsafe_socket')
+            raise ManagerError('the python manager socket path is unsafe.', 'unsafe_socket')
         os.unlink(path)
     listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
@@ -3267,9 +3267,9 @@ def selected_entry_point(command):
         matches.extend(importlib.metadata.entry_points(group=group, name=command))
     if len(matches) != 1:
         if not matches:
-            raise RuntimeError(command + ' is not an installed Python command.')
+            raise RuntimeError(command + ' is not an installed python command.')
         raise RuntimeError(
-            command + ' is provided by more than one Python package.')
+            command + ' is provided by more than one python package.')
     return matches[0]
 
 
@@ -3278,7 +3278,7 @@ def entry_point_main(argv=None):
 
     values = list(sys.argv[1:] if argv is None else argv)
     if not values:
-        print('T1OS Python command — missing command name', file=sys.stderr)
+        print('t1os python command — missing command name', file=sys.stderr)
         return 126
     command = os.path.basename(values.pop(0))
     sys.argv = [command, *values]
@@ -3287,7 +3287,7 @@ def entry_point_main(argv=None):
         result = entry()
         return int(result) if isinstance(result, int) else 0
     except Exception as error:
-        print('T1OS Python command — ' + str(error), file=sys.stderr)
+        print('t1os python command — ' + str(error), file=sys.stderr)
         return 1
 
 
@@ -3299,7 +3299,7 @@ def main(argv=None):
         return diagnostic()
     if values:
         print(
-            'Use python.py with no arguments, python.py diagnostic, or the '
+            'use python.py with no arguments, python.py diagnostic, or the '
             'locked entry-point launcher.',
             file=sys.stderr,
         )

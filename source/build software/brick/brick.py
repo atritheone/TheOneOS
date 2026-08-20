@@ -27,6 +27,7 @@ import base64
 import difflib
 import ctypes
 import socket
+import ipaddress
 import signal
 import atexit
 import selectors
@@ -35,6 +36,8 @@ import subprocess
 import codecs
 import struct
 import unicodedata
+import datetime
+import zoneinfo
 from pyroute2 import IPRoute
 from collections import deque
 try:
@@ -76,14 +79,57 @@ import rubbish.rubbish as rubbishapi
 _prefer_source_build()
 from operations.operations import (
     PowerRequestError,
+    addstartupoperation,
+    changestartupoperation,
+    listcatalogueapplications,
+    removestartupoperation,
     requestpower,
     requestsessionlogout,
     runoperation,
+    settings_account_get,
+    settings_hostname_set,
+    settings_master_update,
+    settings_time_set,
+    startupoperations,
 )
 _prefer_source_build()
 from python.python import PythonManagerError, request as pythonrequest
 
 BRICKVMTESTSTATUSPATH = '/.ephemeral/brick-vm-test.json'
+BRICKNETWORKDIR = os.environ.get(
+    'T1OS_NETWORK_SETTINGS', '/the one/settings/network')
+BRICKNETWORKFILE = os.path.join(BRICKNETWORKDIR, 'network.txt')
+BRICKDNSFILE = os.path.join(BRICKNETWORKDIR, 'dns.txt')
+BRICKNETWORKSTATE = os.environ.get(
+    'T1OS_NETWORK_STATE', '/.ephemeral/network/connection.json')
+BRICKFIREWALLSTATE = os.environ.get(
+    'T1OS_FIREWALL_STATE', '/.ephemeral/network/firewall.json')
+BRICKWIRELESSSTATE = os.environ.get(
+    'T1OS_WIRELESS_SCAN_STATE', '/.ephemeral/network/wireless.json')
+BRICKWIRELESSREQUEST = os.environ.get(
+    'T1OS_WIRELESS_SCAN_REQUEST', '/.ephemeral/network/scan.request')
+BRICKNETWORKREQUEST = os.environ.get(
+    'T1OS_NETWORK_RECONFIGURE', '/.ephemeral/network/reconfigure.request')
+BRICKNETSTATE = os.environ.get('T1OS_NET_STATE', '/sys/class/net')
+BRICKDRIVERSTATE = os.environ.get(
+    'T1OS_DRIVER_STATUS', '/.ephemeral/drivers/status.json')
+BRICKDRIVEMODULESTATE = os.environ.get(
+    'T1OS_DRIVER_MODULE_STATE', '/the one/drivers/state/module')
+BRICKTIMEZONEDIR = os.environ.get(
+    'T1OS_TIMEZONE_DIRECTORY', '/the one/software/chromium/resources/zoneinfo')
+BRICKTIMEZONEFILE = os.environ.get(
+    'T1OS_TIMEZONE_FILE', '/the one/settings/time/timezone.txt')
+BRICKINTERNETTIMEFILE = os.environ.get(
+    'T1OS_INTERNET_TIME_FILE', '/the one/settings/time/internet.txt')
+BRICKVIRTUALBOXTIMEFILE = os.environ.get(
+    'T1OS_VIRTUALBOX_TIME_FILE', '/the one/settings/time/virtualbox.txt')
+BRICKTERMINALNAMEFILE = os.environ.get(
+    'T1OS_TERMINAL_NAME_FILE', '/the one/settings/terminal/name.txt')
+BRICKMASTERSETTINGSFILE = os.environ.get(
+    'T1OS_MASTER_SETTINGS_FILE', '/the one/settings/master/settings.json')
+BRICKRUBBISHINDEX = os.environ.get(
+    'T1OS_RUBBISH_INDEX', '/.rubbish/index.txt')
+ATREYANSTARTYEAR = 2021
 
 
 def writebrickvmteststatus(stage, **detail):
@@ -313,7 +359,7 @@ HISTFILE = '/the one/settings/brick/.brick_history'
 
 # Numeric drive locations are public (for example, 2/); their Linux mount
 # targets remain private beneath the ephemeral runtime.
-DRIVES = {1: {'number': 1, 'root': '/', 'label': 'T1OS', 'removable': False}}
+DRIVES = {1: {'number': 1, 'root': '/', 'label': 't1os', 'removable': False}}
 DRIVELASTSCAN = 0.0
 DRIVESCANINTERVAL = 2.0
 DRIVEBACKINGROOT = '/.ephemeral/volumes'
@@ -2378,7 +2424,7 @@ def graphicsbuildconsole(commands, clip):
             graphicsrect(overlays_out, x, y + CURSOR_Y_OFFSET, SPACEW, CURSORH, CURSORCOLOUR, contentclip)
 
     if isinstance(session, dict) and session.get('stopped'):
-        label = 'paused — Ctrl+Q continues'
+        label = 'paused — ctrl+q continues'
         labelx = max(geometry['x'], geometry['x'] + geometry['width'] - len(label) * SPACEW)
         graphicstext(texts_out, labelx, geometry['y'], label, SUGGESTCOLOUR, graphicsfont(), contentclip)
 
@@ -2426,7 +2472,7 @@ def drawconsole(cursor_on):
         else:
             drawcursor(x, y)
     if isinstance(session, dict) and session.get('stopped'):
-        label = 'paused — Ctrl+Q continues'
+        label = 'paused — ctrl+q continues'
         labelx = max(geometry['x'], geometry['x'] + geometry['width'] - len(label) * SPACEW)
         drawtextline(labelx, geometry['y'], label, colour=SUGGESTCOLOUR)
 
@@ -2906,7 +2952,11 @@ def loaddrives(force=False):
         return False
 
     old = dict(DRIVES)
-    found = {1: {'number': 1, 'root': '/', 'label': 'T1OS', 'removable': False}}
+    found = {1: {
+        'number': 1, 'root': '/', 'label': 't1os', 'removable': False,
+        'read_only': False, 'filesystem': '', 'source': '', 'device': '',
+        'uuid': '',
+    }}
     usedroots = {'/'}
     metadata = {}
 
@@ -2973,6 +3023,11 @@ def loaddrives(force=False):
                 or f'drive {number}'
             ),
             'removable': bool(metadata.get(root, {}).get('removable', entry.get('removable', True))),
+            'read_only': bool(metadata.get(root, {}).get('read_only', False)),
+            'filesystem': str(metadata.get(root, {}).get('filesystem', '')),
+            'source': str(metadata.get(root, {}).get('source', '')),
+            'device': str(metadata.get(root, {}).get('device', '')),
+            'uuid': str(metadata.get(root, {}).get('uuid', '')),
         }
         usedroots.add(root)
 
@@ -3008,6 +3063,11 @@ def loaddrives(force=False):
                 or f'drive {number}'
             ),
             'removable': bool(metadata.get(root, {}).get('removable', True)),
+            'read_only': bool(metadata.get(root, {}).get('read_only', False)),
+            'filesystem': str(metadata.get(root, {}).get('filesystem', '')),
+            'source': str(metadata.get(root, {}).get('source', '')),
+            'device': str(metadata.get(root, {}).get('device', '')),
+            'uuid': str(metadata.get(root, {}).get('uuid', '')),
         }
         usedroots.add(root)
         number += 1
@@ -3158,6 +3218,149 @@ def displaytimestamp(value):
         return str(value)
 
 
+def lowertext(value):
+
+    return str(value if value is not None else '').lower()
+
+
+def lowerrows(records):
+
+    return [
+        [lowertext(value) for value in row]
+        for row in records
+    ]
+
+
+def formatbytes(value):
+
+    try:
+        amount = max(0.0, float(value))
+    except (TypeError, ValueError):
+        return 'unavailable'
+    units = ('bytes', 'kb', 'mb', 'gb', 'tb', 'pb')
+    index = 0
+    while amount >= 1024.0 and index < len(units) - 1:
+        amount /= 1024.0
+        index += 1
+    if index == 0:
+        return '{} {}'.format(int(amount), units[index])
+    return '{:.1f} {}'.format(amount, units[index])
+
+
+def formatpercent(value):
+
+    try:
+        return '{:.1f}%'.format(float(value))
+    except (TypeError, ValueError):
+        return 'unavailable'
+
+
+def drivemountinformation(root):
+
+    requested = physicalnormalize(root)
+    try:
+        with open('/the one/drivers/processes/self/mounts', 'r',
+                  encoding='utf-8', errors='replace') as stream:
+            for line in stream:
+                fields = line.split()
+                if len(fields) < 4:
+                    continue
+                target = physicalnormalize(fields[1].replace('\\040', ' '))
+                if target != requested:
+                    continue
+                options = fields[3].split(',')
+                return {
+                    'source': fields[0].replace('\\040', ' '),
+                    'filesystem': fields[2],
+                    'read_only': 'ro' in options,
+                }
+    except OSError:
+        pass
+    return {}
+
+
+def drivespace(root):
+
+    try:
+        state = os.statvfs(root)
+        total = int(state.f_blocks) * int(state.f_frsize)
+        available = int(state.f_bavail) * int(state.f_frsize)
+        return total, available
+    except OSError:
+        return None, None
+
+
+def listdrives(args=None):
+
+    if args:
+        guiprint('> list drives does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    loaddrives(force=True)
+    records = []
+    for number, drive in sorted(DRIVES.items()):
+        root = str(drive.get('root') or '')
+        mounted = drivemountinformation(root)
+        total, available = drivespace(root)
+        records.append([
+            str(number),
+            drive.get('label', ''),
+            drive.get('filesystem') or mounted.get('filesystem') or 'unknown',
+            formatbytes(total),
+            formatbytes(available),
+            'yes' if os.path.isdir(root) else 'no',
+            'yes' if drive.get('removable') else 'no',
+            'yes' if drive.get('read_only', mounted.get('read_only', False)) else 'no',
+        ])
+    guiprint()
+    showtable(
+        ['drive', 'label', 'filesystem', 'capacity', 'available',
+         'online', 'removable', 'read only'],
+        lowerrows(records))
+    guiprint()
+    return 0
+
+
+def drivedetails(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter one drive number after the drive details directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    try:
+        number = int(str(args[0]).rstrip('/'))
+    except (TypeError, ValueError):
+        guiprint('> the drive number is invalid', colour=ERRORCOLOUR)
+        return 1
+    loaddrives(force=True)
+    drive = DRIVES.get(number)
+    if drive is None:
+        guiprint('> drive {} is not available'.format(number),
+                 colour=ERRORCOLOUR)
+        return 1
+    root = str(drive.get('root') or '')
+    mounted = drivemountinformation(root)
+    total, available = drivespace(root)
+    records = [
+        ['drive', str(number)],
+        ['label', drive.get('label', '')],
+        ['location', str(number) + '/'],
+        ['source', drive.get('source') or mounted.get('source') or 'managed by t1os'],
+        ['device', drive.get('device') or 'unavailable'],
+        ['filesystem', drive.get('filesystem') or mounted.get('filesystem') or 'unknown'],
+        ['uuid', drive.get('uuid') or 'unavailable'],
+        ['capacity', formatbytes(total)],
+        ['available', formatbytes(available)],
+        ['online', 'yes' if os.path.isdir(root) else 'no'],
+        ['removable', 'yes' if drive.get('removable') else 'no'],
+        ['read only', 'yes' if drive.get(
+            'read_only', mounted.get('read_only', False)) else 'no'],
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(records))
+    guiprint()
+    return 0
+
+
 def pathcandidates(fragment):
 
     try:
@@ -3253,7 +3456,7 @@ def completeonce():
         if segment.startswith('help '):
 
             prefix = segment[5:]
-            choices = set(listcommands()) | set(DIRECTIVECATEGORIES)
+            choices = set(DIRECTIVECATEGORIES)
             cands = sorted([name for name in choices if name.startswith(prefix)])
             wstart = segmentstart + 5
             mode = 'cmd'
@@ -3427,10 +3630,13 @@ def savehistory():
             for l in HIST[-HISTMAX:]:
                 f.write(l + '\n')
 
+        return True
+
     except Exception as e:
 
         # history save error
-        guiprint(f'> error saving history {e}', colour=ERRORCOLOUR)
+        guiprint(f'> error saving history {lowertext(e)}', colour=ERRORCOLOUR)
+        return False
 
 
 def addhistory(line):
@@ -3457,6 +3663,52 @@ def addhistory(line):
 
         # history add error
         guiprint(f'> error adding history {e}', colour=ERRORCOLOUR)
+
+
+def historydir(args=None):
+
+    values = list(args or [])
+    if len(values) > 1:
+        guiprint('> history accepts one optional count', colour=ERRORCOLOUR)
+        return 1
+    count = len(HIST)
+    if values:
+        try:
+            count = int(values[0])
+        except (TypeError, ValueError):
+            guiprint('> history count must be a number', colour=ERRORCOLOUR)
+            return 1
+        if count < 1:
+            guiprint('> history count must be at least one', colour=ERRORCOLOUR)
+            return 1
+    selected = HIST[-min(count, len(HIST)):] if HIST else []
+    start = max(1, len(HIST) - len(selected) + 1)
+    guiprint()
+    if selected:
+        showtable(
+            ['number', 'directive'],
+            lowerrows([[str(start + index), line]
+                       for index, line in enumerate(selected)]))
+    else:
+        guiprint('> directive history is empty', colour=TEXTCOLOUR)
+    guiprint()
+    return 0
+
+
+def clearhistory(args=None):
+
+    global HISTPOS
+    if args:
+        guiprint('> clear history does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    previous = list(HIST)
+    HIST.clear()
+    HISTPOS = None
+    if not savehistory():
+        HIST.extend(previous)
+        return 1
+    guiprint('> directive history cleared', colour=TEXTCOLOUR)
+    return 0
 
 
 def historystep(delta):
@@ -6283,9 +6535,9 @@ def opscompletepid(pid, exitcode):
         return False
 
 
-def opslistrequest():
+def opslistrequest(resources=False):
 
-    response = opsrequest({'op': 'LIST'})
+    response = opsrequest({'op': 'LIST', 'resources': bool(resources)})
 
     if not response or response.get('status') != 'ok':
         return None
@@ -6323,9 +6575,9 @@ def opswait(pid, timeout=60.0):
         return None
 
 
-def operationdata():
+def operationdata(resources=False):
 
-    response = opslistrequest()
+    response = opslistrequest(resources=resources)
 
     if response is None:
         return {}, {}
@@ -7118,7 +7370,7 @@ def graphicsrestorecpu():
     except Exception as e:
 
         try:
-            print(formatlog('brick', f'error restoring CPU graphics {e}'))
+            print(formatlog('brick', f'error restoring cpu graphics {e}'))
         except Exception:
             pass
 
@@ -13014,7 +13266,7 @@ def version(args=None):
     guiprint()
 
     # T1OS version line
-    guiprint(f'> The One OS version {OSVERSION}', colour=TEXTCOLOUR)
+    guiprint(f'> the one os version {OSVERSION}', colour=TEXTCOLOUR)
 
     # line below
     guiprint()
@@ -13242,7 +13494,7 @@ def architectdir(args=None):
     return {
         'ok': True,
         'authorization': 'trusted application',
-        'message': 'Protected actions request one-time authorisation.',
+        'message': 'protected actions request one-time authorisation.',
     }
 
 
@@ -13346,118 +13598,60 @@ def timedir(args=None):
 def help(args=None):
 
     try:
-
-        if DIRECTIVESPECS:
-
-            requested = ' '.join([str(arg) for arg in (args or [])]).strip().casefold()
-
-            if requested:
-
-                matches = []
-
-                for spec in DIRECTIVESPECS:
-
-                    names = [spec.get('name', '')] + list(spec.get('aliases', []))
-
-                    if requested in [str(name).casefold() for name in names]:
-                        matches.append(spec)
-
-                if not matches:
-
-                    category = None
-
-                    for name in DIRECTIVECATEGORIES:
-
-                        if requested == str(name).casefold():
-                            category = name
-                            break
-
-                    if category:
-
-                        records = []
-
-                        for spec in DIRECTIVESPECS:
-
-                            if spec.get('category') != category:
-                                continue
-
-                            aliases = ', '.join(spec.get('aliases', []))
-                            usage = spec.get('usages', [''])
-                            records.append([
-                                str(spec.get('name', '')),
-                                aliases,
-                                str(spec.get('description', '')),
-                                str(usage[0] if usage else ''),
-                            ])
-
-                        guiprint()
-                        guiprint(f'{category} directives', colour=TEXTCOLOUR, bold=True)
-                        guiprint()
-                        showtable(['directive', 'aliases', 'description', 'usage'], records)
-                        guiprint()
-                        return 0
-
-                    guiprint(f'> no help for {requested}', colour=ERRORCOLOUR)
-                    return 1
-
-                spec = matches[0]
-                guiprint()
-                guiprint(str(spec.get('name', '')), colour=TEXTCOLOUR, bold=True)
-                guiprint(str(spec.get('description', '')), colour=TEXTCOLOUR)
-                guiprint(f"> category {spec.get('category', '')}", colour=TEXTCOLOUR)
-
-                aliases = list(spec.get('aliases', []))
-
-                if aliases:
-                    guiprint(f"> aliases {', '.join(aliases)}", colour=TEXTCOLOUR)
-
-                grammar = dict(spec.get('grammar', {}))
-                connectors = list(grammar.get('connectors', []))
-                terms = list(grammar.get('terms', []))
-
-                if connectors:
-                    guiprint(f"> connectors {', '.join(connectors)}", colour=TEXTCOLOUR)
-
-                if terms:
-                    guiprint(f"> terms {', '.join(terms)}", colour=TEXTCOLOUR)
-
-                guiprint()
-
-                for usage in spec.get('usages', []):
-                    guiprint(str(usage), colour=TEXTCOLOUR)
-
-                guiprint()
-                return 0
-
-            guiprint('> available directives', colour=TEXTCOLOUR)
-            guiprint('> use help <category> or help <directive> for detailed usage', colour=TEXTCOLOUR)
-
-            for category in DIRECTIVECATEGORIES:
-
-                records = []
-
-                for spec in DIRECTIVESPECS:
-
-                    if spec.get('category') != category:
-                        continue
-
-                    aliases = ', '.join(spec.get('aliases', []))
-                    records.append([
-                        str(spec.get('name', '')),
-                        aliases,
-                        str(spec.get('description', '')),
-                    ])
-
-                if not records:
+        requested = ' '.join(
+            str(arg) for arg in (args or [])).strip().casefold()
+        categories = list(DIRECTIVECATEGORIES)
+        if requested:
+            category = next((
+                name for name in categories
+                if requested == str(name).casefold()
+            ), None)
+            if category is None:
+                guiprint('> help accepts a directive category',
+                         colour=ERRORCOLOUR)
+                return 1
+            records = []
+            for spec in DIRECTIVESPECS:
+                if spec.get('category') != category:
                     continue
-
-                guiprint()
-                guiprint(str(category), colour=TEXTCOLOUR, bold=True)
-                guiprint()
-                showtable(['directive', 'aliases', 'description'], records)
-
+                aliases = ', '.join(spec.get('aliases', []))
+                usage = spec.get('usages', [''])
+                records.append([
+                    str(spec.get('name', '')),
+                    aliases,
+                    str(spec.get('description', '')),
+                    str(usage[0] if usage else ''),
+                ])
+            guiprint()
+            guiprint(f'{category} directives', colour=TEXTCOLOUR, bold=True)
+            guiprint()
+            showtable(
+                ['directive', 'aliases', 'description', 'usage'], records)
             guiprint()
             return 0
+
+        guiprint('> available directives', colour=TEXTCOLOUR)
+        guiprint('> use help <category> to show one category',
+                 colour=TEXTCOLOUR)
+        for category in categories:
+            records = []
+            for spec in DIRECTIVESPECS:
+                if spec.get('category') != category:
+                    continue
+                aliases = ', '.join(spec.get('aliases', []))
+                records.append([
+                    str(spec.get('name', '')),
+                    aliases,
+                    str(spec.get('description', '')),
+                ])
+            if not records:
+                continue
+            guiprint()
+            guiprint(str(category), colour=TEXTCOLOUR, bold=True)
+            guiprint()
+            showtable(['directive', 'aliases', 'description'], records)
+        guiprint()
+        return 0
 
     except Exception as e:
 
@@ -16431,6 +16625,249 @@ def search(args=None):
     return code
 
 
+def readsmallsetting(path, fallback=''):
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as stream:
+            return stream.read(4096).strip()
+    except OSError:
+        return str(fallback)
+
+
+def settingenabled(path):
+
+    return readsmallsetting(path).casefold() in ('1', 'true', 'yes', 'on')
+
+
+def configuredtimezone():
+
+    value = readsmallsetting(BRICKTIMEZONEFILE, 'Australia/Sydney')
+    if value in ('10', '+10'):
+        value = 'Australia/Sydney'
+    return value or 'Australia/Sydney'
+
+
+def timezoneobject(name):
+
+    name = str(name or '').strip().replace('\\', '/')
+    if (
+        not name or name.startswith('/') or
+        any(part in ('', '.', '..') for part in name.split('/'))
+    ):
+        raise ValueError('timezone must use an area and city')
+    root = os.path.realpath(BRICKTIMEZONEDIR)
+    path = os.path.realpath(os.path.join(root, *name.split('/')))
+    if os.path.commonpath((root, path)) != root or not os.path.isfile(path):
+        raise ValueError('unknown timezone ' + name)
+    with open(path, 'rb') as stream:
+        return zoneinfo.ZoneInfo.from_file(stream, key=name)
+
+
+def settimezone(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter an area and city after the set timezone directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    name = str(args[0]).strip()
+    try:
+        timezoneobject(name)
+        result = settings_time_set(
+            name,
+            internet=settingenabled(BRICKINTERNETTIMEFILE),
+            virtualbox=settingenabled(BRICKVIRTUALBOXTIMEFILE),
+            timeout=5.0,
+        )
+        guiprint('> timezone set to ' + lowertext(result.get('timezone', name)),
+                 colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not set timezone ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def setautomatictime(args=None):
+
+    if len(args or []) != 1:
+        guiprint(
+            '> enter off, internet, virtualbox, or both after the set automatic time directive',
+            colour=ERRORCOLOUR)
+        return 1
+    source = str(args[0]).strip().casefold()
+    if source not in ('off', 'internet', 'virtualbox', 'both'):
+        guiprint('> automatic time source is not supported', colour=ERRORCOLOUR)
+        return 1
+    try:
+        settings_time_set(
+            configuredtimezone(),
+            internet=source in ('internet', 'both'),
+            virtualbox=source in ('virtualbox', 'both'),
+            timeout=5.0,
+        )
+        guiprint('> automatic time set to ' + source, colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not set automatic time ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def parseatreyandate(value):
+
+    match = re.fullmatch(
+        r'\s*(\d{1,2})\.(\d{1,2})\.(\d+)ae\s*',
+        str(value), re.IGNORECASE)
+    if not match:
+        raise ValueError('date must use dd.mm.yae such as 23.07.6ae')
+    day, month, atreyanyear = (int(part) for part in match.groups())
+    if atreyanyear < 1:
+        raise ValueError('atreyan dates begin in 1ae')
+    return datetime.date(
+        atreyanyear + (ATREYANSTARTYEAR - 1), month, day)
+
+
+def setdateandtime(args=None):
+
+    if len(args or []) != 2:
+        guiprint(
+            '> use set date and time <dd.mm.yae> <hh.mm>',
+            colour=ERRORCOLOUR)
+        return 1
+    try:
+        date = parseatreyandate(args[0])
+        match = re.fullmatch(r'(\d{1,2})\.(\d{2})', str(args[1]).strip())
+        if not match:
+            raise ValueError('time must use hh.mm')
+        hour, minute = (int(value) for value in match.groups())
+        if not 0 <= hour <= 23 or not 0 <= minute <= 59:
+            raise ValueError('time is outside the supported range')
+        name = configuredtimezone()
+        zone = timezoneobject(name)
+        requested = datetime.datetime.combine(
+            date, datetime.time(hour, minute)).replace(tzinfo=zone)
+        epoch = requested.timestamp()
+        roundtrip = datetime.datetime.fromtimestamp(epoch, zone)
+        if roundtrip.replace(tzinfo=None) != requested.replace(tzinfo=None):
+            raise ValueError('the local time does not exist in ' + name)
+        settings_time_set(
+            name, internet=False, virtualbox=False, epoch=epoch, timeout=5.0)
+        guiprint(
+            '> date and time set to {} {}'.format(
+                lowertext(args[0]), lowertext(args[1])),
+            colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not set date and time ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def terminalname(args=None):
+
+    if args:
+        guiprint('> terminal name does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    guiprint('> terminal name ' + lowertext(
+        readsmallsetting(BRICKTERMINALNAMEFILE, 't1os')),
+        colour=TEXTCOLOUR)
+    return 0
+
+
+def setterminalname(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter one name after the set terminal name directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    try:
+        result = settings_hostname_set(str(args[0]), timeout=3.0)
+        guiprint('> terminal name set to ' + lowertext(result.get('hostname')),
+                 colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not set terminal name ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def masterprofile():
+
+    try:
+        with open(BRICKMASTERSETTINGSFILE, 'r', encoding='utf-8',
+                  errors='replace') as stream:
+            value = json.load(stream)
+        if isinstance(value, dict):
+            return (
+                bool(value.get('use_master_image')),
+                str(value.get('image_path') or ''),
+            )
+    except OSError:
+        pass
+    return False, ''
+
+
+def changemastername(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter one name after the change master name directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    password = ''
+    try:
+        account = settings_account_get(timeout=3.0)
+        password = arch.readpass('> enter current master password ')
+        if not password:
+            guiprint('> master name change cancelled', colour=TEXTCOLOUR)
+            return 1
+        useimage, imagepath = masterprofile()
+        result = settings_master_update(
+            password, str(args[0]), use_master_image=useimage,
+            image_path=imagepath, timeout=15.0)
+        guiprint('> master name changed from {} to {}'.format(
+            lowertext(account.get('username')),
+            lowertext(result.get('username'))), colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not change master name ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+    finally:
+        password = ''
+
+
+def changemasterpassword(args=None):
+
+    if args:
+        guiprint('> change master password does not take an argument',
+                 colour=ERRORCOLOUR)
+        return 1
+    current = new = confirmation = ''
+    try:
+        current = arch.readpass('> enter current master password ')
+        if not current:
+            guiprint('> master password change cancelled', colour=TEXTCOLOUR)
+            return 1
+        new = arch.readpass('> enter new master password ')
+        confirmation = arch.readpass('> confirm new master password ')
+        if not new or new != confirmation:
+            guiprint('> new master passwords do not match', colour=ERRORCOLOUR)
+            return 1
+        account = settings_account_get(timeout=3.0)
+        useimage, imagepath = masterprofile()
+        settings_master_update(
+            current, account.get('username'), new_password=new,
+            use_master_image=useimage, image_path=imagepath, timeout=15.0)
+        guiprint('> master password changed', colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not change master password ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+    finally:
+        current = new = confirmation = ''
+
+
 # operation directives
 def view(args):
 
@@ -16687,7 +17124,7 @@ def run(args):
         args = args[:-1]
 
     if HEADLESS and not behind:
-        guiprint('> foreground software requires Brick console mode', colour=ERRORCOLOUR)
+        guiprint('> foreground software requires brick console mode', colour=ERRORCOLOUR)
         return 1
 
     # define target and trailing args
@@ -16925,6 +17362,173 @@ def showtable(headings, records):
 
         guiprint(f'> error formatting table {e}', colour=ERRORCOLOUR)
         return False
+
+
+def softwarecatalogue():
+
+    try:
+        result = listcatalogueapplications(timeout=3.0)
+        applications = result.get('applications', [])
+        if not isinstance(applications, list):
+            raise ValueError('software catalogue response is invalid')
+        return [item for item in applications if isinstance(item, dict)]
+    except Exception as error:
+        guiprint('> could not read the software catalogue ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return None
+
+
+def listsoftware(args=None):
+
+    if args:
+        guiprint('> list software does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    applications = softwarecatalogue()
+    if applications is None:
+        return 1
+    records = [[
+        item.get('name', ''),
+        item.get('handler', 'none'),
+        item.get('profile', ''),
+        'yes' if item.get('startup') else 'no',
+        str(item.get('running', 0)),
+    ] for item in applications]
+    guiprint()
+    if records:
+        showtable(
+            ['software', 'handler', 'profile', 'startup', 'running'],
+            lowerrows(records))
+    else:
+        guiprint('> no software is available', colour=TEXTCOLOUR)
+    guiprint()
+    return 0
+
+
+def softwaredetails(args=None):
+
+    requested = ' '.join(str(value) for value in (args or [])).strip().casefold()
+    if not requested:
+        guiprint('> enter software after the software details directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    applications = softwarecatalogue()
+    if applications is None:
+        return 1
+    exact = [item for item in applications
+             if str(item.get('name', '')).casefold() == requested]
+    matches = exact or [
+        item for item in applications
+        if requested in str(item.get('name', '')).casefold()
+    ]
+    if not matches:
+        guiprint('> software not found ' + requested, colour=ERRORCOLOUR)
+        return 1
+    if len(matches) > 1:
+        guiprint('> more than one software entry matches ' + requested,
+                 colour=ERRORCOLOUR)
+        showtable(['software'], lowerrows([[item.get('name', '')] for item in matches]))
+        return 1
+    item = matches[0]
+    records = [
+        ['software', item.get('name', '')],
+        ['path', item.get('path', '')],
+        ['handler', item.get('handler', 'none')],
+        ['security profile', item.get('profile', '')],
+        ['startup supported', 'yes' if item.get('startup') else 'no'],
+        ['running operations', str(item.get('running', 0))],
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(records))
+    guiprint()
+    return 0
+
+
+def operationdetails(args=None):
+
+    targets, _, requested = operationtargets(args, includecompleted=True)
+    if not requested:
+        guiprint('> enter an operation name, pid, or %order', colour=ERRORCOLOUR)
+        return 1
+    if not targets:
+        guiprint('> no operations matching ' + lowertext(requested),
+                 colour=ERRORCOLOUR)
+        return 1
+    if len(targets) > 1:
+        guiprint('> more than one operation matches ' + lowertext(requested),
+                 colour=ERRORCOLOUR)
+        showtable(['pid', 'operation'], lowerrows([
+            [pid, info.get('name', '')] for pid, info in targets
+        ]))
+        return 1
+    pid, fallback = targets[0]
+    response = opslistrequest(resources=True)
+    if response is None:
+        guiprint('> operations service is unavailable', colour=ERRORCOLOUR)
+        return 1
+    info = response.get('operations', {}).get(str(pid))
+    if info is None:
+        info = response.get('completed', {}).get(str(pid), fallback)
+    resources = info.get('resources', {}) if isinstance(info, dict) else {}
+    if not isinstance(resources, dict):
+        resources = {}
+    arguments = ' '.join(str(value) for value in info.get('args', []))
+    records = [
+        ['operation', info.get('name', '')],
+        ['pid', pid],
+        ['state', info.get('state', '')],
+        ['mode', info.get('mode', '')],
+        ['user', info.get('user', '')],
+        ['cpu', formatpercent(resources.get('cpu_percent'))],
+        ['gpu', formatpercent(resources.get('gpu_percent'))],
+        ['memory', formatbytes(resources.get('memory_bytes'))],
+        ['peak memory', formatbytes(resources.get(
+            'peak_memory_bytes', info.get('peak_memory_bytes')))],
+        ['threads', resources.get('threads', 'unavailable')],
+        ['children', resources.get('children', 'unavailable')],
+        ['read', formatbytes(resources.get('read_bytes'))],
+        ['written', formatbytes(resources.get('write_bytes'))],
+        ['started', displaytimestamp(info.get('started')) if info.get('started') else 'unavailable'],
+        ['ended', displaytimestamp(info.get('ended')) if info.get('ended') else 'running'],
+        ['result', info.get('exitcode') if info.get('exitcode') is not None else 'unavailable'],
+        ['script', info.get('script', '')],
+        ['arguments', arguments],
+        ['log', info.get('log', '')],
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(records))
+    guiprint()
+    return 0
+
+
+def systemperformance(args=None):
+
+    if args:
+        guiprint('> system performance does not take an argument',
+                 colour=ERRORCOLOUR)
+        return 1
+    response = opslistrequest(resources=True)
+    if response is None:
+        guiprint('> operations service is unavailable', colour=ERRORCOLOUR)
+        return 1
+    system = response.get('system', {})
+    if not isinstance(system, dict):
+        system = {}
+    records = [
+        ['cpu', formatpercent(system.get('cpu_percent'))],
+        ['gpu', formatpercent(system.get('gpu_percent'))],
+        ['graphics processor', system.get('gpu_name') or 'unavailable'],
+        ['graphics backend', system.get('gpu_backend') or 'unavailable'],
+        ['gpu acceleration', 'active' if system.get('gpu_accelerated') else 'not active'],
+        ['memory used', formatbytes(system.get('memory_used_bytes'))],
+        ['memory available', formatbytes(system.get('memory_available_bytes'))],
+        ['memory total', formatbytes(system.get('memory_total_bytes'))],
+        ['running operations', str(len(response.get('operations', {})))],
+        ['sample time', str(response.get('sample_ms', 0)) + ' ms'],
+    ]
+    guiprint()
+    showtable(['resource', 'value'], lowerrows(records))
+    guiprint()
+    return 0
 
 
 def listops(args):
@@ -17185,40 +17789,95 @@ def waitfor(args):
 
 def startupops(args=None):
 
+    if args:
+        guiprint('> startup operations does not take an argument',
+                 colour=ERRORCOLOUR)
+        return 1
     try:
-
-        with open('/the one/settings/procedures/startup/startup.txt') as f:
-
-            lines = [line.strip() for line in f if line.strip() and not line.lstrip().startswith('#')]
-
-        records = []
-
-        for index in range(0, len(lines), 2):
-
-            path = lines[index]
-            mode = lines[index + 1] if index + 1 < len(lines) else 'invalid'
-            records.append([str((index // 2) + 1), mode, path])
-
+        result = startupoperations(timeout=3.0)
+        entries = result.get('operations', [])
+        records = [
+            [str(index), entry.get('mode', ''), entry.get('software', '')]
+            for index, entry in enumerate(entries, 1)
+            if isinstance(entry, dict)
+        ]
         if not records:
-
-            guiprint('> startup procedures file is empty', colour=TEXTCOLOUR)
+            guiprint('> no startup operations', colour=TEXTCOLOUR)
             return 0
-
         guiprint()
-        showtable(['order', 'mode', 'operation'], records)
+        showtable(['order', 'mode', 'software'], lowerrows(records))
         guiprint()
         return 0
-
-    # startup file not found error
-    except FileNotFoundError:
-
-        guiprint("> startup procedures file not found", colour=ERRORCOLOUR)
+    except Exception as error:
+        guiprint('> could not read startup operations ' + lowertext(error),
+                 colour=ERRORCOLOUR)
         return 1
 
-    # startup operations error
-    except Exception as e:
 
-        guiprint(f"> error reading startup procedures {e}", colour=ERRORCOLOUR)
+def startuparguments(args, requiremode=False):
+
+    values = [str(value) for value in (args or [])]
+    mode = ''
+    if requiremode:
+        if len(values) < 2 or values[-1].casefold() not in ('front', 'behind'):
+            return '', ''
+        mode = values.pop().casefold()
+    return ' '.join(values).strip().casefold(), mode
+
+
+def addstartup(args=None):
+
+    software, mode = startuparguments(args, requiremode=True)
+    if not software:
+        guiprint(
+            '> use add startup operation <software> <front or behind>',
+            colour=ERRORCOLOUR)
+        return 1
+    try:
+        addstartupoperation(software, mode, timeout=3.0)
+        guiprint('> startup operation added ' + software + ' ' + mode,
+                 colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not add startup operation ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def removestartup(args=None):
+
+    software, _ = startuparguments(args)
+    if not software:
+        guiprint('> enter software after the remove startup operation directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    try:
+        removestartupoperation(software, timeout=3.0)
+        guiprint('> startup operation removed ' + software,
+                 colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not remove startup operation ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+
+
+def changestartup(args=None):
+
+    software, mode = startuparguments(args, requiremode=True)
+    if not software:
+        guiprint(
+            '> use change startup operation <software> <front or behind>',
+            colour=ERRORCOLOUR)
+        return 1
+    try:
+        changestartupoperation(software, mode, timeout=3.0)
+        guiprint('> startup operation changed ' + software + ' ' + mode,
+                 colour=TEXTCOLOUR)
+        return 0
+    except Exception as error:
+        guiprint('> could not change startup operation ' + lowertext(error),
+                 colour=ERRORCOLOUR)
         return 1
 
 
@@ -17344,6 +18003,431 @@ def sessionops(args):
 
 
 # network directives
+def networkreadjson(path, fallback=None):
+
+    try:
+        with open(path, 'r', encoding='utf-8', errors='replace') as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else dict(fallback or {})
+    except Exception:
+        return dict(fallback or {})
+
+
+def networkreadconfig():
+
+    values = {}
+
+    try:
+        with open(BRICKNETWORKFILE, 'r', encoding='utf-8', errors='replace') as stream:
+            for rawline in stream:
+                line = rawline.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                key, value = line.split('=', 1)
+                key = key.strip().lower()
+                if re.fullmatch(r'[a-z][a-z0-9_]*', key):
+                    values[key] = value.strip()
+    except FileNotFoundError:
+        pass
+
+    return values
+
+
+def networkatomictext(path, content, mode=0o644):
+
+    directory = os.path.dirname(path)
+    os.makedirs(directory, mode=0o755, exist_ok=True)
+    temporary = '{}.{}.tmp'.format(path, os.getpid())
+
+    try:
+        with open(temporary, 'w', encoding='utf-8', newline='\n') as stream:
+            stream.write(str(content))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    finally:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+
+
+def networkwriteconfig(config):
+
+    order = ('interface', 'dns', 'firewall', 'dhcp', 'address', 'netmask', 'gateway')
+    keys = [key for key in order if key in config]
+    keys.extend(sorted(key for key in config if key not in keys))
+    lines = []
+
+    for key in keys:
+        value = str(config.get(key, '')).strip()
+        if '\n' in value or '\r' in value or '=' in str(key):
+            raise ValueError('the network setting contains an unsupported character')
+        lines.append(str(key) + '=' + value)
+
+    networkatomictext(BRICKNETWORKFILE, '\n'.join(lines) + '\n')
+
+
+def networkrequest(path):
+
+    networkatomictext(path, str(int(time.time())) + '\n')
+
+
+def networkreconfigure(config):
+
+    networkwriteconfig(config)
+    networkrequest(BRICKNETWORKREQUEST)
+
+
+def networkinterfacesdata():
+
+    configured = str(networkreadconfig().get('interface') or '').strip()
+    runtime = networkreadjson(BRICKNETWORKSTATE)
+    active = str(runtime.get('interface') or '').strip()
+    names = set()
+
+    try:
+        names.update(
+            name for name in os.listdir(BRICKNETSTATE)
+            if name != 'lo' and os.path.isdir(os.path.join(BRICKNETSTATE, name)))
+    except OSError:
+        pass
+
+    for name in (configured, active):
+        if name:
+            names.add(name)
+
+    records = []
+    for name in sorted(names, key=str.casefold):
+        lowered = name.casefold()
+        wireless = (
+            os.path.isdir(os.path.join(BRICKNETSTATE, name, 'wireless')) or
+            lowered.startswith(('wl', 'wifi')))
+        state = ''
+        try:
+            with open(os.path.join(BRICKNETSTATE, name, 'operstate'), 'r', encoding='ascii', errors='replace') as stream:
+                state = stream.read().strip().lower()
+        except OSError:
+            pass
+        records.append({
+            'name': name,
+            'type': 'wi-fi' if wireless else 'ethernet',
+            'state': 'connected' if name == active and bool(runtime.get('connected')) else (state or 'offline'),
+            'preferred': name == configured,
+            'active': name == active,
+        })
+    return records
+
+
+def networkdetails(args=None):
+
+    if args:
+        guiprint('> network details does not take an argument', colour=ERRORCOLOUR)
+        return 1
+
+    state = networkreadjson(BRICKNETWORKSTATE)
+    config = networkreadconfig()
+    interface = str(state.get('interface') or config.get('interface') or '')
+    connected = bool(state.get('connected'))
+    records = [
+        ('connection', 'connected' if connected else 'offline'),
+        ('type', str(state.get('type') or 'unavailable')),
+        ('interface', interface or 'automatic'),
+        ('network', str(state.get('name') or 'unavailable')),
+        ('address', str(state.get('address') or 'unavailable')),
+        ('gateway', str(state.get('gateway') or 'unavailable')),
+        ('dhcp server', str(state.get('server') or 'unavailable')),
+        ('mac', str(state.get('mac') or 'unavailable')),
+        ('address mode', 'automatic' if str(config.get('dhcp', 'true')).casefold() == 'true' else 'manual'),
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(records))
+    guiprint()
+    return 0
+
+
+def listnetworkinterfaces(args=None):
+
+    if args:
+        guiprint('> list network interfaces does not take an argument', colour=ERRORCOLOUR)
+        return 1
+
+    records = networkinterfacesdata()
+    guiprint()
+
+    if not records:
+        guiprint('> no network interfaces found', colour=ERRORCOLOUR)
+        guiprint()
+        return 1
+
+    showtable(
+        ['interface', 'type', 'state', 'selection'],
+        lowerrows([(item['name'], item['type'], item['state'],
+          'preferred' if item['preferred'] else ('active' if item['active'] else ''))
+         for item in records]))
+    guiprint()
+    return 0
+
+
+def usenetworkinterface(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter automatic or one interface after the use network interface directive', colour=ERRORCOLOUR)
+        return 1
+
+    requested = str(args[0]).strip()
+    interface = '' if requested.casefold() == 'automatic' else requested
+
+    if interface and re.fullmatch(r'[A-Za-z0-9_.:-]{1,15}', interface) is None:
+        guiprint('> the network interface name is invalid', colour=ERRORCOLOUR)
+        return 1
+
+    available = {item['name'] for item in networkinterfacesdata()}
+    if interface and interface not in available:
+        guiprint('> the network interface was not found', colour=ERRORCOLOUR)
+        return 1
+
+    try:
+        config = networkreadconfig()
+        config['interface'] = interface
+        networkreconfigure(config)
+    except Exception as error:
+        guiprint(f'> could not change the network interface {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+
+    guiprint('> network interface set to ' + lowertext(interface or 'automatic'), colour=TEXTCOLOUR)
+    return 0
+
+
+def setnetworkaddress(args=None):
+
+    values = [str(value).strip() for value in (args or [])]
+    automatic = len(values) == 1 and values[0].casefold() == 'automatic'
+
+    if not automatic and len(values) != 3:
+        guiprint('> use set network address automatic or set network address <address> <prefix> <gateway>', colour=ERRORCOLOUR)
+        return 1
+
+    try:
+        config = networkreadconfig()
+
+        if automatic:
+            config['dhcp'] = 'true'
+            for key in ('address', 'netmask', 'gateway'):
+                config.pop(key, None)
+        else:
+            address = ipaddress.ip_address(values[0])
+            gateway = ipaddress.ip_address(values[2])
+            prefix = int(values[1])
+            if address.version != 4 or gateway.version != 4 or prefix < 0 or prefix > 32:
+                raise ValueError('use an ipv4 address, prefix from 0 to 32, and ipv4 gateway')
+            config.update({
+                'dhcp': 'false',
+                'address': str(address),
+                'netmask': str(prefix),
+                'gateway': str(gateway),
+                'dns': 'manual',
+            })
+
+            if not networkdnsservers():
+                raise ValueError('set at least one dns server before using a manual address')
+
+        networkwriteinterfaceconfig(config)
+        networkreconfigure(config)
+    except Exception as error:
+        guiprint(f'> could not change the network address {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+
+    guiprint('> automatic network addressing requested' if automatic else '> manual network address requested', colour=TEXTCOLOUR)
+    return 0
+
+
+def networkwriteinterfaceconfig(config):
+
+    interface = str(config.get('interface') or '').strip()
+    if not interface:
+        return
+    lines = ['dhcp=' + ('true' if str(config.get('dhcp', 'true')).casefold() == 'true' else 'false')]
+    if lines[0] == 'dhcp=false':
+        lines.extend((
+            'address=' + str(config.get('address') or ''),
+            'netmask=' + str(config.get('netmask') or ''),
+            'gateway=' + str(config.get('gateway') or ''),
+        ))
+    networkatomictext(os.path.join(BRICKNETWORKDIR, interface + '.txt'), '\n'.join(lines) + '\n')
+
+
+def networkdnsservers():
+
+    servers = []
+    try:
+        with open(BRICKDNSFILE, 'r', encoding='utf-8', errors='replace') as stream:
+            for line in stream:
+                fields = line.split()
+                if len(fields) == 2 and fields[0].casefold() == 'nameserver':
+                    try:
+                        value = ipaddress.ip_address(fields[1])
+                    except ValueError:
+                        continue
+                    if value.version == 4 and str(value) not in servers:
+                        servers.append(str(value))
+    except OSError:
+        pass
+    return servers[:3]
+
+
+def dnsstatus(args=None):
+
+    if args:
+        guiprint('> dns status does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    config = networkreadconfig()
+    mode = str(config.get('dns') or 'automatic').casefold()
+    servers = networkdnsservers()
+    guiprint()
+    showtable(['detail', 'value'], lowerrows([
+        ('mode', 'automatic' if mode == 'automatic' else 'manual'),
+        ('primary', servers[0] if servers else 'unavailable'),
+        ('secondary', servers[1] if len(servers) > 1 else 'unavailable'),
+    ]))
+    guiprint()
+    return 0
+
+
+def setdnsautomatic(args=None):
+
+    if args:
+        guiprint('> set dns automatic does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    try:
+        config = networkreadconfig()
+        if str(config.get('dhcp', 'true')).casefold() != 'true':
+            raise ValueError('automatic dns requires automatic network addressing')
+        config['dns'] = 'automatic'
+        networkreconfigure(config)
+    except Exception as error:
+        guiprint(f'> could not enable automatic dns {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+    guiprint('> automatic dns requested', colour=TEXTCOLOUR)
+    return 0
+
+
+def setdnsservers(args=None):
+
+    values = [str(value).strip() for value in (args or [])]
+    if len(values) not in (1, 2):
+        guiprint('> enter one or two addresses after the set dns servers directive', colour=ERRORCOLOUR)
+        return 1
+    try:
+        servers = []
+        for value in values:
+            address = ipaddress.ip_address(value)
+            if address.version != 4:
+                raise ValueError('dns servers must be ipv4 addresses')
+            if str(address) not in servers:
+                servers.append(str(address))
+        config = networkreadconfig()
+        config['dns'] = 'manual'
+        networkatomictext(
+            BRICKDNSFILE,
+            ''.join('nameserver ' + server + '\n' for server in servers))
+        networkreconfigure(config)
+    except Exception as error:
+        guiprint(f'> could not change the dns servers {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+    guiprint('> manual dns servers requested', colour=TEXTCOLOUR)
+    return 0
+
+
+def firewallstatus(args=None):
+
+    if args:
+        guiprint('> firewall status does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    config = networkreadconfig()
+    state = networkreadjson(BRICKFIREWALLSTATE)
+    profile = str(state.get('profile') or config.get('firewall') or 'protected')
+    active = bool(state.get('active'))
+    guiprint()
+    showtable(['detail', 'value'], lowerrows([
+        ('status', 'active' if active else 'not active'),
+        ('profile', profile),
+        ('incoming', str(state.get('incoming') or ('allowed' if profile == 'open' else 'blocked'))),
+        ('forwarding', str(state.get('forwarding') or 'blocked')),
+        ('outgoing', str(state.get('outgoing') or 'allowed')),
+    ]))
+    guiprint()
+    return 0 if active else 1
+
+
+def setfirewall(args=None):
+
+    if len(args or []) != 1 or str(args[0]).casefold() not in ('protected', 'open'):
+        guiprint('> enter protected or open after the set firewall directive', colour=ERRORCOLOUR)
+        return 1
+    profile = str(args[0]).casefold()
+    try:
+        config = networkreadconfig()
+        config['firewall'] = profile
+        networkreconfigure(config)
+    except Exception as error:
+        guiprint(f'> could not change the firewall {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+    guiprint('> firewall profile ' + profile + ' requested', colour=TEXTCOLOUR)
+    return 0
+
+
+def scanwifi(args=None):
+
+    if args:
+        guiprint('> scan wifi does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    if not any(item['type'] == 'wi-fi' for item in networkinterfacesdata()):
+        guiprint('> no wi-fi interface found', colour=ERRORCOLOUR)
+        return 1
+    try:
+        networkrequest(BRICKWIRELESSREQUEST)
+    except Exception as error:
+        guiprint(f'> could not request a wi-fi scan {lowertext(error)}', colour=ERRORCOLOUR)
+        return 1
+    guiprint('> wi-fi scan requested', colour=TEXTCOLOUR)
+    return 0
+
+
+def listwifinetworks(args=None):
+
+    if args:
+        guiprint('> list wifi networks does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    state = networkreadjson(BRICKWIRELESSSTATE, {'networks': []})
+    records = []
+    seen = set()
+    for item in state.get('networks', []):
+        if not isinstance(item, dict):
+            continue
+        name = ''.join(character for character in str(item.get('ssid') or '') if character.isprintable()).strip()
+        security = str(item.get('security') or 'unknown').casefold()
+        if not name or name in seen or security not in ('open', 'wpa2', 'wpa3'):
+            continue
+        seen.add(name)
+        try:
+            signalvalue = int(item.get('signal', -999))
+        except (TypeError, ValueError):
+            signalvalue = -999
+        records.append((name, security, str(signalvalue)))
+    records.sort(key=lambda row: (-int(row[2]), row[0].casefold()))
+    guiprint()
+    if not records:
+        guiprint('> no wi-fi networks found', colour=ERRORCOLOUR)
+        guiprint('> use scan wifi to request a new scan', colour=TEXTCOLOUR)
+        guiprint()
+        return 1
+    showtable(['network', 'security', 'signal'], lowerrows(records))
+    guiprint()
+    return 0
+
+
 def netstatus(args=None):
 
     # line above
@@ -17726,6 +18810,94 @@ def rubbishrestoremutationpaths(rid=None, name=None, originalpath=None):
     destination = str(record.get('origpath'))
     source = os.path.join('/.rubbish', recordid, 'content')
     return [source, '/.rubbish/index.txt', creationmutationpaths(destination)]
+
+
+def rubbishrecords():
+
+    records = []
+    try:
+        with open(BRICKRUBBISHINDEX, 'r', encoding='utf-8',
+                  errors='replace') as stream:
+            for index, line in enumerate(stream):
+                if index == 0:
+                    continue
+                fields = line.rstrip('\n').split('\t')
+                if len(fields) < 7:
+                    continue
+                records.append({
+                    'id': fields[0], 'name': fields[1],
+                    'origpath': fields[2], 'isdir': fields[3],
+                    'size': fields[4], 'deletedts': fields[5],
+                    'user': fields[6],
+                })
+    except FileNotFoundError:
+        return []
+    return records
+
+
+def listrubbish(args=None):
+
+    if args:
+        guiprint('> list rubbish does not take an argument', colour=ERRORCOLOUR)
+        return 1
+    try:
+        records = rubbishrecords()
+    except Exception as error:
+        guiprint('> could not read rubbish ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+    rows = [[
+        item.get('id', ''), item.get('name', ''),
+        'tier' if item.get('isdir') == '1' else 'file',
+        formatbytes(item.get('size')),
+        displaytimestamp(item.get('deletedts')),
+        item.get('origpath', ''),
+    ] for item in records]
+    guiprint()
+    if rows:
+        showtable(
+            ['id', 'name', 'type', 'size', 'deleted', 'original location'],
+            lowerrows(rows))
+    else:
+        guiprint('> rubbish is empty', colour=TEXTCOLOUR)
+    guiprint()
+    return 0
+
+
+def rubbishdetails(args=None):
+
+    if len(args or []) != 1:
+        guiprint('> enter one id after the rubbish details directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    requested = str(args[0]).strip()
+    try:
+        matches = [item for item in rubbishrecords()
+                   if str(item.get('id')) == requested]
+    except Exception as error:
+        guiprint('> could not read rubbish ' + lowertext(error),
+                 colour=ERRORCOLOUR)
+        return 1
+    if not matches:
+        guiprint('> rubbish item not found ' + lowertext(requested),
+                 colour=ERRORCOLOUR)
+        return 1
+    item = matches[0]
+    payload = os.path.join('/.rubbish', requested, 'content')
+    rows = [
+        ['id', requested],
+        ['name', item.get('name', '')],
+        ['type', 'tier' if item.get('isdir') == '1' else 'file'],
+        ['size', formatbytes(item.get('size'))],
+        ['deleted', displaytimestamp(item.get('deletedts'))],
+        ['user', item.get('user', '')],
+        ['original location', item.get('origpath', '')],
+        ['payload available', 'yes' if os.path.lexists(payload) else 'no'],
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(rows))
+    guiprint()
+    return 0
 
 
 def empty(args=None):
@@ -18391,7 +19563,7 @@ def checksyntax(args):
 
     if not path:
 
-        guiprint('> enter a Python file or tier after the check syntax directive', colour=TEXTCOLOUR)
+        guiprint('> enter a python file or tier after the check syntax directive', colour=TEXTCOLOUR)
         return 1
 
     try:
@@ -18409,7 +19581,7 @@ def checksyntax(args):
 
     if not paths:
 
-        guiprint('> no Python files found', colour=ERRORCOLOUR)
+        guiprint('> no python files found', colour=ERRORCOLOUR)
         return 1
 
     failures = 0
@@ -18435,10 +19607,151 @@ def checksyntax(args):
 
     if failures:
 
-        guiprint(f'> syntax failed in {failures} of {len(paths)} Python files', colour=ERRORCOLOUR)
+        guiprint(f'> syntax failed in {failures} of {len(paths)} python files', colour=ERRORCOLOUR)
         return 1
 
-    guiprint(f'> syntax passed in {len(paths)} Python files', colour=TEXTCOLOUR)
+    guiprint(f'> syntax passed in {len(paths)} python files', colour=TEXTCOLOUR)
+    return 0
+
+
+def driverstate():
+
+    try:
+        with open(BRICKDRIVERSTATE, 'r', encoding='utf-8',
+                  errors='replace') as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else {}
+    except OSError:
+        return {}
+
+
+def driverversion(name):
+
+    module = str(name or '').strip().replace('-', '_')
+    try:
+        with open(os.path.join(BRICKDRIVEMODULESTATE, module, 'version'),
+                  'r', encoding='utf-8', errors='replace') as stream:
+            return stream.read(256).strip()
+    except OSError:
+        return ''
+
+
+def driverdevices(name, state=None):
+
+    name = str(name or '').strip().replace('-', '_')
+    devices = []
+    roots = (
+        '/the one/drivers/state/bus/pci/drivers',
+        '/the one/driver-information-state/bus/pci/drivers',
+    )
+    for root in roots:
+        path = os.path.join(root, name)
+        try:
+            for entry in os.listdir(path):
+                if re.fullmatch(
+                        r'[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]',
+                        entry) and entry not in devices:
+                    devices.append(entry)
+        except OSError:
+            continue
+    if name.startswith('nvidia'):
+        for item in (state or {}).get('nvidia_devices', []):
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get('bdf') or item.get('device') or '').strip()
+            if value and value not in devices:
+                devices.append(value)
+    return sorted(devices, key=str.casefold)
+
+
+def listsystemdrivers(args=None):
+
+    if args:
+        guiprint('> list system drivers does not take an argument',
+                 colour=ERRORCOLOUR)
+        return 1
+    state = driverstate()
+    loaded = {str(value) for value in state.get('loaded', [])}
+    skipped = state.get('skipped', {})
+    failed = state.get('failed', {})
+    if not isinstance(skipped, dict):
+        skipped = {}
+    if not isinstance(failed, dict):
+        failed = {}
+    names = sorted(loaded | set(skipped) | set(failed), key=str.casefold)
+    records = []
+    for name in names:
+        condition = 'failed' if name in failed else 'skipped' if name in skipped else 'loaded'
+        detail = failed.get(name) or skipped.get(name) or ''
+        records.append([
+            name, driverversion(name) or 'kernel', condition,
+            str(len(driverdevices(name, state))), detail,
+        ])
+    guiprint()
+    if records:
+        showtable(
+            ['driver', 'version', 'state', 'devices', 'detail'],
+            lowerrows(records))
+    else:
+        guiprint('> no driver state is available', colour=ERRORCOLOUR)
+        guiprint()
+        return 1
+    guiprint()
+    return 0
+
+
+def systemdriverdetails(args=None):
+
+    requested = ' '.join(str(value) for value in (args or [])).strip()
+    if not requested:
+        guiprint('> enter a driver after the system driver details directive',
+                 colour=ERRORCOLOUR)
+        return 1
+    state = driverstate()
+    loaded = {str(value) for value in state.get('loaded', [])}
+    skipped = state.get('skipped', {})
+    failed = state.get('failed', {})
+    parameters = state.get('module_parameters', {})
+    if not isinstance(skipped, dict):
+        skipped = {}
+    if not isinstance(failed, dict):
+        failed = {}
+    if not isinstance(parameters, dict):
+        parameters = {}
+    names = loaded | set(skipped) | set(failed)
+    exact = [name for name in names if name.casefold() == requested.casefold()]
+    matches = exact or [name for name in names
+                        if requested.casefold() in name.casefold()]
+    if not matches:
+        guiprint('> system driver not found ' + lowertext(requested),
+                 colour=ERRORCOLOUR)
+        return 1
+    if len(matches) > 1:
+        guiprint('> more than one system driver matches ' + lowertext(requested),
+                 colour=ERRORCOLOUR)
+        showtable(['driver'], lowerrows([[name] for name in sorted(matches)]))
+        return 1
+    name = matches[0]
+    condition = 'failed' if name in failed else 'skipped' if name in skipped else 'loaded'
+    devices = driverdevices(name, state)
+    options = parameters.get(name, {})
+    if isinstance(options, dict):
+        optiontext = ', '.join(
+            '{}={}'.format(key, value) for key, value in sorted(options.items()))
+    else:
+        optiontext = ''
+    records = [
+        ['driver', name],
+        ['version', driverversion(name) or 'kernel'],
+        ['state', condition],
+        ['devices', ', '.join(devices) if devices else 'none recorded'],
+        ['parameters', optiontext or 'none'],
+        ['failure', failed.get(name) or 'none'],
+        ['skip reason', skipped.get(name) or 'none'],
+    ]
+    guiprint()
+    showtable(['detail', 'value'], lowerrows(records))
+    guiprint()
     return 0
 
 
@@ -18519,6 +19832,7 @@ def test(args):
         'operations': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'operations'],
         'development': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'development'],
         'dogfood': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'dogfood'],
+        'network': ['/the one/build/brick/brick.py', 'directive-diagnostic', 'network'],
         'image': ['/the one/build/image/image.py', 'diagnostic'],
         'write': ['/the one/build/write/write.py', 'graphics-diagnostic'],
         'write performance': ['/the one/build/write/write.py', 'performance-diagnostic'],
@@ -18627,7 +19941,7 @@ def pythonstatus(args=None):
     rows = [
         ['release', str(core.get('release') or 'unrecorded')],
         ['version', str(core.get('version') or 'unknown')],
-        ['ABI', str(core.get('abi') or 'unknown')],
+        ['abi', str(core.get('abi') or 'unknown')],
         ['authorization', str(data.get('authorization') or 'trusted application')],
         ['health', str(data.get('health') or 'unknown')],
         ['transaction', str(data.get('generation') or 'base')],
@@ -18639,7 +19953,7 @@ def pythonstatus(args=None):
         rows.append(['change', str(transaction.get('phase') or transaction.get('operation') or 'running')])
 
     guiprint()
-    showtable(['Python', 'value'], rows)
+    showtable(['python', 'value'], rows)
     guiprint()
     result['items'] = rows
     return result
@@ -18677,7 +19991,7 @@ def listpythonmodules(args=None):
     if rows:
         showtable(['module', 'version', 'state', 'imports'], rows)
     else:
-        guiprint('> no Python modules are installed', colour=TEXTCOLOUR)
+        guiprint('> no python modules are installed', colour=TEXTCOLOUR)
 
     guiprint()
     result['items'] = modules
@@ -18765,7 +20079,7 @@ def listpythonupdates(args=None):
     if rows:
         showtable(['module', 'installed', 'latest', 'state'], rows)
     else:
-        guiprint('> no added Python modules are installed', colour=TEXTCOLOUR)
+        guiprint('> no added python modules are installed', colour=TEXTCOLOUR)
 
     guiprint()
     result['items'] = updates
@@ -18788,7 +20102,7 @@ def checkpython(args=None):
     if result.get('ok'):
         data = result.get('data', {})
         guiprint(
-            f"> Python and {data.get('files', 0)} managed module files are healthy",
+            f"> python and {data.get('files', 0)} managed module files are healthy",
             colour=TEXTCOLOUR,
         )
 
@@ -18823,7 +20137,7 @@ def pythonhistory(args=None):
     if rows:
         showtable(['time', 'change', 'result', 'transaction'], rows)
     else:
-        guiprint('> Python has no module history', colour=TEXTCOLOUR)
+        guiprint('> python has no module history', colour=TEXTCOLOUR)
 
     guiprint()
     result['items'] = history
@@ -18842,7 +20156,7 @@ def installpythonmodule(args=None):
         guiprint('> use install python module <name> [version <version>]', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_arguments', 'message': 'invalid install syntax'}
 
-    guiprint('> resolving and checking the Python module change', colour=TEXTCOLOUR)
+    guiprint('> resolving and checking the python module change', colour=TEXTCOLOUR)
     return pythonmutationcall('install_module', arguments, timeout=900.0)
 
 
@@ -18883,19 +20197,19 @@ def installpythonwheel(args=None):
     descriptor = None
     try:
         descriptor, path, size, digest = openpythoninput(
-            value, '.whl', 512 * 1024 * 1024, 'Python wheel')
+            value, '.whl', 512 * 1024 * 1024, 'python wheel')
         arguments = {
             'filename': os.path.basename(path),
             'size': size,
             'sha256': digest,
         }
-        guiprint('> checking and installing a local Python wheel',
+        guiprint('> checking and installing a local python wheel',
                  colour=TEXTCOLOUR)
         return pythonmutationcall(
             'install_wheel', arguments, timeout=900.0,
             descriptor=descriptor)
     except Exception as error:
-        guiprint(f'> could not open Python wheel {error}', colour=ERRORCOLOUR)
+        guiprint(f'> could not open python wheel {error}', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_file',
                 'message': str(error), 'items': [], 'data': {}}
     finally:
@@ -18909,7 +20223,7 @@ def pythonmodulechange(operation, usage, args=None):
         guiprint(f'> use {usage}', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_arguments', 'message': 'enter one module name'}
 
-    guiprint('> preparing the Python module change', colour=TEXTCOLOUR)
+    guiprint('> preparing the python module change', colour=TEXTCOLOUR)
     return pythonmutationcall(operation, {'name': args[0]}, timeout=900.0)
 
 
@@ -19037,18 +20351,18 @@ def exportpythonlock(args=None):
         if (not content or len(content) > 1024 * 1024
                 or hashlib.sha256(content).hexdigest()
                 != str(data.get('sha256') or '').lower()):
-            raise ValueError('manager returned an invalid Python lock')
+            raise ValueError('manager returned an invalid python lock')
         target = writepythonlock(value, content)
         result['data'] = {
             'path': target,
             'sha256': hashlib.sha256(content).hexdigest(),
             'size': len(content),
         }
-        result['message'] = 'Python lock exported.'
-        guiprint('> Python lock exported', colour=TEXTCOLOUR)
+        result['message'] = 'python lock exported.'
+        guiprint('> python lock exported', colour=TEXTCOLOUR)
         return result
     except Exception as error:
-        guiprint(f'> could not export Python lock {error}', colour=ERRORCOLOUR)
+        guiprint(f'> could not export python lock {error}', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'write_failed',
                 'message': str(error), 'items': [], 'data': {}}
 
@@ -19062,14 +20376,14 @@ def applypythonlock(args=None):
     descriptor = None
     try:
         descriptor, _, size, digest = openpythoninput(
-            value, '.toml', 1024 * 1024, 'Python lock')
+            value, '.toml', 1024 * 1024, 'python lock')
         arguments = {'size': size, 'sha256': digest}
-        guiprint('> checking and applying the Python lock', colour=TEXTCOLOUR)
+        guiprint('> checking and applying the python lock', colour=TEXTCOLOUR)
         return pythonmutationcall(
             'apply_lock', arguments, timeout=900.0,
             descriptor=descriptor)
     except Exception as error:
-        guiprint(f'> could not open Python lock {error}', colour=ERRORCOLOUR)
+        guiprint(f'> could not open python lock {error}', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_file',
                 'message': str(error), 'items': [], 'data': {}}
     finally:
@@ -19151,50 +20465,83 @@ DIRECTIVESPECS = [
     makespec('show details', [], 'show file or tier details', ['show details <file or tier>'], showdetails, grammar=makegrammar('path', completion='path'), category='inspection'),
     makespec('compare', [], 'compare two files or tiers', ['compare <path> <path>', 'compare <path> with <path>'], compare, grammar=makegrammar('path', connectors=['with'], terms=['with']), category='inspection'),
     makespec('replace', [], 'replace exact text in a file', ['replace "old" "new" <file>', 'replace "old" with "new" in <file>', 'replace all "old" "new" <file>', 'replace all "old" with "new" in <file>'], replace, grammar=makegrammar('file', connectors=['with', 'in'], terms=['all', 'with', 'in']), category='files'),
-    makespec('check syntax', [], 'check Python syntax without running code', ['check syntax <file or tier>'], checksyntax, grammar=makegrammar('path', completion='path'), category='development'),
-    makespec('check system', [], 'check critical T1OS state', ['check system'], checksystem, category='system'),
-    makespec('python status', ['ps'], 'show managed Python health', ['python status'], pythonstatus, category='python'),
-    makespec('check python', ['cp', 'cpm'], 'check Python and added modules', ['check python'], checkpython, category='python'),
-    makespec('python history', ['ph'], 'show Python module changes', ['python history'], pythonhistory, category='python'),
-    makespec('list python modules', ['lpm'], 'list installed Python modules', ['list python modules'], listpythonmodules, category='python'),
-    makespec('show python module', ['spm'], 'show an installed Python module', ['show python module <name>'], showpythonmodule, category='python'),
+    makespec('check syntax', [], 'check python syntax without running code', ['check syntax <file or tier>'], checksyntax, grammar=makegrammar('path', completion='path'), category='development'),
+    makespec('check system', [], 'check critical t1os state', ['check system'], checksystem, category='system'),
+    makespec('python status', ['ps'], 'show managed python health', ['python status'], pythonstatus, category='python'),
+    makespec('check python', ['cp', 'cpm'], 'check python and added modules', ['check python'], checkpython, category='python'),
+    makespec('python history', ['ph'], 'show python module changes', ['python history'], pythonhistory, category='python'),
+    makespec('list python modules', ['lpm'], 'list installed python modules', ['list python modules'], listpythonmodules, category='python'),
+    makespec('show python module', ['spm'], 'show an installed python module', ['show python module <name>'], showpythonmodule, category='python'),
     makespec('find python module', ['fpm'], 'find compatible module versions', ['find python module <name>'], findpythonmodule, category='python'),
     makespec('list python updates', ['lpu'], 'list available module updates', ['list python updates'], listpythonupdates, category='python'),
-    makespec('install python module', ['ipm'], 'install a Python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python'),
-    makespec('install python wheel', ['ipw'], 'install a local Python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
-    makespec('remove python module', ['rpm'], 'remove a Python module', ['remove python module <name>'], removepythonmodule, True, category='python'),
-    makespec('update python module', ['upm'], 'update one Python module', ['update python module <name>'], updatepythonmodule, True, category='python'),
-    makespec('update python modules', ['upms'], 'update added Python modules', ['update python modules'], updatepythonmodules, True, category='python'),
+    makespec('install python module', ['ipm'], 'install a python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python'),
+    makespec('install python wheel', ['ipw'], 'install a local python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
+    makespec('remove python module', ['rpm'], 'remove a python module', ['remove python module <name>'], removepythonmodule, True, category='python'),
+    makespec('update python module', ['upm'], 'update one python module', ['update python module <name>'], updatepythonmodule, True, category='python'),
+    makespec('update python modules', ['upms'], 'update added python modules', ['update python modules'], updatepythonmodules, True, category='python'),
     makespec('pin python module', ['ppm'], 'hold a module version', ['pin python module <name>'], pinpythonmodule, True, category='python'),
     makespec('unpin python module', ['unpm'], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python'),
     makespec('repair python modules', ['rprm'], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python'),
     makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python'),
     makespec('export python lock', ['epl'], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
     makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
-    makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood']), category='development'),
+    makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood', 'network']), category='development'),
     makespec('play', [], 'play an audio or video file', ['play <media file>'], play, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('view', [], 'view an image inline', ['view <image file>'], view, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('run', ['r'], 'run software', ['run <software> [arguments]', 'run <software> [arguments] behind'], run, grammar=makegrammar('file', terms=['behind'], highlight_type='file', highlight='single'), category='operations'),
+    makespec('list software', ['lsw'], 'list broker-approved software', ['list software'], listsoftware, category='operations'),
+    makespec('software details', ['sd'], 'show software details and running state', ['software details <software>'], softwaredetails, category='operations'),
     makespec('kill', ['ko'], 'kill one operation', ['kill <pid|name|%order>', 'kill <target> force'], killop, True, grammar=makegrammar(terms=['force']), category='operations'),
     makespec('list operations', ['lo'], 'list running operations', ['list operations [name|front|behind|completed]'], listops, grammar=makegrammar(terms=['front', 'behind', 'completed']), category='operations'),
+    makespec('operation details', ['od'], 'show operation resource and lifecycle details', ['operation details <target>'], operationdetails, category='operations'),
+    makespec('system performance', ['sp'], 'show system resource and graphics telemetry', ['system performance'], systemperformance, category='operations'),
     makespec('session operations', ['sops'], 'list operations started in this brick session', ['session operations'], sessionops, category='operations'),
     makespec('startup operations', ['suo'], 'list startup operations', ['startup operations'], startupops, category='operations'),
+    makespec('add startup operation', ['aso'], 'add broker-approved software at startup', ['add startup operation <software> <front or behind>'], addstartup, True, grammar=makegrammar(terms=['front', 'behind']), category='operations'),
+    makespec('remove startup operation', ['rso'], 'remove software from startup', ['remove startup operation <software>'], removestartup, True, category='operations'),
+    makespec('change startup operation', ['cso'], 'change startup presentation mode', ['change startup operation <software> <front or behind>'], changestartup, True, grammar=makegrammar(terms=['front', 'behind']), category='operations'),
     makespec('read log', [], 'read an operation log', ['read log <pid|name|%order>'], readlog, category='operations'),
     makespec('follow log', [], 'follow an operation log', ['follow log <pid|name|%order>'], followlog, category='operations'),
     makespec('wait for', [], 'wait for an operation to finish', ['wait for <pid|name|%order>'], waitfor, category='operations'),
     makespec('network', [], 'display network status', ['network'], netstatus, category='networking'),
+    makespec('network details', ['nd'], 'show the active connection details', ['network details'], networkdetails, category='networking'),
+    makespec('list network interfaces', ['lni'], 'list available network interfaces', ['list network interfaces'], listnetworkinterfaces, category='networking'),
+    makespec('use network interface', ['uni'], 'choose the preferred network interface', ['use network interface automatic', 'use network interface <interface>'], usenetworkinterface, True, grammar=makegrammar(terms=['automatic']), category='networking'),
+    makespec('set network address', ['sna'], 'use automatic or manual network addressing', ['set network address automatic', 'set network address <address> <prefix> <gateway>'], setnetworkaddress, True, grammar=makegrammar(terms=['automatic']), category='networking'),
+    makespec('dns status', ['dns'], 'show the dns mode and servers', ['dns status'], dnsstatus, category='networking'),
+    makespec('set dns automatic', ['sda'], 'obtain dns servers automatically', ['set dns automatic'], setdnsautomatic, True, category='networking'),
+    makespec('set dns servers', ['sds'], 'set one or two dns servers', ['set dns servers <primary>', 'set dns servers <primary> <secondary>'], setdnsservers, True, category='networking'),
+    makespec('firewall status', ['fws'], 'show the active firewall policy', ['firewall status'], firewallstatus, category='networking'),
+    makespec('set firewall', ['sfw'], 'choose the protected or open firewall policy', ['set firewall protected', 'set firewall open'], setfirewall, True, grammar=makegrammar(terms=['protected', 'open']), category='networking'),
+    makespec('scan wifi', ['sw'], 'request a wi-fi network scan', ['scan wifi'], scanwifi, category='networking'),
+    makespec('list wifi networks', ['lwn'], 'list the latest wi-fi scan results', ['list wifi networks'], listwifinetworks, category='networking'),
     makespec('ping', [], 'ping a host', ['ping <host>'], ping, category='networking'),
     makespec('receive', [], 'receive a site page', ['receive <page>'], receive, category='networking'),
+    makespec('list drives', ['ld'], 'list t1os drives and availability', ['list drives'], listdrives, category='system'),
+    makespec('drive details', ['dd'], 'show capacity and mount details for one drive', ['drive details <number>'], drivedetails, category='system'),
+    makespec('list rubbish', ['lr'], 'list items in the rubbish', ['list rubbish'], listrubbish, category='rubbish'),
+    makespec('rubbish details', ['rd'], 'show complete metadata for one rubbish item', ['rubbish details <id>'], rubbishdetails, category='rubbish'),
     makespec('empty', [], 'empty the rubbish', ['empty'], empty, category='rubbish'),
     makespec('restore', [], 'restore a file or tier from rubbish', ['restore <name>', 'restore <name> from <original tier>', 'restore id <id>'], restore, grammar=makegrammar('path', terms=['id', 'from'], highlight_type='file', highlight='rubbish'), category='rubbish'),
     makespec('reveal', [], 'toggle hidden item display', ['reveal'], togglehidden, category='tiers'),
     makespec('role', [], 'display the current system role', ['role'], role, category='system'),
     makespec('architect', [], 'change the system role', ['architect'], architectdir, headless=False, category='system'),
+    makespec('list system drivers', ['lsd'], 'list loaded, skipped and failed drivers', ['list system drivers'], listsystemdrivers, category='system'),
+    makespec('system driver details', ['sdd'], 'show state and recorded driver failure', ['system driver details <name>'], systemdriverdetails, category='system'),
     makespec('time', [], 'display the current date and time', ['time'], timedir, category='system'),
+    makespec('set timezone', ['stz'], 'set the system timezone', ['set timezone <area/city>'], settimezone, True, category='system'),
+    makespec('set automatic time', ['sat'], 'configure automatic clock sources', ['set automatic time <off or internet or virtualbox or both>'], setautomatictime, True, grammar=makegrammar(terms=['off', 'internet', 'virtualbox', 'both']), category='system'),
+    makespec('set date and time', ['sdt'], 'set the manual atreyan date and local time', ['set date and time <dd.mm.yae> <hh.mm>'], setdateandtime, True, category='system'),
+    makespec('terminal name', ['tn'], 'show the current terminal name', ['terminal name'], terminalname, category='system'),
+    makespec('set terminal name', ['stn'], 'change the terminal hostname', ['set terminal name <name>'], setterminalname, True, category='system'),
+    makespec('change master name', ['cmn'], 'change the master account name', ['change master name <name>'], changemastername, True, category='system'),
+    makespec('change master password', ['cmp'], 'change the master account password', ['change master password'], changemasterpassword, True, category='system'),
+    makespec('history', ['h'], 'show recent brick directives', ['history', 'history <count>'], historydir, category='system'),
+    makespec('clear history', ['ch'], 'erase persisted brick history', ['clear history'], clearhistory, True, category='system'),
     makespec('clear', ['cl'], 'clear output', ['clear'], cleardir, category='system'),
-    makespec('version', ['v'], 'show the T1OS version', ['version'], version, category='system'),
-    makespec('help', [], 'show directive help', ['help', 'help <category or directive>'], help, category='system'),
-    makespec('log out', [], 'log out of T1OS', ['log out'], logout, headless=False, category='system'),
+    makespec('version', ['v'], 'show the t1os version', ['version'], version, category='system'),
+    makespec('help', [], 'show directive categories', ['help', 'help <category>'], help, grammar=makegrammar(terms=DIRECTIVECATEGORIES), category='system'),
+    makespec('log out', [], 'log out of t1os', ['log out'], logout, headless=False, category='system'),
     makespec('shut down', [], 'shut down the terminal', ['shut down'], shutdown, headless=False, category='system'),
     makespec('restart', [], 'restart the terminal', ['restart'], restart, headless=False, category='system'),
     makespec('exit', [], 'exit brick', ['exit'], exitdir, headless=False, category='system'),
@@ -19816,6 +21163,35 @@ def diagnosticparsing():
 
         result['checks']['python_aliases'] = True
 
+        selectedaliases = {
+            'list software': 'lsw',
+            'software details': 'sd',
+            'operation details': 'od',
+            'system performance': 'sp',
+            'list drives': 'ld',
+            'drive details': 'dd',
+            'list rubbish': 'lr',
+            'rubbish details': 'rd',
+            'list system drivers': 'lsd',
+            'system driver details': 'sdd',
+            'add startup operation': 'aso',
+            'remove startup operation': 'rso',
+            'change startup operation': 'cso',
+            'history': 'h',
+            'clear history': 'ch',
+            'set timezone': 'stz',
+            'set automatic time': 'sat',
+            'set date and time': 'sdt',
+            'terminal name': 'tn',
+            'set terminal name': 'stn',
+            'change master name': 'cmn',
+            'change master password': 'cmp',
+        }
+        for name, alias in selectedaliases.items():
+            if alias not in directivespec(name).get('aliases', []):
+                raise RuntimeError('selected directive alias missing for ' + name)
+        result['checks']['selected_aliases'] = True
+
         categories = [spec.get('category', '') for spec in DIRECTIVESPECS]
 
         if len(DIRECTIVECATEGORIES) != len(set(DIRECTIVECATEGORIES)):
@@ -19841,6 +21217,13 @@ def diagnosticparsing():
 
         if not categoryresult.get('ok') or 'inspection directives' not in categorytext or 'show details' not in categorytext:
             raise RuntimeError('focused category help failed')
+
+        SCROLL.clear()
+        STYLES.clear()
+        directiveresult = rundirective('help run', echo=False)
+        directivetext = '\n'.join(str(line) for line in SCROLL)
+        if directiveresult.get('ok') or 'help accepts a directive category' not in directivetext:
+            raise RuntimeError('per-directive help was not retired')
 
         INPUTBUF = 'help oper'
         CURSORPOS = len(INPUTBUF)
@@ -19914,7 +21297,7 @@ def diagnosticparsing():
         try:
 
             DRIVES = {
-                1: {'number': 1, 'root': '/', 'label': 'T1OS', 'removable': False},
+                1: {'number': 1, 'root': '/', 'label': 't1os', 'removable': False},
                 2: {'number': 2, 'root': diagnosticdriveroot, 'label': 'diagnostic', 'removable': True},
             }
             DRIVELASTSCAN = time.time()
@@ -20057,7 +21440,7 @@ def diagnosticfiles():
         try:
 
             DRIVES = {
-                1: {'number': 1, 'root': '/', 'label': 'T1OS', 'removable': False},
+                1: {'number': 1, 'root': '/', 'label': 't1os', 'removable': False},
                 2: {'number': 2, 'root': copydestination, 'label': 'diagnostic', 'removable': True},
             }
             DRIVELASTSCAN = time.time()
@@ -20405,6 +21788,145 @@ def diagnosticdogfood():
     return result
 
 
+def diagnosticnetwork():
+
+    global BRICKNETWORKDIR, BRICKNETWORKFILE, BRICKDNSFILE
+    global BRICKNETWORKSTATE, BRICKFIREWALLSTATE, BRICKWIRELESSSTATE
+    global BRICKWIRELESSREQUEST, BRICKNETWORKREQUEST, BRICKNETSTATE
+
+    result = {'suite': 'network', 'passed': False, 'checks': {}, 'errors': []}
+    root = f'/.ephemeral/brick/network-diagnostic-{os.getpid()}'
+    originals = {
+        'BRICKNETWORKDIR': BRICKNETWORKDIR,
+        'BRICKNETWORKFILE': BRICKNETWORKFILE,
+        'BRICKDNSFILE': BRICKDNSFILE,
+        'BRICKNETWORKSTATE': BRICKNETWORKSTATE,
+        'BRICKFIREWALLSTATE': BRICKFIREWALLSTATE,
+        'BRICKWIRELESSSTATE': BRICKWIRELESSSTATE,
+        'BRICKWIRELESSREQUEST': BRICKWIRELESSREQUEST,
+        'BRICKNETWORKREQUEST': BRICKNETWORKREQUEST,
+        'BRICKNETSTATE': BRICKNETSTATE,
+    }
+
+    try:
+        settings = os.path.join(root, 'settings', 'network')
+        runtime = os.path.join(root, 'runtime', 'network')
+        netstate = os.path.join(root, 'net')
+        os.makedirs(settings, mode=0o755, exist_ok=False)
+        os.makedirs(runtime, mode=0o755, exist_ok=False)
+        os.makedirs(os.path.join(netstate, 'eth0'), mode=0o755, exist_ok=False)
+        os.makedirs(os.path.join(netstate, 'wlan0', 'wireless'), mode=0o755, exist_ok=False)
+
+        BRICKNETWORKDIR = settings
+        BRICKNETWORKFILE = os.path.join(settings, 'network.txt')
+        BRICKDNSFILE = os.path.join(settings, 'dns.txt')
+        BRICKNETWORKSTATE = os.path.join(runtime, 'connection.json')
+        BRICKFIREWALLSTATE = os.path.join(runtime, 'firewall.json')
+        BRICKWIRELESSSTATE = os.path.join(runtime, 'wireless.json')
+        BRICKWIRELESSREQUEST = os.path.join(runtime, 'scan.request')
+        BRICKNETWORKREQUEST = os.path.join(runtime, 'reconfigure.request')
+        BRICKNETSTATE = netstate
+
+        networkatomictext(BRICKNETWORKFILE, 'interface=\ndns=automatic\nfirewall=protected\ndhcp=true\n')
+        networkatomictext(BRICKDNSFILE, 'nameserver 10.0.2.3\n')
+        networkatomictext(os.path.join(netstate, 'eth0', 'operstate'), 'up\n')
+        networkatomictext(os.path.join(netstate, 'wlan0', 'operstate'), 'down\n')
+
+        for path, value in (
+            (BRICKNETWORKSTATE, {
+                'connected': True, 'interface': 'eth0', 'type': 'ethernet',
+                'name': 'diagnostic network', 'address': '10.0.2.15',
+                'gateway': '10.0.2.2', 'server': '10.0.2.2',
+                'mac': '08:00:27:00:00:01'}),
+            (BRICKFIREWALLSTATE, {
+                'active': True, 'profile': 'protected', 'incoming': 'blocked',
+                'forwarding': 'blocked', 'outgoing': 'allowed'}),
+            (BRICKWIRELESSSTATE, {'networks': [
+                {'ssid': 'nearby network', 'security': 'wpa2', 'signal': -40},
+                {'ssid': 'open network', 'security': 'open', 'signal': -70},
+            ]}),
+        ):
+            networkatomictext(path, json.dumps(value, sort_keys=True) + '\n')
+
+        SCROLL.clear()
+        STYLES.clear()
+        if not rundirective('nd', echo=False).get('ok'):
+            raise RuntimeError('network details alias failed')
+        if 'diagnostic network' not in '\n'.join(str(line) for line in SCROLL):
+            raise RuntimeError('network details omitted the active connection')
+        result['checks']['details'] = True
+
+        if not rundirective('lni', echo=False).get('ok'):
+            raise RuntimeError('network interface list failed')
+        result['checks']['interfaces'] = True
+
+        if not rundirective('uni wlan0', echo=False).get('ok') or networkreadconfig().get('interface') != 'wlan0':
+            raise RuntimeError('preferred network interface did not persist')
+        result['checks']['interface_selection'] = True
+
+        if not rundirective('sds 1.1.1.1 8.8.8.8', echo=False).get('ok'):
+            raise RuntimeError('manual DNS directive failed')
+        if networkdnsservers() != ['1.1.1.1', '8.8.8.8'] or networkreadconfig().get('dns') != 'manual':
+            raise RuntimeError('manual DNS settings did not persist')
+        if not rundirective('dns', echo=False).get('ok'):
+            raise RuntimeError('dns status alias failed')
+        result['checks']['dns'] = True
+
+        if not rundirective('sna 192.0.2.10 24 192.0.2.1', echo=False).get('ok'):
+            raise RuntimeError('manual address directive failed')
+        addressconfig = networkreadconfig()
+        if addressconfig.get('dhcp') != 'false' or addressconfig.get('address') != '192.0.2.10':
+            raise RuntimeError('manual address did not persist')
+        if not os.path.isfile(os.path.join(settings, 'wlan0.txt')):
+            raise RuntimeError('selected interface configuration was not updated')
+        if rundirective('sda', echo=False).get('ok'):
+            raise RuntimeError('automatic DNS was allowed with a manual address')
+        if not rundirective('sna automatic', echo=False).get('ok') or not rundirective('sda', echo=False).get('ok'):
+            raise RuntimeError('automatic address and DNS directives failed')
+        result['checks']['addressing'] = True
+
+        if not rundirective('sfw open', echo=False).get('ok') or networkreadconfig().get('firewall') != 'open':
+            raise RuntimeError('firewall profile did not persist')
+        if not rundirective('fws', echo=False).get('ok'):
+            raise RuntimeError('firewall status alias failed')
+        result['checks']['firewall'] = True
+
+        if not rundirective('sw', echo=False).get('ok') or not os.path.isfile(BRICKWIRELESSREQUEST):
+            raise RuntimeError('wi-fi scan request failed')
+        if not rundirective('lwn', echo=False).get('ok'):
+            raise RuntimeError('wi-fi list alias failed')
+        if 'nearby network' not in '\n'.join(str(line) for line in SCROLL):
+            raise RuntimeError('wi-fi list omitted scan results')
+        result['checks']['wifi'] = True
+
+        output = [str(line) for line in SCROLL]
+        if any(line != line.lower() for line in output):
+            raise RuntimeError('network directive output was not lowercase')
+        result['checks']['lowercase_output'] = True
+
+        result['checks']['reconfigure_request'] = os.path.isfile(BRICKNETWORKREQUEST)
+        result['passed'] = all(result['checks'].values())
+
+    except Exception as error:
+        result['errors'].append(str(error))
+
+    finally:
+        BRICKNETWORKDIR = originals['BRICKNETWORKDIR']
+        BRICKNETWORKFILE = originals['BRICKNETWORKFILE']
+        BRICKDNSFILE = originals['BRICKDNSFILE']
+        BRICKNETWORKSTATE = originals['BRICKNETWORKSTATE']
+        BRICKFIREWALLSTATE = originals['BRICKFIREWALLSTATE']
+        BRICKWIRELESSSTATE = originals['BRICKWIRELESSSTATE']
+        BRICKWIRELESSREQUEST = originals['BRICKWIRELESSREQUEST']
+        BRICKNETWORKREQUEST = originals['BRICKNETWORKREQUEST']
+        BRICKNETSTATE = originals['BRICKNETSTATE']
+        SCROLL.clear()
+        STYLES.clear()
+        shutil.rmtree(root, ignore_errors=True)
+
+    return result
+
+
 def focuseddirectivediagnosticcommand(suite):
 
     name = str(suite or '').strip().casefold()
@@ -20416,6 +21938,7 @@ def focuseddirectivediagnosticcommand(suite):
         'operations': diagnosticoperations,
         'development': diagnosticdevelopment,
         'dogfood': diagnosticdogfood,
+        'network': diagnosticnetwork,
     }
     function = functions.get(name)
 
@@ -21005,6 +22528,7 @@ def directivediagnosticcommand():
             diagnosticoperations(),
             diagnosticdevelopment(),
             diagnosticdogfood(),
+            diagnosticnetwork(),
         ]
 
         for suite in suites:
@@ -21265,7 +22789,7 @@ def runfilewithoutwindow(path, arguments=None):
     target = os.path.abspath(os.path.normpath(str(path)))
 
     if not target.lower().endswith('.py') or not os.path.isfile(target):
-        print(formatlog('brick', 'the selected Python file is unavailable'), file=sys.stderr)
+        print(formatlog('brick', 'the selected python file is unavailable'), file=sys.stderr)
         return 1
 
     command = [os.path.realpath(sys.executable), '-u', target]
@@ -21286,7 +22810,7 @@ def runfilewithoutwindow(path, arguments=None):
         return status
 
     except Exception as error:
-        print(formatlog('brick', f'could not run selected Python file — {error}'), file=sys.stderr)
+        print(formatlog('brick', f'could not run selected python file — {error}'), file=sys.stderr)
         return 1
 
 
