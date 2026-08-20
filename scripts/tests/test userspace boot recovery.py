@@ -168,6 +168,9 @@ def main():
     require(
         operations,
         "'TIME_SAMPLE_SET': frozenset(('reign',))",
+        "VALIDRECOVERYACTIONS = frozenset(('python', 'build', 'reset', 'reinstall'))",
+        "authentication = authbroker.authenticate_master(",
+        "recovery_token=token",
         'zoneinfo.ZoneInfo.from_file(stream, key=name)',
         "if kind == 'brick':",
         "return ['--run-file', target, *trailing]",

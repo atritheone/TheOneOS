@@ -234,6 +234,7 @@ test "$(
 )" = "$(sha256sum "$init" | awk '{print $1}')"
 dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'sbin/cryptsetup'
 dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'sbin/roothealth'
+dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'sbin/recoveryauth'
 dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'lib64/ld-linux-x86-64.so.2'
 dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'bin/sh'
 dd if="$initramfs" skip="$offset" iflag=skip_bytes status=none | gzip -cd | cpio -it 2>/dev/null | grep -qx 'bin/mdev'

@@ -59,7 +59,15 @@ mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "/mnt/.ephemeral" || exec /bin/bu
 # measured domains. This is the software-runtime subset of the hardware init's
 # permission preparation; no device, firmware, recovery, or storage logic is
 # needed by the VM.
-python_management="/mnt/the one/software/python/.t1pip"
+legacy_python_management="/mnt/the one/software/python/.t1pip"
+python_management="/mnt/the one/software/python/pip"
+[ ! -L "$legacy_python_management" ] || exec /bin/busybox sh
+[ ! -L "$python_management" ] || exec /bin/busybox sh
+if [ -e "$legacy_python_management" ]; then
+    [ -d "$legacy_python_management" ] || exec /bin/busybox sh
+    [ ! -e "$python_management" ] || exec /bin/busybox sh
+    /bin/busybox mv -- "$legacy_python_management" "$python_management" || exec /bin/busybox sh
+fi
 [ ! -L "$python_management" ] || exec /bin/busybox sh
 /bin/busybox mkdir -p \
     "$python_management/artifacts" \

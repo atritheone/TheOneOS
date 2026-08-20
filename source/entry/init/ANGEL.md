@@ -20,6 +20,18 @@ verifies every restored regular file before reporting success. A journal and
 one-shot Settings request live under `T1OS/` on the EFI system partition so an
 interrupted operation resumes instead of being mistaken for a completed one.
 
+Before offering an operating-system repair, Angel combines the current
+RootHealth result, the last five captured RootHealth boot records, root-device
+identity, root layout, the signed recovery generation, and per-component
+manifest comparisons. A Python-only difference recommends Python repair; a
+build-only difference recommends build repair; damage to boot, drivers,
+resources, Chromium, graphics, audio, network, system, virtual-machine, or
+multiple component scopes recommends reset. A healthy identity-bound
+filesystem with no valid The One OS layout recommends reinstall. Matching
+files do not justify a repair. A RootHealth refusal, an unidentified root, or
+an unavailable recovery baseline suppresses every write recommendation and
+instead gives the applicable storage or evidence advice.
+
 Angel offers four recovery actions: repair Python and its managed libraries;
 reset the build software; reset The One OS while retaining user files; and
 reinstall The One OS while deleting user files. Reset preserves `/master`,
@@ -27,6 +39,19 @@ reinstall The One OS while deleting user files. Reset preserves `/master`,
 repopulates the existing, identity-bound root filesystem. It does not reformat
 that filesystem because its signed identity and root-health journal are part
 of the boot trust chain.
+
+Python and build repair retain user files and settings. Reset replaces the
+managed operating system, settings, and logs while preserving `/master`,
+`/software`, and `/the one/master`. Reinstall explicitly warns that every user
+file on the root will be removed. Every manually selected destructive action
+requires the user to type its exact name and then authenticate with the master
+password. Authentication is performed by the native initramfs
+`/sbin/recoveryauth` executable against the root-owned credential record; it
+does not depend on the installed Python runtime. Settings requests are
+authenticated before reboot. Reset and reinstall convert that one-shot
+authorization into a root-owned, action-bound continuation record so a power
+loss can resume the same transaction without an expired token authorizing a
+different action.
 
 The production recovery interface accepts only the documented short answers,
 such as `yes`, `no`, `reset`, and `reinstall`. It never exposes a general shell.
@@ -58,6 +83,14 @@ stderr on the EFI system partition and presents the stable diagnostic code,
 the exact failed predicates, and one of the operational classes `repairable`,
 `recovery-required`, `unsupported`, `io`, `wrong-root`,
 `ambiguous-corruption`, or `internal`.
+
+The EFI system partition retains bounded `report.json`, `stderr.txt`, and
+`manifest.env` evidence for the five most recent boot identities. Angel states
+when the same refusal code and failed-predicate fingerprint recurs, also tracks
+root discovery and mount failure categories, and states when recent evidence
+varies. Varying evidence is treated as a storage, connection, power, or
+nondeterminism signal rather than proof that an operating-system component
+should be replaced.
 
 GODDESS also arms a one-shot `T1OS/roothealth-shutdown-request` after services
 and storage users have stopped. It then restarts into Angel so the root is

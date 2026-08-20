@@ -135,6 +135,11 @@ function Wait-GuestMode {
 }
 
 $script:VBoxManage = Get-VBoxManage
+$vmValidationScript = Join-Path $projectRoot 'scripts\vm\run vbox.ps1'
+& pwsh -NoLogo -NoProfile -NonInteractive -File $vmValidationScript -ValidateOnly
+if ($LASTEXITCODE -ne 0) {
+    throw 'The VirtualBox VM configuration or its boot media is not current.'
+}
 $startedByTest = $false
 $running = & $VBoxManage list runningvms
 if (-not ($running | Select-String -SimpleMatch "`"$VmName`"" -Quiet)) {

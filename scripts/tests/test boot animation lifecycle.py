@@ -113,7 +113,7 @@ def main():
 
     for text in (
         "def gpuwindowretainedsystem(",
-        'if not bool(win.get("_managed_only", False)):',
+        'if win["_managed_only"]:',
         '"boot animation", "system animation", "lockscreen", "startup"',
         "graphics system scene committed",
         "graphics startup compositor waiting for first mapped scene",

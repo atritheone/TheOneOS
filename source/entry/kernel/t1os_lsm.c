@@ -520,12 +520,54 @@ static bool t1os_is_expanse_runtime_path(const char *path)
 
 static bool t1os_is_python_management_path(const char *path)
 {
-	static const char root[] = "/the one/software/python/.t1pip";
+	static const char root[] = "/the one/software/python/pip";
 
 	return path &&
 	       (!strcmp(path, root) ||
 		(!strncmp(path, root, sizeof(root) - 1) &&
 		 path[sizeof(root) - 1] == '/'));
+}
+
+static bool t1os_is_python_site_packages_path(const char *path)
+{
+	static const char root[] =
+		"/the one/software/python/lib/python3.14/site-packages";
+
+	/* The directory object remains part of the immutable Python release.  The
+	 * measured package service may create, replace, and remove only children. */
+	return path && !strncmp(path, root, sizeof(root) - 1) &&
+	       path[sizeof(root) - 1] == '/';
+}
+
+static bool t1os_is_python_package_command_path(const char *path)
+{
+	static const char root[] = "/the one/software/python/bin";
+	const char *relative;
+
+	if (!path || strncmp(path, root, sizeof(root) - 1) ||
+	    path[sizeof(root) - 1] != '/')
+		return false;
+	relative = path + sizeof(root);
+	/* These fixed release entry points can never be package commands. */
+	return strcmp(relative, "python") &&
+	       strcmp(relative, "python3.13") &&
+	       strcmp(relative, "python3.14");
+}
+
+static bool t1os_is_python_package_catalogue_path(const char *path)
+{
+	static const char root[] = "/the one/catalogue/python";
+
+	return path && !strncmp(path, root, sizeof(root) - 1) &&
+	       path[sizeof(root) - 1] == '/';
+}
+
+static bool t1os_is_python_package_path(const char *path)
+{
+	return t1os_is_python_management_path(path) ||
+	       t1os_is_python_site_packages_path(path) ||
+	       t1os_is_python_package_command_path(path) ||
+	       t1os_is_python_package_catalogue_path(path);
 }
 
 /* /.ephemeral is a boot-scoped tmpfs scratch tier, not an authority boundary.
@@ -599,7 +641,7 @@ static bool t1os_is_special_path(const char *path)
 		return true;
 	if (t1os_is_expanse_runtime_path(path))
 		return true;
-	if (t1os_is_python_management_path(path))
+	if (t1os_is_python_package_path(path))
 		return true;
 
 	/* Obsolete graphics state may be removed once during an upgraded boot. */
@@ -839,7 +881,7 @@ static bool t1os_special_write_allowed(const char *path)
 		return t1os_domain_is(T1OS_DOMAIN_EXPANSE);
 	/* The measured Python package service is the sole writer of its private
 	 * state beneath the otherwise immutable system interpreter tree. */
-	if (t1os_is_python_management_path(path))
+	if (t1os_is_python_package_path(path))
 		return t1os_domain_is(T1OS_DOMAIN_PYTHON_SERVICE);
 
 	if (!strcmp(path, "/the one/settings") ||

@@ -7,7 +7,9 @@ The first control-panel application for The One OS.
 """
 
 import datetime
+import base64
 import ctypes
+import hashlib
 import importlib.metadata as importlib_metadata
 import ipaddress
 import json
@@ -17,6 +19,7 @@ import selectors
 import secrets
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
@@ -45,8 +48,6 @@ except Exception:
     pythonrequest = None
 
 from operations.operations import (
-    architect_authorize,
-    architect_revoke,
     service_secret_delete,
     service_secret_exists,
     service_secret_put,
@@ -237,8 +238,17 @@ PYTHONSTATE = {}
 PYTHONMODULES = []
 PYTHONSELECTED = ''
 PYTHONQUERY = ''
+PYTHONFILTER = 'installed'
+PYTHONSORT = 'name'
+PYTHONSORTDESC = False
+PYTHONUPDATES = {}
+PYTHONHISTORY = []
+PYTHONFOUND = {}
+PYTHONADVANCED = False
+PYTHONCOLUMNWIDTHS = {}
 PYTHONPENDING = None
 PYTHONWORK = None
+PYTHONWORKOPERATION = ''
 PYTHONWORKRESULT = None
 PYTHONWORKLOCK = threading.Lock()
 PYTHONLASTREFRESH = 0.0
@@ -992,6 +1002,98 @@ def pythonmoduleview():
     ]
 
 
+def pythonmodulekind(item):
+    if item.get('system'):
+        return 'system'
+    if item.get('requested'):
+        return 'requested'
+    return 'dependency'
+
+
+def pythonmoduledate(value):
+    try:
+        return datetime.datetime.fromtimestamp(float(value)).strftime('%Y-%m-%d')
+    except (OSError, OverflowError, TypeError, ValueError):
+        return 'system' if value is None else 'unknown'
+
+
+def visiblepythonmodules():
+    modules = list(pythonmoduleview())
+    if PYTHONFILTER == 'requested':
+        modules = [item for item in modules if item.get('requested')]
+    elif PYTHONFILTER == 'dependencies':
+        modules = [
+            item for item in modules
+            if not item.get('system') and not item.get('requested')]
+    elif PYTHONFILTER == 'system':
+        modules = [item for item in modules if item.get('system')]
+    elif PYTHONFILTER == 'updates':
+        modules = [
+            item for item in modules
+            if (PYTHONUPDATES.get(str(item.get('name') or '')) or {}).get(
+                'available')]
+    sorters = {
+        'name': lambda item: str(
+            item.get('display_name') or item.get('name') or '').casefold(),
+        'version': lambda item: str(item.get('version') or '').casefold(),
+        'installed': lambda item: float(item.get('installed_at') or 0.0),
+        'status': lambda item: pythonmodulekind(item),
+    }
+    return sorted(
+        modules,
+        key=sorters.get(PYTHONSORT, sorters['name']),
+        reverse=bool(PYTHONSORTDESC),
+    )
+
+
+def pythoncolumnlayout(contentx, rowwidth):
+    if not PYTHONCOLUMNWIDTHS:
+        PYTHONCOLUMNWIDTHS.update({
+            'name': max(150, int(rowwidth * 0.38)),
+            'version': max(100, int(rowwidth * 0.18)),
+            'installed': max(110, int(rowwidth * 0.22)),
+        })
+    namewidth = max(120, int(PYTHONCOLUMNWIDTHS.get('name', rowwidth * 0.38)))
+    versionwidth = max(90, int(PYTHONCOLUMNWIDTHS.get('version', rowwidth * 0.18)))
+    installedwidth = max(100, int(PYTHONCOLUMNWIDTHS.get('installed', rowwidth * 0.22)))
+    overflow = namewidth + versionwidth + installedwidth + 100 - rowwidth
+    if overflow > 0:
+        namewidth = max(120, namewidth - overflow)
+    used = namewidth + versionwidth + installedwidth
+    statuswidth = max(100, rowwidth - used)
+    return {
+        'name': [contentx, namewidth],
+        'version': [contentx + namewidth, versionwidth],
+        'installed': [contentx + namewidth + versionwidth, installedwidth],
+        'status': [contentx + used, statuswidth],
+    }
+
+
+def resizepythoncolumn(name, pointerx):
+    contentx = 205
+    rowwidth = max(360, WINW - 233)
+    columns = pythoncolumnlayout(contentx, rowwidth)
+    order = ('name', 'version', 'installed', 'status')
+    if name not in order[:-1]:
+        return False
+    index = order.index(name)
+    nextname = order[index + 1]
+    left, width = columns[name]
+    _nextleft, nextwidth = columns[nextname]
+    pair = width + nextwidth
+    minimum = 120 if name == 'name' else 90 if name == 'version' else 100
+    nextminimum = 90 if nextname == 'version' else 100
+    newwidth = int(clamp(pointerx - left, minimum, pair - nextminimum))
+    PYTHONCOLUMNWIDTHS[name] = newwidth
+    if nextname != 'status':
+        PYTHONCOLUMNWIDTHS[nextname] = pair - newwidth
+    return True
+
+
+def pythontableheader():
+    return 400 if PYTHONADVANCED else 306
+
+
 def selectedpythonmodule():
     return next((
         item for item in pythonmoduleview()
@@ -999,7 +1101,82 @@ def selectedpythonmodule():
     ), None)
 
 
-def _pythonworker(operation, arguments, timeout):
+def parsepythonquery(value):
+    match = re.fullmatch(
+        r'([A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?)'
+        r'(?:==([A-Za-z0-9](?:[A-Za-z0-9.!+_-]{0,126}[A-Za-z0-9])?))?',
+        str(value or '').strip(),
+    )
+    if not match:
+        raise ValueError('Use a module name or name==version.')
+    arguments = {'name': match.group(1)}
+    if match.group(2):
+        arguments['version'] = match.group(2)
+    return arguments
+
+
+def writepythonlockfile(path, content):
+    path = os.path.abspath(str(path))
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent) or os.path.islink(parent):
+        raise ValueError('Choose an existing destination tier.')
+    if os.path.lexists(path) and (
+            os.path.islink(path) or not os.path.isfile(path)):
+        raise ValueError('Choose a regular destination file.')
+    descriptor, temporary = tempfile.mkstemp(
+        prefix='python-lock-', suffix='.tmp', dir=parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        offset = 0
+        while offset < len(content):
+            written = os.write(descriptor, content[offset:])
+            if written <= 0:
+                raise OSError('The Python lock write ended early.')
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, path)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+    return path
+
+
+def pythoninputdescriptor(path, suffix, maximum):
+    path = os.path.abspath(str(path))
+    if not path.casefold().endswith(str(suffix).casefold()):
+        raise ValueError('Choose a ' + suffix + ' file.')
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) |
+        getattr(os, 'O_NOFOLLOW', 0),
+    )
+    try:
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode) or status.st_nlink != 1 or
+            status.st_size <= 0 or status.st_size > maximum
+        ):
+            raise ValueError('Choose a safe regular file.')
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            digest.update(block)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor, status.st_size, digest.hexdigest()
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _pythonworker(operation, arguments, timeout, descriptor=None):
     global PYTHONWORKRESULT
     outcome = {'operation': operation, 'response': None, 'error': None}
     try:
@@ -1007,9 +1184,25 @@ def _pythonworker(operation, arguments, timeout):
             raise RuntimeError('The Python manager client is unavailable.')
         if operation == 'refresh':
             response = None
+        elif operation == 'export_lock_file':
+            response = pythonrequest('export_lock', timeout=timeout)
+            data = response.get('data', {})
+            content = base64.b64decode(
+                str(data.get('content') or ''), validate=True)
+            if (
+                not content or len(content) > 1024 * 1024 or
+                hashlib.sha256(content).hexdigest() !=
+                str(data.get('sha256') or '').lower()
+            ):
+                raise RuntimeError('The Python manager returned an invalid lock.')
+            target = writepythonlockfile(arguments.get('path'), content)
+            response = dict(response)
+            response['message'] = 'Python lock exported.'
+            response['data'] = {'path': target, 'size': len(content)}
         else:
             response = pythonrequest(
-                operation, arguments=arguments, timeout=timeout)
+                operation, arguments=arguments, timeout=timeout,
+                descriptor=descriptor)
         statusresponse = pythonrequest('status', timeout=5.0)
         modulesresponse = pythonrequest('list_modules', timeout=5.0)
         outcome.update({
@@ -1028,25 +1221,37 @@ def _pythonworker(operation, arguments, timeout):
             })
         except Exception:
             pass
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
     with PYTHONWORKLOCK:
         PYTHONWORKRESULT = outcome
 
 
-def startpythonrequest(operation='refresh', arguments=None, timeout=10.0):
-    global PYTHONWORK
+def startpythonrequest(
+        operation='refresh', arguments=None, timeout=10.0, descriptor=None):
+    global PYTHONWORK, PYTHONWORKOPERATION
     if PYTHONWORK is not None and PYTHONWORK.is_alive():
+        if descriptor is not None:
+            os.close(descriptor)
         setstatus('A Python request is already running.', True, section='python')
         return False
     thread = threading.Thread(
         target=_pythonworker,
-        args=(str(operation), dict(arguments or {}), float(timeout)),
+        args=(
+            str(operation), dict(arguments or {}), float(timeout),
+            descriptor),
         name='settings Python request',
         daemon=True,
     )
     PYTHONWORK = thread
+    PYTHONWORKOPERATION = str(operation)
     thread.start()
     if operation != 'refresh':
-        setstatus('Preparing a protected system Python change…', section='python')
+        setstatus('Preparing the Python module change…', section='python')
         writevmteststatus('python-running', python_operation=str(operation))
     redraw()
     return True
@@ -1054,25 +1259,36 @@ def startpythonrequest(operation='refresh', arguments=None, timeout=10.0):
 
 def pollpythonrequest():
     global PYTHONWORK, PYTHONWORKRESULT, PYTHONSTATE, PYTHONMODULES
-    global PYTHONSELECTED, PYTHONQUERY, PYTHONLASTREFRESH
+    global PYTHONSELECTED, PYTHONQUERY, PYTHONLASTREFRESH, PYTHONUPDATES
+    global PYTHONPENDING, PYTHONHISTORY, PYTHONFOUND, PYTHONWORKOPERATION
     with PYTHONWORKLOCK:
         outcome = PYTHONWORKRESULT
         PYTHONWORKRESULT = None
     if outcome is None:
         return False
-    try:
-        architect_revoke(timeout=3.0)
-    except Exception:
-        # A consumed one-shot capability may already be absent. A broker
-        # transport failure is surfaced by the worker result and cannot grant
-        # new authority by itself.
-        pass
     PYTHONWORK = None
+    PYTHONWORKOPERATION = ''
     PYTHONLASTREFRESH = time.monotonic()
     if isinstance(outcome.get('status'), dict):
         PYTHONSTATE = dict(outcome['status'])
     if isinstance(outcome.get('modules'), list):
         PYTHONMODULES = list(outcome['modules'])
+    response = outcome.get('response') or {}
+    if outcome.get('operation') == 'list_updates':
+        updates = response.get('data', {}).get('updates', [])
+        if isinstance(updates, list):
+            PYTHONUPDATES = {
+                str(item.get('name') or ''): dict(item)
+                for item in updates if isinstance(item, dict)
+            }
+    elif outcome.get('operation') == 'history':
+        history = response.get('data', {}).get('history', [])
+        if isinstance(history, list):
+            PYTHONHISTORY = list(history)
+    elif outcome.get('operation') == 'find_module':
+        found = response.get('data', {})
+        if isinstance(found, dict):
+            PYTHONFOUND = dict(found)
     if PYTHONSELECTED and not selectedpythonmodule():
         PYTHONSELECTED = ''
     error = outcome.get('error')
@@ -1091,8 +1307,21 @@ def pollpythonrequest():
         # replaces them; otherwise the ten-second refresh loop erases the only
         # useful diagnosis while the page still appears healthy.
         pass
+    elif outcome.get('operation') == 'preview_change':
+        preview = response.get('data', {})
+        PYTHONPENDING = {
+            'operation': str(preview.get('change_operation') or ''),
+            'arguments': dict(preview.get('change_arguments') or {}),
+            'message': str(preview.get('message') or 'Review the Python module change.'),
+            'changes': list(preview.get('changes') or []),
+            'notes': list(preview.get('notes') or []),
+        }
+        setstatus('Review the Python module change.', section='python')
+    elif outcome.get('operation') == 'find_module':
+        name = str(PYTHONFOUND.get('name') or 'module')
+        latest = str(PYTHONFOUND.get('latest') or 'no compatible release')
+        setstatus('Found {} — latest {}.'.format(name, latest), section='python')
     else:
-        response = outcome.get('response') or {}
         if outcome.get('operation') == 'install_module':
             # A completed add is no longer an editable request.  Keeping its
             # text in the field makes the next module name concatenate with
@@ -1113,53 +1342,39 @@ def pollpythonrequest():
 
 
 def queuepythonchange(operation, arguments, message):
-    global PYTHONPENDING
     if PYTHONWORK is not None and PYTHONWORK.is_alive():
         setstatus('Wait for the current Python request.', True, section='python')
         return False
-    PYTHONPENDING = {
-        'operation': str(operation),
-        'arguments': dict(arguments or {}),
-        'message': str(message),
-    }
-    setstatus('Review the Python module change.', section='python')
-    redraw()
-    return True
+    del message
+    return startpythonrequest(
+        'preview_change', {
+            'change_operation': str(operation),
+            'change_arguments': dict(arguments or {}),
+        }, timeout=180.0)
 
 
 def cancelpythonchange():
     global PYTHONPENDING
+    descriptor = (PYTHONPENDING or {}).get('descriptor')
+    if descriptor is not None:
+        try:
+            os.close(int(descriptor))
+        except OSError:
+            pass
     PYTHONPENDING = None
     setstatus('Python module change cancelled.', section='python')
     redraw()
 
 
 def confirmpythonchange():
+    global PYTHONPENDING
     if not PYTHONPENDING:
         return False
-    return openpasswordprompt(
-        'python_change',
-        'authorise Python change',
-        'Enter the current master password to authorise this protected Python change.',
-        'python',
-        submitlabel='authorise',
-    )
-
-
-def authorisedpythonchange(password):
-    global PYTHONPENDING
     pending = dict(PYTHONPENDING or {})
-    if not pending:
-        raise RuntimeError('The Python change is no longer pending.')
-    architect_authorize(
-        password,
-        pending.get('operation'),
-        pending.get('arguments'),
-        timeout=10.0)
     PYTHONPENDING = None
     if not startpythonrequest(
-            pending.get('operation'), pending.get('arguments'), timeout=900.0):
-        architect_revoke(timeout=3.0)
+            pending.get('operation'), pending.get('arguments'), timeout=900.0,
+            descriptor=pending.get('descriptor')):
         raise RuntimeError('The Python change could not be started.')
     return True
 
@@ -2803,8 +3018,6 @@ def handlepasswordpromptresult(message):
             savemaster()
             if kind == 'master_name':
                 MASTERNAMEEDITING = False
-        elif kind == 'python_change':
-            authorisedpythonchange(password)
         else:
             raise RuntimeError('The password prompt request is no longer valid.')
     except Exception as error:
@@ -2991,21 +3204,60 @@ def layout():
         controls['save'] = None
         controls['rows']['python_refresh'] = [right - 106, 88, 106, 32]
         controls['rows']['python_check'] = [right - 222, 88, 106, 32]
-        controls['rows']['python_query'] = [contentx, 142, max(240, rowwidth - 126), 40]
+        controls['rows']['python_updates'] = [right - 338, 88, 106, 32]
+        controls['rows']['python_query'] = [contentx, 142, max(240, rowwidth - 242), 40]
+        controls['rows']['python_find'] = [right - 222, 146, 106, 32]
         controls['rows']['python_add'] = [right - 106, 146, 106, 32]
         if PYTHONPENDING:
-            controls['rows']['python_cancel'] = [right - 222, 232, 106, 32]
-            controls['rows']['python_confirm'] = [right - 106, 232, 106, 32]
+            controls['rows']['python_cancel'] = [right - 222, 220, 106, 32]
+            controls['rows']['python_confirm'] = [right - 106, 220, 106, 32]
         else:
             selected = selectedpythonmodule()
             if selected and not selected.get('system') and selected.get('requested'):
-                controls['rows']['python_remove'] = [right - 338, 232, 106, 32]
-                controls['rows']['python_update'] = [right - 222, 232, 106, 32]
-                controls['rows']['python_pin'] = [right - 106, 232, 106, 32]
+                controls['rows']['python_version'] = [right - 394, 220, 94, 32]
+                controls['rows']['python_remove'] = [right - 294, 220, 94, 32]
+                controls['rows']['python_update'] = [right - 194, 220, 94, 32]
+                controls['rows']['python_pin'] = [right - 94, 220, 94, 32]
+        filterx = contentx
+        for name, width in (
+            ('installed', 82), ('requested', 94), ('dependencies', 112),
+            ('system', 76), ('updates', 82),
+        ):
+            controls['rows']['python_filter_' + name] = [
+                filterx, 268, width, 30]
+            filterx += width + 8
+        controls['rows']['python_advanced'] = [right - 104, 268, 104, 30]
+        if PYTHONADVANCED:
+            advanced = (
+                ('update_all', 'update all'), ('wheel', 'wheel'),
+                ('repair', 'repair'), ('restore', 'restore'),
+                ('history', 'history'), ('export_lock', 'export lock'),
+                ('apply_lock', 'apply lock'),
+            )
+            available = max(100, rowwidth)
+            width = max(88, min(112, (available - 36) // 4))
+            for index, (name, _label) in enumerate(advanced):
+                column = index % 4
+                line = index // 4
+                controls['rows']['python_advanced_' + name] = [
+                    contentx + column * (width + 8),
+                    310 + line * 38,
+                    width,
+                    30,
+                ]
+        tableheader = pythontableheader()
+        columns = pythoncolumnlayout(contentx, rowwidth)
+        for name, (columnx, columnwidth) in columns.items():
+            controls['rows']['python_header_' + name] = [
+                columnx, tableheader, columnwidth, 30]
+            if name != 'status':
+                controls['rows']['python_resize_' + name] = [
+                    columnx + columnwidth - 4, tableheader, 8, 30]
         offset = int(PYTHONSCROLL)
-        for index, _item in enumerate(pythonmoduleview()):
+        for index, _item in enumerate(visiblepythonmodules()):
             controls['rows']['python_module_' + str(index)] = [
-                contentx, 306 + index * 42 - offset, rowwidth, 38]
+                contentx, tableheader + 36 + index * 40 - offset,
+                rowwidth, 38]
     elif SECTION == 'about':
         controls['rows']['terminal_name'] = [contentx, 126, rowwidth, 44]
     return controls
@@ -3454,9 +3706,9 @@ def aboutscrollmaximum():
 
 
 def pythonscrollmaximum(modules=None):
-    modules = pythonmoduleview() if modules is None else tuple(modules)
+    modules = visiblepythonmodules() if modules is None else tuple(modules)
     viewportbottom = WINH - 72
-    contentbottom = 312 + max(1, len(modules)) * 42
+    contentbottom = pythontableheader() + 44 + max(1, len(modules)) * 40
     return max(0, contentbottom - viewportbottom)
 
 
@@ -3785,71 +4037,180 @@ def paint():
         drawtext(205, 92, 'runtime', COLOURTEXT, 19)
         drawtext(
             205, 120,
-            '{} — {} — {}'.format(
+            '{} — {} — {} added modules'.format(
                 str(core.get('version') or pythonversion()),
                 str(state.get('health') or 'manager not connected'),
-                'protected changes',
+                int(state.get('managed_modules') or 0),
             ),
             COLOURTEXT if state.get('health') == 'healthy' else COLOURMUTED,
             14,
         )
+        button(rows['python_updates'], 'updates')
         button(rows['python_check'], 'check')
         button(rows['python_refresh'], 'refresh')
         fieldrow(
-            'python_query', 'add module',
+            'python_query', 'add or change',
             EDITBUFFER if EDITFIELD == 'python_query' else PYTHONQUERY,
             rows['python_query'], disabled=busy)
+        button(rows['python_find'], 'find')
         button(rows['python_add'], 'add')
         drawtext(
-            205, 202,
-            'Each module change requires master-password authorisation.',
+            205, 194,
+            'Use name or name==version. Changes are applied by the Python service.',
             COLOURMUTED, 13)
 
         selected = selectedpythonmodule()
         if PYTHONPENDING:
+            changes = list(PYTHONPENDING.get('changes') or [])
+            notes = list(PYTHONPENDING.get('notes') or [])
             drawtext(
-                205, 242, elidetext(PYTHONPENDING.get('message', ''), max(180, WINW - 460)),
+                205, 228, elidetext(PYTHONPENDING.get('message', ''), max(180, WINW - 580)),
                 COLOURTEXT, 13)
+            preview = ''
+            if changes:
+                change = changes[0]
+                preview = '{} {} {} → {}'.format(
+                    str(change.get('action') or 'change'),
+                    str(change.get('name') or 'module'),
+                    str(change.get('from') or 'new'),
+                    str(change.get('to') or 'removed'),
+                )
+                if len(changes) > 1:
+                    preview += ' — {} more changes'.format(len(changes) - 1)
+            elif notes:
+                preview = str(notes[0])
+            drawtext(
+                205, 248, elidetext(preview, max(180, WINW - 245)),
+                COLOURMUTED, 12)
             button(rows['python_cancel'], 'cancel')
             button(rows['python_confirm'], 'confirm')
+        elif busy:
+            operation = str(PYTHONWORKOPERATION or 'Python request').replace('_', ' ')
+            phase = str((state.get('transaction') or {}).get('phase') or 'working')
+            drawtext(205, 228, operation + ' in progress…', COLOURTEXT, 13)
+            drawtext(205, 248, phase, COLOURMUTED, 12)
         elif selected:
             detail = '{} {} — {}'.format(
                 selected.get('display_name') or selected.get('name') or '',
                 selected.get('version') or '',
-                'system' if selected.get('system') else 'requested' if selected.get('requested') else 'dependency',
+                pythonmodulekind(selected),
             )
-            drawtext(205, 242, elidetext(detail, max(180, WINW - 600)), COLOURTEXT, 13)
+            drawtext(205, 228, elidetext(detail, max(180, WINW - 650)), COLOURTEXT, 13)
+            metadata = []
+            if selected.get('license'):
+                metadata.append('license ' + str(selected.get('license')))
+            imports = list(selected.get('imports') or [])
+            if imports:
+                metadata.append('imports ' + ', '.join(imports[:3]))
+            if selected.get('native'):
+                metadata.append('{} native libraries'.format(
+                    int(selected.get('native_libraries') or 0)))
+            updated = selected.get('updated_at')
+            if updated:
+                metadata.append('updated ' + pythonmoduledate(updated))
+            required = ', '.join(selected.get('required_by') or [])
+            if required:
+                metadata.append('required by ' + required)
+            summary = str(selected.get('summary') or '')
+            information = ' — '.join(metadata) or summary
+            drawtext(
+                205, 248, elidetext(information, max(180, WINW - 245)),
+                COLOURMUTED, 12)
             if not selected.get('system') and selected.get('requested'):
+                button(rows['python_version'], 'version')
                 button(rows['python_remove'], 'remove')
                 button(rows['python_update'], 'update')
                 button(rows['python_pin'], 'unpin' if selected.get('pinned') else 'pin')
-        elif busy:
-            phase = str((state.get('transaction') or {}).get('phase') or 'working')
-            drawtext(205, 242, phase + '…', COLOURTEXT, 13)
+        elif PYTHONFOUND:
+            foundline = '{} — latest {} — {} compatible wheels'.format(
+                str(PYTHONFOUND.get('name') or 'module'),
+                str(PYTHONFOUND.get('latest') or 'unavailable'),
+                int(PYTHONFOUND.get('compatible_wheels') or 0),
+            )
+            drawtext(205, 228, elidetext(foundline, max(180, WINW - 245)), COLOURTEXT, 13)
+            drawtext(
+                205, 248,
+                elidetext(str(PYTHONFOUND.get('summary') or ''), max(180, WINW - 245)),
+                COLOURMUTED, 12)
 
-        fill([205, 272, max(0, WINW - 233), 1], COLOURDIVIDER)
-        modules = pythonmoduleview()
-        moduleclip = [191, 274, max(0, WINW - 191), max(0, WINH - 346)]
+        for name in ('installed', 'requested', 'dependencies', 'system', 'updates'):
+            button(
+                rows['python_filter_' + name], name,
+                focused=PYTHONFILTER == name)
+        button(
+            rows['python_advanced'],
+            'basic' if PYTHONADVANCED else 'advanced',
+            focused=PYTHONADVANCED)
+        if PYTHONADVANCED:
+            for name, label in (
+                ('update_all', 'update all'), ('wheel', 'wheel'),
+                ('repair', 'repair'), ('restore', 'restore'),
+                ('history', 'history'), ('export_lock', 'export lock'),
+                ('apply_lock', 'apply lock'),
+            ):
+                button(rows['python_advanced_' + name], label)
+            if PYTHONHISTORY:
+                latest = PYTHONHISTORY[-1]
+                historyline = '{} — {} — {}'.format(
+                    str(latest.get('operation') or 'change'),
+                    str(latest.get('result') or 'unknown'),
+                    pythonmoduledate(latest.get('time')),
+                )
+                drawtext(
+                    205, 382, elidetext(historyline, max(180, WINW - 245)),
+                    COLOURMUTED, 12)
+        modules = visiblepythonmodules()
+        tableheader = pythontableheader()
+        moduleclip = [
+            191, tableheader - 2, max(0, WINW - 191),
+            max(0, WINH - tableheader - 70)]
+        columns = pythoncolumnlayout(205, max(360, WINW - 233))
+        for name, label in (
+            ('name', 'module'), ('version', 'version'),
+            ('installed', 'installed'), ('status', 'status'),
+        ):
+            columnx, columnwidth = columns[name]
+            marker = ' ↓' if PYTHONSORT == name and PYTHONSORTDESC else ' ↑' if PYTHONSORT == name else ''
+            drawtext(
+                columnx + 8, tableheader + 6,
+                label + marker, COLOURMUTED, 13, moduleclip)
+            fill([
+                columnx + columnwidth - 1, tableheader, 1,
+                max(0, WINH - tableheader - 72)], COLOURDIVIDER)
+        fill([
+            205, tableheader + 30, max(0, WINW - 233), 1],
+            COLOURDIVIDER)
         offset = int(PYTHONSCROLL)
-        drawtext(205, 282, 'installed modules', COLOURTEXT, 17, moduleclip)
         if modules:
             for index, item in enumerate(modules):
-                top = 312 + index * 42 - offset
+                top = tableheader + 44 + index * 40 - offset
                 name = str(item.get('display_name') or item.get('name') or '')
                 version = str(item.get('version') or '')
-                kind = 'system' if item.get('system') else 'requested' if item.get('requested') else 'dependency'
+                kind = pythonmodulekind(item)
                 if item.get('pinned'):
-                    kind += ', pinned'
+                    kind += ' — pinned'
+                update = PYTHONUPDATES.get(str(item.get('name') or ''), {})
+                if update.get('available'):
+                    kind += ' — update ' + str(update.get('latest') or '')
                 if str(item.get('name') or '') == PYTHONSELECTED:
-                    fillclipped([195, top - 4, max(0, WINW - 223), 36], COLOURSTATUS, moduleclip)
-                drawtext(205, top, name, COLOURTEXT, 15, moduleclip)
-                value = version + ' — ' + kind
-                drawtext(
-                    max(470, WINW - 330), top,
-                    elidetext(value, 280), COLOURMUTED, 13, moduleclip)
+                    fillclipped([195, top - 6, max(0, WINW - 223), 38], COLOURSTATUS, moduleclip)
+                installed = pythonmoduledate(item.get('installed_at'))
+                values = {
+                    'name': name,
+                    'version': version,
+                    'installed': installed,
+                    'status': kind,
+                }
+                for columnname, value in values.items():
+                    columnx, columnwidth = columns[columnname]
+                    drawtext(
+                        columnx + 8, top,
+                        elidetext(value, max(24, columnwidth - 16), 13),
+                        COLOURTEXT if columnname == 'name' else COLOURMUTED,
+                        13, moduleclip)
         else:
             drawtext(
-                205, 312, 'No Python modules are installed.',
+                213, tableheader + 44, 'No Python modules match this view.',
                 COLOURMUTED, 15, moduleclip)
     elif SECTION == 'about':
         drawtext(205, 94, 'terminal', COLOURTEXT, 19)
@@ -4018,7 +4379,8 @@ def sliderchange(name, x, rect):
 def handlebutton(message):
     global SECTION, DRAGGING, RESOLUTIONEDITED, DISPLAYPAGE
     global MASTERNAMEEDITING, ABOUTSCROLL, PYTHONSCROLL
-    global PYTHONSELECTED
+    global PYTHONSELECTED, PYTHONFILTER, PYTHONSORT, PYTHONSORTDESC
+    global PYTHONADVANCED, PYTHONQUERY
     if message.get('button', 1) not in (1, '1', 'left', 'LEFT'):
         return
     x = logicalcoordinate(message.get('x', 0))
@@ -4241,18 +4603,33 @@ def handlebutton(message):
         if pointin(x, y, rows.get('python_check')):
             startpythonrequest('check_modules', timeout=120.0)
             return
+        if pointin(x, y, rows.get('python_updates')):
+            startpythonrequest('list_updates', timeout=180.0)
+            return
         if pointin(x, y, rows.get('python_query')) and not busy:
             startedit('python_query', PYTHONQUERY)
             return
+        if pointin(x, y, rows.get('python_find')) and not busy:
+            editsave()
+            try:
+                arguments = parsepythonquery(PYTHONQUERY)
+            except ValueError as error:
+                setstatus(str(error), True, section='python')
+                return
+            startpythonrequest(
+                'find_module', {'name': arguments['name']}, timeout=45.0)
+            return
         if pointin(x, y, rows.get('python_add')) and not busy:
             editsave()
-            query = PYTHONQUERY.strip()
-            if not query:
-                setstatus('Enter a Python module name.', True, section='python')
+            try:
+                arguments = parsepythonquery(PYTHONQUERY)
+            except ValueError as error:
+                setstatus(str(error), True, section='python')
                 return
             queuepythonchange(
-                'install_module', {'name': query},
-                'Install {} and its required dependencies?'.format(query))
+                'install_module', arguments,
+                'Install {} and its required dependencies?'.format(
+                    PYTHONQUERY.strip()))
             return
         if pointin(x, y, rows.get('python_cancel')):
             cancelpythonchange()
@@ -4260,10 +4637,67 @@ def handlebutton(message):
         if pointin(x, y, rows.get('python_confirm')):
             confirmpythonchange()
             return
+        for name in ('installed', 'requested', 'dependencies', 'system', 'updates'):
+            if pointin(x, y, rows.get('python_filter_' + name)):
+                PYTHONFILTER = name
+                PYTHONSCROLL = 0
+                redraw()
+                return
+        if pointin(x, y, rows.get('python_advanced')):
+            PYTHONADVANCED = not PYTHONADVANCED
+            PYTHONSCROLL = 0
+            redraw()
+            return
+        if PYTHONADVANCED:
+            if pointin(x, y, rows.get('python_advanced_update_all')):
+                queuepythonchange(
+                    'update_modules', {}, 'Update every unpinned requested module?')
+                return
+            if pointin(x, y, rows.get('python_advanced_wheel')):
+                startpythonpicker('wheel')
+                return
+            if pointin(x, y, rows.get('python_advanced_repair')):
+                queuepythonchange(
+                    'repair_modules', {}, 'Repair every managed Python module?')
+                return
+            if pointin(x, y, rows.get('python_advanced_restore')):
+                queuepythonchange(
+                    'restore_modules', {}, 'Restore the previous Python module set?')
+                return
+            if pointin(x, y, rows.get('python_advanced_history')):
+                startpythonrequest('history', {'limit': 50}, timeout=10.0)
+                return
+            if pointin(x, y, rows.get('python_advanced_export_lock')):
+                startpythonpicker('export_lock')
+                return
+            if pointin(x, y, rows.get('python_advanced_apply_lock')):
+                startpythonpicker('apply_lock')
+                return
+        for name in ('name', 'version', 'installed'):
+            if pointin(x, y, rows.get('python_resize_' + name)):
+                DRAGGING = 'python_column_' + name
+                setpointercursor('resize_h')
+                return
+        for name in ('name', 'version', 'installed', 'status'):
+            if pointin(x, y, rows.get('python_header_' + name)):
+                if PYTHONSORT == name:
+                    PYTHONSORTDESC = not PYTHONSORTDESC
+                else:
+                    PYTHONSORT = name
+                    PYTHONSORTDESC = False
+                PYTHONSCROLL = 0
+                redraw()
+                return
         selected = selectedpythonmodule()
         if selected and not selected.get('system') and selected.get('requested'):
             name = str(selected.get('name') or '')
             label = str(selected.get('display_name') or name)
+            if pointin(x, y, rows.get('python_version')):
+                PYTHONQUERY = name + '==' + str(selected.get('version') or '')
+                startedit('python_query', PYTHONQUERY)
+                setstatus(
+                    'Replace the current version, then choose add.', section='python')
+                return
             if pointin(x, y, rows.get('python_remove')):
                 queuepythonchange(
                     'remove_module', {'name': name},
@@ -4282,7 +4716,7 @@ def handlebutton(message):
                         'Unpin' if selected.get('pinned') else 'Pin',
                         label, selected.get('version') or 'current'))
                 return
-        for index, item in enumerate(pythonmoduleview()):
+        for index, item in enumerate(visiblepythonmodules()):
             if pointin(x, y, rows.get('python_module_' + str(index))):
                 PYTHONSELECTED = str(item.get('name') or '')
                 redraw()
@@ -4296,7 +4730,14 @@ def handlemotion(message):
     global DROPDOWNHOVER
     x = logicalcoordinate(message.get('x', 0))
     y = logicalcoordinate(message.get('y', 0))
-    setpointercursor('text' if textcursorhit(x, y) else 'arrow')
+    resizehover = bool(
+        SECTION == 'python' and any(
+            pointin(x, y, CONTROLS.get('rows', {}).get('python_resize_' + name))
+            for name in ('name', 'version', 'installed')))
+    if str(DRAGGING or '').startswith('python_column_') or resizehover:
+        setpointercursor('resize_h')
+    else:
+        setpointercursor('text' if textcursorhit(x, y) else 'arrow')
     if DROPDOWN:
         hovered = dropdownoptionat(x, y)
         if hovered != DROPDOWNHOVER:
@@ -4304,6 +4745,10 @@ def handlemotion(message):
             redraw()
         return
     if not DRAGGING:
+        return
+    if str(DRAGGING).startswith('python_column_'):
+        if resizepythoncolumn(str(DRAGGING).removeprefix('python_column_'), x):
+            redraw()
         return
     rect = CONTROLS.get('rows', {}).get(DRAGGING)
     if rect:
@@ -4505,6 +4950,45 @@ def startmasterimagepicker():
     return True
 
 
+def startpythonpicker(kind):
+    global PICKER_PENDING
+    if PICKER_PENDING is not None:
+        return True
+    if PICKER_VERSION < 1 or WINID is None:
+        setstatus('The Array file picker is unavailable.', True, section='python')
+        return False
+    kind = str(kind)
+    configuration = {
+        'wheel': ('open_file', 'choose Python wheel', '.whl', 'wheels'),
+        'apply_lock': ('open_file', 'choose Python lock', '.toml', 'locks'),
+        'export_lock': ('save_as', 'export Python lock', '.toml', 'locks'),
+    }.get(kind)
+    if configuration is None:
+        return False
+    mode, title, extension, filtername = configuration
+    try:
+        initial = masterhomepath(MASTER.get('original_name') or MASTER.get('name'))
+    except Exception:
+        initial = MASTERHOMEBASE
+    if not os.path.isdir(initial):
+        initial = '/'
+    PICKER_PENDING = {'kind': 'python_' + kind, 'request_id': None}
+    request = {
+        'op': 'CREATE_PICKER', 'parent': int(WINID), 'mode': mode,
+        'title': title, 'initial_path': initial, 'allow_multiple': False,
+        'filters': [{
+            'id': filtername, 'label': filtername,
+            'extensions': [extension],
+        }],
+    }
+    if mode == 'save_as':
+        request['suggested_name'] = 'python modules.toml'
+    sendws(request)
+    setstatus('Opening Array…', section='python')
+    redraw()
+    return True
+
+
 def handlepickerresult(message):
     global PICKER_PENDING
     if PICKER_PENDING is None:
@@ -4513,13 +4997,66 @@ def handlepickerresult(message):
     expected = PICKER_PENDING.get('request_id')
     if expected and requestid != str(expected):
         return False
+    kind = str(PICKER_PENDING.get('kind') or '')
     PICKER_PENDING = None
     paths = message.get('paths', [])
     if (
         str(message.get('status', 'cancelled')) != 'accepted' or
         not isinstance(paths, list) or not paths
     ):
-        setstatus('Image selection cancelled.', section='master')
+        setstatus(
+            'File selection cancelled.' if kind.startswith('python_') else
+            'Image selection cancelled.',
+            section='python' if kind.startswith('python_') else 'master')
+        redraw()
+        return True
+    if kind.startswith('python_'):
+        global PYTHONPENDING
+        try:
+            path = os.path.abspath(str(paths[0]))
+            if kind == 'python_wheel':
+                descriptor, size, digest = pythoninputdescriptor(
+                    path, '.whl', 512 * 1024 * 1024)
+                PYTHONPENDING = {
+                    'operation': 'install_wheel',
+                    'arguments': {
+                        'filename': os.path.basename(path),
+                        'size': size, 'sha256': digest,
+                    },
+                    'descriptor': descriptor,
+                    'message': 'Install the selected Python wheel?',
+                    'changes': [{
+                        'action': 'install',
+                        'name': os.path.basename(path),
+                        'from': '', 'to': 'local wheel',
+                    }],
+                    'notes': ['The wheel identity and contents will be verified before installation.'],
+                }
+                setstatus('Review the Python wheel installation.', section='python')
+            elif kind == 'python_apply_lock':
+                descriptor, size, digest = pythoninputdescriptor(
+                    path, '.toml', 1024 * 1024)
+                PYTHONPENDING = {
+                    'operation': 'apply_lock',
+                    'arguments': {'size': size, 'sha256': digest},
+                    'descriptor': descriptor,
+                    'message': 'Apply the selected Python lock?',
+                    'changes': [{
+                        'action': 'apply', 'name': os.path.basename(path),
+                        'from': '', 'to': 'locked module set',
+                    }],
+                    'notes': ['The current managed environment will be replaced by the exact lock.'],
+                }
+                setstatus('Review the Python lock change.', section='python')
+            elif kind == 'python_export_lock':
+                if not path.casefold().endswith('.toml'):
+                    path += '.toml'
+                startpythonrequest(
+                    'export_lock_file', {'path': path}, timeout=30.0)
+            else:
+                raise RuntimeError('The Python file request is no longer valid.')
+        except Exception as error:
+            setstatus(str(error), True, section='python')
         redraw()
         return True
     try:
@@ -4693,7 +5230,11 @@ def handlews(message):
         if PICKER_PENDING is not None:
             PICKER_PENDING['request_id'] = str(
                 message.get('request_id', ''))
-            setstatus('Select an image in Array.', section='master')
+            pythonpicker = str(PICKER_PENDING.get('kind') or '').startswith('python_')
+            setstatus(
+                'Choose the Python file in Array.' if pythonpicker else
+                'Select an image in Array.',
+                section='python' if pythonpicker else 'master')
             redraw()
     elif operation == 'PICKER_RESULT':
         handlepickerresult(message)
@@ -4721,10 +5262,16 @@ def handlews(message):
             str(message.get('detail', 'Mouse settings could not be applied.')),
             True, section='mouse')
     elif operation == 'ERROR' and str(message.get('code', '')).startswith('picker_'):
+        pythonpicker = bool(
+            PICKER_PENDING and
+            str(PICKER_PENDING.get('kind') or '').startswith('python_'))
         PICKER_PENDING = None
         setstatus(
-            str(message.get('detail', 'The Array image picker is unavailable.')),
-            True, section='master')
+            str(message.get(
+                'detail',
+                'The Array file picker is unavailable.' if pythonpicker else
+                'The Array image picker is unavailable.')),
+            True, section='python' if pythonpicker else 'master')
         redraw()
     elif operation == 'ERROR' and PASSWORDPROMPT is not None and (
         str(message.get('dialog_id', '')) ==
@@ -4776,6 +5323,12 @@ def terminate(signum=None, frame=None):
 
 
 def cleanup():
+    descriptor = (PYTHONPENDING or {}).get('descriptor')
+    if descriptor is not None:
+        try:
+            os.close(int(descriptor))
+        except OSError:
+            pass
     closebuffer()
     if SOCK:
         try:
@@ -4830,7 +5383,7 @@ def main():
 
 def diagnostic():
     global SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE, TERMINALNAME, MASTER
-    global architect_authorize, architect_revoke, service_secret_delete, service_secret_exists, service_secret_put, settings_account_get, settings_hostname_set, settings_master_update, settings_recovery_authorize, settings_time_set
+    global service_secret_delete, service_secret_exists, service_secret_put, settings_account_get, settings_hostname_set, settings_master_update, settings_recovery_authorize, settings_time_set
     global UISCALE, WINW, WINH, SECTION, DISPLAYPAGE, CONTROLS
     if os.name == 'nt':
         result = {
@@ -4845,8 +5398,6 @@ def diagnostic():
         return 1
     original = (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE)
     diagnosticoperationsoriginal = (
-        architect_authorize,
-        architect_revoke,
         service_secret_delete,
         service_secret_exists,
         service_secret_put,
@@ -4959,8 +5510,6 @@ def diagnostic():
         return {'motherboard_updated': False}
 
     (
-        architect_authorize,
-        architect_revoke,
         service_secret_delete,
         service_secret_exists,
         service_secret_put,
@@ -4970,8 +5519,6 @@ def diagnostic():
         settings_recovery_authorize,
         settings_time_set,
     ) = (
-        diagnosticprivilegedcall,
-        diagnosticprivilegedcall,
         diagnosticsecretdelete,
         diagnosticsecretexists,
         diagnosticsecretput,
@@ -5540,8 +6087,6 @@ def diagnostic():
     finally:
         (SYSTEMROOT, DISPLAYFILE, AUDIOFILE, MOUSEFILE, NETWORKDIR, NETWORKFILE, DNSFILE, ETHERNETNAMESFILE, NETWORKSTATE, WIRELESSFILE, WIRELESSSCANSTATE, WIRELESSSCANREQUEST, NETWORKRECONFIGURE, INTERNETTIMEFILE, VIRTUALBOXTIMEFILE, TIMEZONEFILE, TERMINALNAMEFILE, MASTERSETTINGSFILE, MASTERHOMEBASE, ZONEINFODIR, DRMSTATE, NETSTATE) = original
         (
-            architect_authorize,
-            architect_revoke,
             service_secret_delete,
             service_secret_exists,
             service_secret_put,

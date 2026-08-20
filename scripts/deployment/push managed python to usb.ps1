@@ -197,7 +197,7 @@ function Merge-T1OSInstalledPythonPackages {
     )
 
     $liveSoftware = Join-Path $UsbRoot 'the one\software\python'
-    $stateRoot = Join-Path $liveSoftware '.t1pip'
+    $stateRoot = Join-Path $liveSoftware 'pip'
     $statePath = Join-Path $stateRoot 'state.json'
     if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) {
         return
@@ -210,7 +210,7 @@ function Merge-T1OSInstalledPythonPackages {
         throw "The installed Python module state is unreadable: $($_.Exception.Message)"
     }
     if (
-        [int]$state.format -ne 2 -or
+        [int]$state.format -notin @(2, 3) -or
         $null -eq $state.files -or
         $null -eq $state.catalogue_files
     ) {
@@ -292,7 +292,7 @@ function Merge-T1OSInstalledPythonPackages {
     if ($unsafeState.Count) {
         throw "The Python module state contains a reparse point: $($unsafeState[0].FullName)"
     }
-    $stateStage = Join-Path $softwareTransaction[0].Stage '.t1pip'
+    $stateStage = Join-Path $softwareTransaction[0].Stage 'pip'
     New-Item -ItemType Directory -Path $stateStage -Force | Out-Null
     $output = & robocopy.exe $stateRoot $stateStage /E /COPY:DAT /DCOPY:DAT `
         /XD transactions /R:2 /W:1 /XJ /NFL /NDL /NJH /NJS /NP

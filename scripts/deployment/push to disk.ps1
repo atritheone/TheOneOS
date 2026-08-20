@@ -1450,7 +1450,7 @@ import stat
 import sys
 
 software, catalogue, software_filter, catalogue_filter = map(os.path.abspath, sys.argv[1:])
-state_path = os.path.join(software, '.t1pip', 'state.json')
+state_path = os.path.join(software, 'pip', 'state.json')
 
 def fail(message):
     raise SystemExit(message)
@@ -1480,9 +1480,9 @@ catalogue_rules = []
 if os.path.isfile(state_path):
     with open(state_path, encoding='utf-8') as stream:
         state = json.load(stream)
-    if not isinstance(state, dict) or state.get('format') != 2:
+    if not isinstance(state, dict) or state.get('format') not in (2, 3):
         fail('installed Python module state has an unsupported format')
-    software_rules.append('P /.t1pip/***')
+    software_rules.append('P /pip/***')
     for record in state.get('files', []):
         relative = safe(record.get('path'))
         area = record.get('area')
@@ -1816,14 +1816,14 @@ else:
     )
 
 managed_records = {'software': {}, 'catalogue': {}}
-t1pip_state_path = os.path.join(software, '.t1pip', 'state.json')
-if os.path.isfile(t1pip_state_path):
+python_state_path = os.path.join(software, 'pip', 'state.json')
+if os.path.isfile(python_state_path):
     try:
-        with open(t1pip_state_path, encoding='utf-8') as stream:
-            t1pip_state = json.load(stream)
+        with open(python_state_path, encoding='utf-8') as stream:
+            python_state = json.load(stream)
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         fail(f'installed Python module state is malformed: {error}')
-    if not isinstance(t1pip_state, dict) or t1pip_state.get('format') != 2:
+    if not isinstance(python_state, dict) or python_state.get('format') not in (2, 3):
         fail('installed Python module state has an unsupported format')
 
     def add_managed_record(area, relative, record, executable=False):
@@ -1844,7 +1844,7 @@ if os.path.isfile(t1pip_state_path):
             'install_mode': '0555' if executable else '0444',
         }
 
-    for record in t1pip_state.get('files', []):
+    for record in python_state.get('files', []):
         if not isinstance(record, dict):
             fail('installed Python module file record is malformed')
         relative = validate_relative(record.get('path'), root_allowed=False)
@@ -1862,7 +1862,7 @@ if os.path.isfile(t1pip_state_path):
         else:
             fail(f"unknown installed Python module area: {record.get('area')!r}")
         add_managed_record('software', installed_relative, record, executable)
-    for record in t1pip_state.get('catalogue_files', []):
+    for record in python_state.get('catalogue_files', []):
         if not isinstance(record, dict):
             fail('installed Python module catalogue record is malformed')
         add_managed_record(
@@ -1953,20 +1953,20 @@ for name, entry, include_manifest in specifications:
         supplemental_credentials[credential_relative] = actual_files.pop(
             credential_relative
         )
-    if name == 'software' and os.path.isfile(t1pip_state_path):
+    if name == 'software' and os.path.isfile(python_state_path):
         for relative in list(actual_files):
-            if relative == '.t1pip/state.json' or relative.startswith('.t1pip/'):
+            if relative == 'pip/state.json' or relative.startswith('pip/'):
                 path, status = actual_files.pop(relative)
-                if relative.startswith('.t1pip/transactions/'):
+                if relative.startswith('pip/transactions/'):
                     fail(f'an unfinished Python module transaction is present: {path}')
                 supplemental_manager[relative] = (
                     'file', status.st_size, digest(path)
                 )
         for relative in list(actual_directories):
-            if relative == '.t1pip' or relative.startswith('.t1pip/'):
+            if relative == 'pip' or relative.startswith('pip/'):
                 actual_directories.pop(relative)
                 supplemental_manager[relative] = ('directory', 0, '')
-        if '.t1pip/state.json' not in supplemental_manager:
+        if 'pip/state.json' not in supplemental_manager:
             fail('installed Python module state disappeared during verification')
     if set(actual_directories) != set(directory_modes):
         fail(f'protected release directory inventory mismatch below {root}')
@@ -2076,13 +2076,13 @@ for (name, _, _), (
             credential_relative
         )
     current_manager = {}
-    if name == 'software' and os.path.isfile(t1pip_state_path):
+    if name == 'software' and os.path.isfile(python_state_path):
         for relative in list(actual_files):
-            if relative == '.t1pip/state.json' or relative.startswith('.t1pip/'):
+            if relative == 'pip/state.json' or relative.startswith('pip/'):
                 path, status = actual_files.pop(relative)
                 current_manager[relative] = ('file', status.st_size, digest(path))
         for relative in list(actual_directories):
-            if relative == '.t1pip' or relative.startswith('.t1pip/'):
+            if relative == 'pip' or relative.startswith('pip/'):
                 actual_directories.pop(relative)
                 current_manager[relative] = ('directory', 0, '')
     if current_manager != supplemental_manager:

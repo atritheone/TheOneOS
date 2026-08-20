@@ -44,6 +44,7 @@ root_discovery_log=/run/root-discovery.log
 roothealth_refusal_code=
 roothealth_refusal_class=
 roothealth_refusal_summary=
+roothealth_refusal_predicates=
 angel_prefix='~ '
 angel_suffix=' ~'
 roothealth_history_limit=5
@@ -159,6 +160,22 @@ persist_roothealth_boot_history() {
         "$busybox" date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || \
             printf unknown
     )
+    history_refusal_fingerprint=none
+    if [ -n "$roothealth_refusal_code" ]; then
+        history_refusal_fingerprint=$(printf '%s\n%s\n' \
+            "$roothealth_refusal_code" "$roothealth_refusal_predicates" | \
+            "$busybox" sha256sum) || history_refusal_fingerprint=none
+        history_refusal_fingerprint=${history_refusal_fingerprint%% *}
+    fi
+    history_failure_kind=none
+    case "${angel_failure_reason:-}" in
+        *'could not find the root filesystem'*|*'could not find the encrypted root container'*)
+            history_failure_kind=root-not-found
+            ;;
+        *'could not mount'*root*) history_failure_kind=root-mount-failed ;;
+        *'not a valid root filesystem'*) history_failure_kind=root-layout-invalid ;;
+        *'operating-system files that must be recovered'*) history_failure_kind=managed-integrity ;;
+    esac
     {
         printf 'format=1\n'
         printf 'boot_id=%s\n' "$history_boot_id"
@@ -170,6 +187,8 @@ persist_roothealth_boot_history() {
         printf 'admission_status=%s\n' "$roothealth_admission_status"
         printf 'refusal_code=%s\n' "$roothealth_refusal_code"
         printf 'refusal_class=%s\n' "$roothealth_refusal_class"
+        printf 'refusal_fingerprint=%s\n' "$history_refusal_fingerprint"
+        printf 'failure_kind=%s\n' "$history_failure_kind"
     } >"$history_stage/manifest.env" 2>/dev/null || true
     "$busybox" chmod 0444 "$history_stage/manifest.env" 2>/dev/null || true
 
@@ -287,11 +306,14 @@ rescue() {
     angel_visible=1
     quiet=0
     log "$*"
+    # shellcheck disable=SC2034  # Consumed by the sourced Angel recovery engine.
+    angel_failure_reason=$*
     printf 'failure_reason=%s\n' "$*" >>"$roothealth_boot_evidence" \
         2>/dev/null || true
     persist_angel_failure_log
     if [ -n "$recovery_spec" ]; then
-        angel_recovery_main "${angel_root_mounted:-0}" "${angel_root_safe:-0}"
+        angel_recovery_main "${angel_root_mounted:-0}" "${angel_root_safe:-0}" \
+            "${angel_root_identity:-0}"
     fi
     if [ "$debug" = 1 ] && [ "$developer" = 1 ]; then
         log 'Explicit developer debug policy is enabled, so I have opened the initial-system shell.'
@@ -333,7 +355,10 @@ parse_command_line() {
             t1os.rootwait=*) root_wait=${argument#t1os.rootwait=} ;;
             t1os.graphics=*) graphics_mode=${argument#t1os.graphics=} ;;
             t1os.recovery=1) recovery=1 ;;
-            t1os.recovery.action=*) angel_selected_action=${argument#t1os.recovery.action=} ;;
+            t1os.recovery.action=*)
+                angel_selected_action=${argument#t1os.recovery.action=}
+                angel_selection_source=command-line
+                ;;
             t1os.recoverypart=*) recovery_spec=${argument#t1os.recoverypart=} ;;
             t1os.esppart=*) esp_spec=${argument#t1os.esppart=} ;;
             t1os.recovery.sha256=*) recovery_sha256=${argument#t1os.recovery.sha256=} ;;
@@ -482,6 +507,8 @@ verify_t1os_root_base() {
 verify_t1os_root() {
     verify_t1os_root_base || return 1
     [ -x '/mnt/the one/software/python/bin/python' ] || return 1
+    validate_protected_inventory_file || return 1
+    validate_protected_file python_software bin/python || return 1
     [ -f '/mnt/the one/build/GODDESS/GODDESS.py' ] || return 1
     [ -f '/mnt/the one/build/drivers/driverserver.py' ] || return 1
     [ -x '/mnt/the one/drivers/tools/modprobe' ] || return 1
@@ -571,7 +598,7 @@ run_roothealth_boot_repair() {
 }
 
 classify_roothealth_refusal() {
-    roothealth_refusal_code=$(roothealth_report_string code | "$busybox" tail -n 1)
+    roothealth_refusal_code=$(roothealth_report_primary_code)
     if [ -z "$roothealth_refusal_code" ] && [ -s "$roothealth_stderr" ]; then
         roothealth_refusal_stage=$(
             "$busybox" sed -n 's/.* stage=\([^ ]*\).*/\1/p' \
@@ -587,28 +614,65 @@ classify_roothealth_refusal() {
             [ "$roothealth_admission_status" = 137 ]; then
         roothealth_refusal_code=BOOT_TIME_BUDGET_EXCEEDED
     fi
-    case "$roothealth_admission_status" in
-        3)
-            roothealth_refusal_class='io'
+    case "$roothealth_refusal_code" in
+        REPAIR_POST_RESCAN_FAILED|VOLUME_DIRTY)
+            roothealth_refusal_class=repairable
+            roothealth_refusal_summary='RootHealth found a recognized filesystem repair which did not finish with a clean independent rescan.'
+            ;;
+        WAL_RECOVERY_REQUIRED|NATIVE_LOG_REPLAY_REQUIRED)
+            roothealth_refusal_class='recovery-required'
+            roothealth_refusal_summary='RootHealth found filesystem journal recovery which must finish before the root can be mounted.'
+            ;;
+        CENSUS_INCOMPLETE|NATIVE_LOG_UNSUPPORTED_ACTION|UNSUPPORTED_VALID_METADATA|MFT_MIRROR_UNSUPPORTED_LAYOUT)
+            roothealth_refusal_class=unsupported
+            roothealth_refusal_summary='RootHealth found valid or damaged metadata which this release cannot completely validate or repair.'
+            ;;
+        WAL_UNSAFE|MFT_MIRROR_DIVERGENCE|MFT_BITMAP_MISMATCH|INDEX_BITMAP_MISMATCH|CLUSTER_BITMAP_MISMATCH|NAMESPACE_RECIPROCITY_MISMATCH|FIXED_SYSTEM_CHECK_FAILED|FOUNDATION_REPAIR_DEFERRED|METADATA_UNRESOLVED)
+            roothealth_refusal_class=ambiguous-corruption
+            roothealth_refusal_summary='RootHealth found conflicting filesystem metadata without one uniquely safe repair.'
+            ;;
+        TARGET_IO_ERROR)
+            roothealth_refusal_class=io
             roothealth_refusal_summary='RootHealth encountered storage I/O uncertainty during the bounded boot check.'
             ;;
-        4)
-            roothealth_refusal_class='wrong-root'
+        IDENTITY_MISMATCH)
+            roothealth_refusal_class=wrong-root
             roothealth_refusal_summary='The selected filesystem does not match the attested T1OS root identity.'
             ;;
-        124|137)
-            roothealth_refusal_class='timeout'
+        ORCHESTRATION_INTERNAL_ERROR)
+            roothealth_refusal_class=internal
+            roothealth_refusal_summary='RootHealth did not complete its own orchestration contract.'
+            ;;
+        BOOT_TIME_BUDGET_EXCEEDED)
+            roothealth_refusal_class=timeout
             roothealth_refusal_summary='RootHealth exceeded its eight-second boot budget and was stopped.'
             ;;
-        5)
-            roothealth_refusal_class='internal'
-            roothealth_refusal_summary='RootHealth could not complete its bounded boot check.'
-            ;;
         *)
-            roothealth_refusal_class='unsupported'
-            roothealth_refusal_summary='RootHealth found a boot-critical NTFS condition outside its bounded repair surface.'
+            case "$roothealth_admission_status" in
+                3)
+                    roothealth_refusal_class=io
+                    roothealth_refusal_summary='RootHealth encountered storage I/O uncertainty during the bounded boot check.'
+                    ;;
+                4)
+                    roothealth_refusal_class=wrong-root
+                    roothealth_refusal_summary='The selected filesystem does not match the attested T1OS root identity.'
+                    ;;
+                124|137)
+                    roothealth_refusal_class=timeout
+                    roothealth_refusal_summary='RootHealth exceeded its eight-second boot budget and was stopped.'
+                    ;;
+                5)
+                    roothealth_refusal_class=internal
+                    roothealth_refusal_summary='RootHealth could not complete its bounded boot check.'
+                    ;;
+                *)
+                    roothealth_refusal_class=unsupported
+                    roothealth_refusal_summary='RootHealth found a boot-critical NTFS condition outside its bounded repair surface.'
+                    ;;
+            esac
             ;;
     esac
+    roothealth_refusal_predicates=$(roothealth_report_failed_predicates)
     printf 'roothealth_refusal_code=%s\nroothealth_refusal_class=%s\n' \
         "$roothealth_refusal_code" "$roothealth_refusal_class" \
         >>"$roothealth_boot_evidence" 2>/dev/null || true
@@ -618,6 +682,8 @@ roothealth_recovery_explanation() {
     [ -n "$roothealth_refusal_summary" ] || return 0
     angel_say "$roothealth_refusal_summary"
     angel_say "The diagnostic code is $roothealth_refusal_code and the policy class is $roothealth_refusal_class."
+    [ -z "$roothealth_refusal_predicates" ] || \
+        angel_say "The failed RootHealth predicates are $roothealth_refusal_predicates."
 }
 
 admit_t1os_ntfs_root() {
@@ -651,12 +717,20 @@ admit_t1os_ntfs_root() {
 
 check_t1os_root_for_recovery() {
     angel_root_safe=0
+    angel_root_identity=0
     [ "$root_fstype" = ntfs3 ] || {
-        [ "$root_fstype" = ext4 ] && angel_root_safe=1
+        if [ "$root_fstype" = ext4 ]; then
+            # The signed root specification resolved this exact device. ext4
+            # has no separate RootHealth gate, so resolution is its identity
+            # proof and a read-only mount supplies the inspection boundary.
+            angel_root_safe=1
+            angel_root_identity=1
+        fi
         return 0
     }
     if admit_t1os_ntfs_root; then
         angel_root_safe=1
+        angel_root_identity=1
     fi
 }
 
@@ -823,6 +897,34 @@ validate_protected_inventory_file() {
     done
 }
 
+validate_protected_file() {
+    root_name=$1
+    relative_path=$2
+    select_protected_root "$root_name" || return 1
+    validate_protected_ancestors "$root_name" || return 1
+    canonical_protected_path "$relative_path" 0 || return 1
+    tab=$("$busybox" printf '\t')
+    # shellcheck disable=SC2016
+    record=$("$busybox" awk -F '\t' -v name="$root_name" -v path="$relative_path" '
+        $1 == "F" && $2 == name && $3 == path {
+            count++
+            value=$4 "\t" $5 "\t" $6
+        }
+        END { if (count == 1) print value }
+    ' "$protected_inventory") || return 1
+    IFS="$tab" read -r expected_size expected_sha256 install_mode <<EOF
+$record
+EOF
+    case "$expected_size" in ''|*[!0-9]*) return 1 ;; esac
+    case "$expected_sha256" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#expected_sha256}" = 64 ] || return 1
+    protected_file="$protected_root/$relative_path"
+    secure_protected_file "$protected_file" "$install_mode" || return 1
+    [ "$("$busybox" stat -c '%s' "$protected_file" 2>/dev/null)" = "$expected_size" ] || return 1
+    actual_sha256=$("$busybox" sha256sum "$protected_file" 2>/dev/null) || return 1
+    [ "${actual_sha256%% *}" = "$expected_sha256" ]
+}
+
 validate_protected_root() {
     root_name=$1
     select_protected_root "$root_name" || return 1
@@ -953,7 +1055,8 @@ recheck_managed_release_integrity() {
 ensure_runtime_permissions() {
     root_directory=/mnt
     sandbox='/mnt/the one/software/chromium/program/chrome-sandbox'
-    python_management='/mnt/the one/software/python/.t1pip'
+    legacy_python_management='/mnt/the one/software/python/.t1pip'
+    python_management='/mnt/the one/software/python/pip'
     "$busybox" chown 0:0 "$root_directory" || rescue 'I could not assign the root filesystem to the root user.'
     "$busybox" chmod 0755 "$root_directory" || rescue 'I could not set the secure root-directory permission.'
     [ "$("$busybox" stat -c '%u:%g:%a' "$root_directory")" = '0:0:755' ] || \
@@ -1009,6 +1112,21 @@ ensure_runtime_permissions() {
         rescue 'I could not protect the profiled Python interpreter.'
     [ "$("$busybox" stat -c '%u:%g:%a:%h' "$python_binary")" = '0:0:555:1' ] || \
         rescue 'I cannot continue because the profiled Python interpreter is mutable or aliased.'
+
+    # Move the previous private package state before the runtime LSM boundary
+    # becomes active.  Never merge two stores because that would make package
+    # ownership and rollback state ambiguous.
+    if [ -L "$legacy_python_management" ] || [ -L "$python_management" ]; then
+        rescue 'I cannot continue because Python package state is redirected.'
+    fi
+    if [ -e "$legacy_python_management" ]; then
+        [ -d "$legacy_python_management" ] || \
+            rescue 'I cannot continue because the previous Python package state is invalid.'
+        [ ! -e "$python_management" ] || \
+            rescue 'I cannot continue because two Python package states exist.'
+        "$busybox" mv -- "$legacy_python_management" "$python_management" || \
+            rescue 'I could not migrate the Python package state.'
+    fi
 
     # The Python service cannot create this directory beneath the immutable
     # 0555 interpreter tree after the LSM boundary becomes active. Provision
@@ -1359,6 +1477,50 @@ roothealth_report_number() {
     "$busybox" sed -n \
         "s/.*\\\"$report_key\\\":\\([0-9][0-9]*\\).*/\\1/p" \
         /run/roothealth.json
+}
+
+roothealth_report_primary_code() {
+    [ -s "$roothealth_report" ] || return 0
+    # shellcheck disable=SC2016  # Dollar expressions below belong to awk.
+    "$busybox" awk '
+        { report = report $0 }
+        END {
+            issues = index(report, "\"issues\":[{")
+            if (!issues) exit
+            remainder = substr(report, issues)
+            marker = "\"code\":\""
+            start = index(remainder, marker)
+            if (!start) exit
+            remainder = substr(remainder, start + length(marker))
+            finish = index(remainder, "\"")
+            if (finish) print substr(remainder, 1, finish - 1)
+        }
+    ' "$roothealth_report"
+}
+
+roothealth_report_failed_predicates() {
+    [ -s "$roothealth_report" ] || return 0
+    # shellcheck disable=SC2016  # Dollar expressions below belong to awk.
+    predicates=$("$busybox" awk '
+        { report = report $0 }
+        END {
+            issues = index(report, "\"issues\":[{")
+            if (!issues) exit
+            remainder = substr(report, issues)
+            marker = "\"failed_predicates\":["
+            start = index(remainder, marker)
+            if (!start) exit
+            remainder = substr(remainder, start + length(marker))
+            finish = index(remainder, "]")
+            if (finish) print substr(remainder, 1, finish - 1)
+        }
+    ' "$roothealth_report")
+    [ -n "$predicates" ] || return 0
+    # RootHealth owns the report, but keep terminal-facing evidence to a small,
+    # printable alphabet and bound it before Angel speaks it.
+    printf '%s' "$predicates" | "$busybox" tr -cd \
+        '[:alnum:]_.,:=/+ -' | "$busybox" sed 's/,/, /g' | \
+        "$busybox" cut -c 1-512
 }
 
 roothealth_fixed_system_counts() {
@@ -1751,13 +1913,11 @@ if [ "$recovery" = 1 ]; then
     check_t1os_root_for_recovery
     if [ "$angel_root_safe" = 1 ] && mount_t1os_root ro; then
         angel_root_mounted=1
-        if ! verify_t1os_root_base; then
-            "$busybox" umount /mnt 2>/dev/null || true
-            angel_root_mounted=0
-            angel_root_safe=0
+        if verify_t1os_root_base; then
+            angel_root_identity=1
         fi
     fi
-    angel_recovery_main "$angel_root_mounted" "$angel_root_safe"
+    angel_recovery_main "$angel_root_mounted" "$angel_root_safe" "$angel_root_identity"
 fi
 
 admit_t1os_ntfs_root || \
@@ -1768,16 +1928,15 @@ if ! mount_t1os_root ro; then
 fi
 angel_root_safe=1
 angel_root_mounted=1
+if [ "$root_fstype" = ntfs3 ]; then
+    angel_root_identity=1
+fi
 
 verify_t1os_root_base || rescue "I cannot continue because $root_device is not a valid root filesystem for The One OS."
+angel_root_identity=1
 log 'I verified The One OS root identity while it was read-only.'
 
 if ! verify_t1os_root; then
-    if [ ! -x '/mnt/the one/software/python/bin/python' ]; then
-        angel_selected_action=python
-    else
-        angel_selected_action=reset
-    fi
     rescue 'I found operating-system files that must be recovered before The One OS can start.'
 fi
 

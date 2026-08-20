@@ -361,14 +361,14 @@ def main():
     ]
     for text in (
         "angel_clear_shutdown_health_request",
-        "I will restart through firmware boot order now.",
-        '"$busybox" sync',
-        '"$busybox" reboot -f',
+        "I will continue this clean boot now.",
+        "angel_shutdown_health_action=",
+        "angel_unmount_esp",
     ):
         require(restart_gate, text, "initramfs restart completion")
     forbid(
         restart_gate,
-        "continue requested restart",
+        '"$busybox" reboot -f',
         "initramfs restart completion",
     )
 

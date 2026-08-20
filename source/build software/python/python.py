@@ -43,7 +43,7 @@ if BUILDROOT not in sys.path:
 
 PROTOCOL = 1
 PROTOCOL_READY = b'R'
-STATE_FORMAT = 2
+STATE_FORMAT = 3
 SERVICE = 'T1OS system Python'
 DEFAULT_SOCKET = '/.ephemeral/python/manager.sock'
 DEFAULT_SYSTEM_ROOT = '/the one'
@@ -108,14 +108,6 @@ def log(message, file=None):
     from GODDESS.GODDESS import formatlog
 
     print(formatlog('python', message), file=file or sys.stderr, flush=True)
-
-
-def architect_capability_check(*arguments, **options):
-    """Load the operations client only when a mutation needs authorization."""
-
-    from operations.operations import architect_capability_check as check
-
-    return check(*arguments, **options)
 
 
 def request(operation, arguments=None, timeout=5.0, socket_path=None,
@@ -316,7 +308,7 @@ def image_catalogue():
 def management_root():
     return os.path.abspath(os.environ.get(
         'T1OS_PYTHON_MANAGEMENT_ROOT',
-        os.path.join(python_root(), '.t1pip'),
+        os.path.join(python_root(), 'pip'),
     ))
 
 
@@ -436,24 +428,29 @@ def peer_identity(channel):
     }
 
 
-def require_architect(peer, operation, arguments):
+def require_trusted_mutation_peer(peer):
+    """Keep package mutation behind a measured desktop application.
+
+    The Python service is the sole LSM-authorized writer of package files.
+    This check determines which unprivileged applications may ask that service
+    to perform a transaction.  It deliberately grants no global role and uses
+    no reusable credential.
+    """
+
     if not isinstance(peer, dict):
         raise ManagerError(
-            'Authenticate this Python change in the requesting application.',
-            'architect_required')
-    try:
-        result = architect_capability_check(
-            operation, arguments,
-            client_pid=peer['pid'], client_started=peer['started'],
-            client_uid=peer['uid'], timeout=3.0)
-    except Exception as error:
+            'Start this Python change from Settings or Brick.',
+            'operation_denied')
+    if (
+        int(peer.get('uid', -1)) != 1000 or
+        int(peer.get('gid', -1)) != 1000 or
+        str(peer.get('domain') or '') not in ('settings', 'brick') or
+        int(peer.get('pid', 0)) < 2 or
+        int(peer.get('started', 0)) <= 0
+    ):
         raise ManagerError(
-            'Python change authorization is unavailable.',
-            'architect_required') from error
-    if not result.get('authorized'):
-        raise ManagerError(
-            'Authenticate this Python change in the requesting application.',
-            'architect_required')
+            'This application cannot change Python modules.',
+            'operation_denied')
 
 
 def contained(path, parent):
@@ -492,7 +489,7 @@ def read_json(path, default=None):
         return default
     except (OSError, ValueError, TypeError) as error:
         raise ManagerError(
-            'T1OS Python package state is unreadable: ' + str(error),
+            'T1OS Python package state is unreadable — ' + str(error),
             'state_invalid',
         ) from error
 
@@ -584,8 +581,20 @@ def default_state():
 def validate_state(value):
     if value is None:
         return default_state()
-    if not isinstance(value, dict) or int(value.get('format', 0)) != STATE_FORMAT:
+    if not isinstance(value, dict) or int(value.get('format', 0)) not in (2, STATE_FORMAT):
         raise ManagerError('T1OS Python package state has an unsupported format.', 'state_invalid')
+    value = dict(value)
+    if int(value.get('format', 0)) == 2:
+        migrated_at = value.get('updated_at')
+        packages = []
+        for source in value.get('packages', []):
+            item = dict(source) if isinstance(source, dict) else source
+            if isinstance(item, dict):
+                item.setdefault('installed_at', migrated_at)
+                item.setdefault('updated_at', migrated_at)
+            packages.append(item)
+        value['packages'] = packages
+        value['format'] = STATE_FORMAT
     for field in ('requested', 'artifacts', 'packages', 'files', 'catalogue_files'):
         if not isinstance(value.get(field), list):
             raise ManagerError('T1OS Python package state is malformed.', 'state_invalid')
@@ -726,9 +735,26 @@ def installed_modules():
                     'native': bool((package or {}).get('native')),
                     'native_libraries': len((package or {}).get('catalogue_files', [])),
                     'installer': str((package or {}).get('installer') or 't1os-build'),
+                    'installed_at': (package or {}).get('installed_at'),
+                    'updated_at': (package or {}).get('updated_at'),
                 })
             except Exception:
                 continue
+    required_by = {item['name']: [] for item in results}
+    for source in results:
+        for requirement in source.get('requires', []):
+            match = re.match(
+                r'\s*([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)',
+                str(requirement),
+            )
+            if not match:
+                continue
+            dependency = normalise_name(match.group(1))
+            if dependency in required_by:
+                required_by[dependency].append(source['display_name'])
+    for item in results:
+        item['required_by'] = sorted(
+            set(required_by.get(item['name'], [])), key=str.casefold)
     results.sort(key=lambda item: (item['name'], item['origin']))
     return state, results
 
@@ -899,7 +925,7 @@ def dependency_problems(modules):
                         f"{item['display_name']} requires {requirement}; {actual} is installed"
                     )
             except Exception as error:
-                problems.append(f"{item['display_name']} has invalid dependency {text}: {error}")
+                problems.append(f"{item['display_name']} has invalid dependency {text} — {error}")
     return sorted(set(problems), key=str.casefold)
 
 
@@ -922,7 +948,7 @@ def run_command(command, timeout, environment=None, code='tool_failed'):
     except subprocess.TimeoutExpired as error:
         raise ManagerError('The Python package operation timed out.', 'timeout') from error
     except OSError as error:
-        raise ManagerError('A Python package tool could not start: ' + str(error), code) from error
+        raise ManagerError('A Python package tool could not start — ' + str(error), code) from error
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or '').strip()
         lines = [line.strip() for line in detail.splitlines() if line.strip()]
@@ -1955,7 +1981,7 @@ def read_pylock(path):
         with open(path, 'rb') as stream:
             value = tomllib.load(stream)
     except (OSError, ValueError, TypeError) as error:
-        raise ManagerError('The Python lock file is unreadable: ' + str(error), 'lock_invalid') from error
+        raise ManagerError('The Python lock file is unreadable — ' + str(error), 'lock_invalid') from error
     if not isinstance(value, dict) or int(value.get('format', 0)) != 1:
         raise ManagerError('The Python lock file has an unsupported format.', 'lock_invalid')
     abi = f'cp{sys.version_info.major}{sys.version_info.minor}'
@@ -2077,6 +2103,27 @@ def resolve_environment(requested, previous_state, locked_artifacts=None, operat
             package['requested'] = package['name'] in requested_names
             request = next((item for item in requested if normalise_name(item['name']) == package['name']), {})
             package['pinned'] = bool(request.get('pinned'))
+        previous_packages = package_records(previous_state)
+        changed_at = time.time()
+        for package in packages:
+            previous = previous_packages.get(package['name'], {})
+            previous_artifact = previous.get('artifact') or {}
+            current_artifact = package.get('artifact') or {}
+            unchanged = bool(previous) and (
+                str(previous.get('version') or '') == str(package.get('version') or '') and
+                str(previous_artifact.get('sha256') or '') ==
+                str(current_artifact.get('sha256') or '')
+            )
+            package['installed_at'] = (
+                previous.get('installed_at') or
+                previous_state.get('updated_at') or
+                changed_at
+            )
+            package['updated_at'] = (
+                previous.get('updated_at') or
+                previous_state.get('updated_at') or
+                changed_at
+            ) if unchanged else changed_at
         set_progress(operation, 'patching native libraries', transaction)
         relocations = patch_native_payload(site, catalogue_stage, owners, packages)
         catalogue_owners = {
@@ -2204,7 +2251,7 @@ def recover_transactions(_service=False):
             expected = str(action.get('sha256') or '')
             if not os.path.isfile(target) or (expected and sha256(target) != expected):
                 raise ManagerError(
-                    'Interrupted Python transaction contains an unexpected live file: '
+                    'Interrupted Python transaction contains an unexpected live file — '
                     + relative, 'recovery_required',
                 )
             os.unlink(target)
@@ -2218,12 +2265,12 @@ def recover_transactions(_service=False):
                 expected = str(action.get('sha256') or '')
                 if expected and sha256(backup) != expected:
                     raise ManagerError(
-                        'Interrupted Python transaction backup is damaged: ' + relative,
+                        'Interrupted Python transaction backup is damaged — ' + relative,
                         'recovery_required',
                     )
                 if os.path.lexists(target):
                     raise ManagerError(
-                        'Interrupted Python transaction cannot restore: ' + relative,
+                        'Interrupted Python transaction cannot restore — ' + relative,
                         'recovery_required',
                     )
                 os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -2351,7 +2398,7 @@ def replace_environment(requested, operation, locked_artifacts=None):
             # failure. Preserve the package result and leave diagnostic detail
             # in the service log for recovery tooling.
             print(
-                f'> Python automatic cache cleanup failed: {error}',
+                f'> Python automatic cache cleanup failed — {error}',
                 file=sys.stderr,
             )
         return state
@@ -2455,9 +2502,7 @@ def op_status(arguments):
     system = [item for item in modules if item['system']]
     return {
         'core': core_identity(),
-        # Authority is request-scoped and process-bound; it is intentionally
-        # not represented as a global system role.
-        'authorization': 'request-scoped',
+        'authorization': 'trusted application',
         'health': 'healthy' if not problems else 'needs attention',
         'problems': problems,
         'generation': state.get('transaction') or 'base',
@@ -2501,7 +2546,7 @@ def pypi_project(name):
             raise ManagerError(name + ' was not found on PyPI.', 'module_missing') from error
         raise ManagerError('PyPI could not be reached.', 'network_failed') from error
     except (OSError, ValueError, urllib.error.URLError) as error:
-        raise ManagerError('PyPI could not be reached: ' + str(error), 'network_failed') from error
+        raise ManagerError('PyPI could not be reached — ' + str(error), 'network_failed') from error
 
 
 def compatible_wheel(filename):
@@ -2566,6 +2611,94 @@ def op_list_updates(arguments):
             'available': bool(latest and latest != item['version']),
         })
     return {'updates': updates}
+
+
+def op_preview_change(arguments):
+    operation = str(arguments.get('change_operation') or '').strip()
+    change_arguments = arguments.get('change_arguments', {})
+    if not isinstance(change_arguments, dict):
+        raise ManagerError('The Python change preview is invalid.', 'invalid_arguments')
+    allowed = {
+        'install_module', 'remove_module', 'pin_module', 'unpin_module',
+        'update_module', 'update_modules', 'repair_modules', 'restore_modules',
+    }
+    if operation not in allowed or frozenset(change_arguments) not in OPERATION_ARGUMENT_KEYS.get(operation, ()):
+        raise ManagerError('The Python change preview is invalid.', 'invalid_arguments')
+    state, modules = installed_modules()
+    installed = {item['name']: item for item in modules}
+    changes = []
+    notes = []
+    if operation == 'install_module':
+        name = normalise_name(change_arguments.get('name'))
+        requested_version = str(change_arguments.get('version') or '')
+        found = op_find_module({'name': name})
+        target = requested_version or str(found.get('latest') or '')
+        current = installed.get(name, {})
+        changes.append({
+            'action': 'change' if current else 'install',
+            'name': str(found.get('name') or name),
+            'from': str(current.get('version') or ''),
+            'to': target,
+        })
+        notes.append('Required dependencies will be resolved from compatible binary wheels.')
+    elif operation == 'remove_module':
+        name = normalise_name(change_arguments.get('name'))
+        current = installed.get(name)
+        if not current or not current.get('requested'):
+            raise ManagerError(name + ' is not a requested module.', 'not_requested')
+        changes.append({
+            'action': 'remove', 'name': current['display_name'],
+            'from': current['version'], 'to': '',
+        })
+        notes.append('Dependencies no longer required by another module will also be removed.')
+    elif operation == 'update_module':
+        name = normalise_name(change_arguments.get('name'))
+        current = installed.get(name)
+        if not current or not current.get('requested'):
+            raise ManagerError(name + ' is not a requested module.', 'not_requested')
+        found = op_find_module({'name': name})
+        changes.append({
+            'action': 'update', 'name': current['display_name'],
+            'from': current['version'], 'to': str(found.get('latest') or ''),
+        })
+    elif operation in ('pin_module', 'unpin_module'):
+        name = normalise_name(change_arguments.get('name'))
+        current = installed.get(name)
+        if not current or not current.get('requested'):
+            raise ManagerError(name + ' is not a requested module.', 'not_requested')
+        changes.append({
+            'action': 'pin' if operation == 'pin_module' else 'unpin',
+            'name': current['display_name'], 'from': current['version'],
+            'to': current['version'],
+        })
+    elif operation == 'update_modules':
+        updates = op_list_updates({}).get('updates', [])
+        for item in updates:
+            if item.get('available') and not item.get('pinned'):
+                changes.append({
+                    'action': 'update', 'name': item['name'],
+                    'from': item['installed'], 'to': item['latest'],
+                })
+        if not changes:
+            notes.append('Every requested module is already current or pinned.')
+    elif operation == 'repair_modules':
+        changes.append({'action': 'repair', 'name': 'managed modules', 'from': '', 'to': ''})
+        notes.append('Every managed file will be rebuilt from the exact current lock.')
+    elif operation == 'restore_modules':
+        previous = load_state(previous_path())
+        changes.append({
+            'action': 'restore', 'name': 'previous module set',
+            'from': str(len(state.get('packages', []))),
+            'to': str(len(previous.get('packages', []))),
+        })
+        notes.append('The immediately previous committed module set will become active.')
+    return {
+        'change_operation': operation,
+        'change_arguments': dict(change_arguments),
+        'changes': changes,
+        'notes': notes,
+        'message': 'Review the Python module change.',
+    }
 
 
 def op_install_module(arguments):
@@ -2737,6 +2870,7 @@ OPERATIONS = {
     'show_module': op_show_module,
     'find_module': op_find_module,
     'list_updates': op_list_updates,
+    'preview_change': op_preview_change,
     'install_module': op_install_module,
     'install_wheel': op_install_wheel,
     'remove_module': op_remove_module,
@@ -2755,7 +2889,7 @@ OPERATIONS = {
 
 READ_OPERATIONS = frozenset({
     'status', 'list_modules', 'show_module', 'find_module', 'list_updates',
-    'check_modules', 'history', 'export_lock',
+    'check_modules', 'history', 'export_lock', 'preview_change',
 })
 MUTATION_OPERATIONS = frozenset({
     'install_module', 'remove_module', 'pin_module', 'unpin_module',
@@ -2770,6 +2904,7 @@ OPERATION_ARGUMENT_KEYS = {
     'show_module': (frozenset(('name',)),),
     'find_module': (frozenset(('name',)),),
     'list_updates': (frozenset(),),
+    'preview_change': (frozenset(('change_operation', 'change_arguments')),),
     'install_module': (frozenset(('name',)), frozenset(('name', 'version'))),
     'install_wheel': (frozenset(('filename', 'size', 'sha256')),),
     'remove_module': (frozenset(('name',)),),
@@ -2806,7 +2941,7 @@ def dispatch(request, peer, descriptors=None):
         raise ManagerError('This operation does not accept file descriptors.',
                            'unexpected_descriptor')
     if operation in MUTATION_OPERATIONS:
-        require_architect(peer, operation, arguments)
+        require_trusted_mutation_peer(peer)
     elif operation not in READ_OPERATIONS:
         raise ManagerError('The Python manager operation is denied.', 'operation_denied')
     try:
@@ -3143,7 +3278,7 @@ def entry_point_main(argv=None):
 
     values = list(sys.argv[1:] if argv is None else argv)
     if not values:
-        print('T1OS Python command: missing command name', file=sys.stderr)
+        print('T1OS Python command — missing command name', file=sys.stderr)
         return 126
     command = os.path.basename(values.pop(0))
     sys.argv = [command, *values]
@@ -3152,7 +3287,7 @@ def entry_point_main(argv=None):
         result = entry()
         return int(result) if isinstance(result, int) else 0
     except Exception as error:
-        print('T1OS Python command: ' + str(error), file=sys.stderr)
+        print('T1OS Python command — ' + str(error), file=sys.stderr)
         return 1
 
 

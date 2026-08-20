@@ -111,6 +111,7 @@ def main():
         if isinstance(node, ast.FunctionDef)
         and node.name in (
             "gpucandidateruntimeready",
+            "gpugraphicsmappingsready",
             "chromiumdiagnosticswitches",
             "chromiumdiagnosticenvironment",
             "browsergpuarguments",
@@ -666,7 +667,7 @@ def main():
         and 'capability.get("brokered_socket") is not True' in chromiumtext
         and "servicechromiumenvironment(environment)" in chromiumtext
         and re.search(
-            r"expected_gpu_library_path\s*=\s*chrome_environment\software\.get\(\s*"
+            r"expected_gpu_library_path\s*=\s*chrome_environment\.get\(\s*"
             r"NVIDIAGPULIBRARYPATHVARIABLE,\s*"
             r"MESAGRAPHICSLIBRARYPATH\s*"
             r"if presentationbridge and not proprietarynvidia\s*"

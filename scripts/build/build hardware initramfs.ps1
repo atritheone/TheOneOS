@@ -15,6 +15,7 @@ if ($Candidate314) {
 $busyBoxSource = Join-Path $projectRoot 'environment\software\initramfs\bin\busybox'
 $initSource = Join-Path $projectRoot 'source\entry\init\init hardware.sh'
 $recoverySource = Join-Path $projectRoot 'source\entry\init\angel recovery.sh'
+$recoveryAuthSource = Join-Path $projectRoot 'source\entry\recoveryauth\recoveryauth.c'
 $pythonManifest = if ($Candidate314) {
     Join-Path $projectRoot 'development\python 3.14 candidate\t1os\manifest.json'
 }
@@ -49,7 +50,7 @@ function ConvertTo-WslPath {
     return ([string]($output | Select-Object -First 1)).Trim()
 }
 
-$requiredFiles = @($busyBoxSource, $initSource, $recoverySource, $pythonManifest, $pythonReleaseLock, $pythonRuntimeConfig, $bootPolicyBuilder, $ntfsCheckerBuilder)
+$requiredFiles = @($busyBoxSource, $initSource, $recoverySource, $recoveryAuthSource, $pythonManifest, $pythonReleaseLock, $pythonRuntimeConfig, $bootPolicyBuilder, $ntfsCheckerBuilder)
 if (-not $Candidate314) {
     $requiredFiles += $pythonVerifier
 }
@@ -167,6 +168,7 @@ New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 $wslBusyBox = ConvertTo-WslPath -WindowsPath $busyBoxSource
 $wslInit = ConvertTo-WslPath -WindowsPath $initSource
 $wslRecovery = ConvertTo-WslPath -WindowsPath $recoverySource
+$wslRecoveryAuth = ConvertTo-WslPath -WindowsPath $recoveryAuthSource
 $wslFirmware = ConvertTo-WslPath -WindowsPath $firmwareArchive
 $wslPythonManifest = ConvertTo-WslPath -WindowsPath $pythonManifest
 $wslPythonReleaseLock = ConvertTo-WslPath -WindowsPath $pythonReleaseLock
@@ -192,6 +194,7 @@ candidate_mode=$9
 recovery_script=${10}
 profiled_python_config=${11}
 boot_policy_manifest=${12}
+recovery_auth_source=${13}
 umask 022
 export LC_ALL=C
 
@@ -227,6 +230,24 @@ cp -- "$recovery_script" "$rootfs/angel-recovery"
 cp -- "$busybox" "$rootfs/bin/sh"
 cp -- "$busybox" "$rootfs/bin/mdev"
 chmod 0755 "$rootfs/bin/busybox" "$rootfs/bin/sh" "$rootfs/bin/mdev" "$rootfs/init" "$rootfs/angel-recovery"
+
+# Destructive recovery must remain usable when the installed Python runtime is
+# the component which failed.  Build a small, initramfs-native verifier for the
+# versioned master credential formats; Angel sends the password only over this
+# program's standard input and never executes authentication code from root.
+cc -std=c11 -O2 -Wall -Wextra -Werror -D_FORTIFY_SOURCE=2 \
+    -fstack-protector-strong -Wl,-z,relro,-z,now \
+    -o "$rootfs/sbin/recoveryauth" "$recovery_auth_source" \
+    -Wl,-l:libargon2.so.1 -lcrypto
+ldd "$rootfs/sbin/recoveryauth" | awk '
+    /=> \// { print $3 }
+    /^[[:space:]]*\// { print $1 }
+' | sort -u | while IFS= read -r library; do
+    [ -f "$library" ] || continue
+    destination="$rootfs$library"
+    mkdir -p "$(dirname "$destination")"
+    cp -L -- "$library" "$destination"
+done
 
 python3 - \
     "$python_manifest" \
@@ -669,6 +690,7 @@ gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'angel-recovery'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'bin/busybox'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'sbin/cryptsetup'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'sbin/roothealth'
+gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'sbin/recoveryauth'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'lib64/ld-linux-x86-64.so.2'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'protected-roots.tsv'
 gzip -cd "$work/main.cpio.gz" | cpio -it | grep -qx 'profiled-python-entrypoints.tsv'
@@ -702,7 +724,7 @@ sha256sum "$output"
 $buildExitCode = 1
 $normalizedBuildCommand = $buildCommand.Replace("`r", '') + "`n# end"
 $normalizedBuildCommand |
-    & wsl.exe -d Ubuntu -u root --exec bash -s -- $wslBusyBox $wslInit $wslFirmware $wslStage $wslOutput $wslPythonManifest $wslPythonReleaseLock $wslNtfsChecker $candidateMode $wslRecovery $wslPythonRuntimeConfig $wslBootPolicyManifest
+    & wsl.exe -d Ubuntu -u root --exec bash -s -- $wslBusyBox $wslInit $wslFirmware $wslStage $wslOutput $wslPythonManifest $wslPythonReleaseLock $wslNtfsChecker $candidateMode $wslRecovery $wslPythonRuntimeConfig $wslBootPolicyManifest $wslRecoveryAuth
 $buildExitCode = $LASTEXITCODE
 if ($buildExitCode -ne 0) {
     throw "Hardware initramfs build failed (exit code $buildExitCode)."

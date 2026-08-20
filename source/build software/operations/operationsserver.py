@@ -69,6 +69,7 @@ GRAPHICSSTATEPATH = '/.ephemeral/windowserver/state/graphics.json'
 DESKTOPUID = 1000
 DESKTOPGID = 1000
 MAXIMUMREQUEST = 65536
+VALIDRECOVERYACTIONS = frozenset(('python', 'build', 'reset', 'reinstall'))
 VMTESTMAXOUTPUT = 4 * 1024 * 1024
 VMTESTMAXDIRECTIVE = 32 * 1024
 VMTESTMEDIA = '/software/without_a_blush.mp4'
@@ -195,7 +196,6 @@ STATEWRITELOCK = threading.Lock()
 PROCESSES = {}
 OPMETA = {}
 COMPLETED = {}
-ARCHITECTCAPABILITIES = {}
 READYPENDING = {}
 READYPENDINGTTL = 30.0
 COMPLETEDKEEP = 50
@@ -318,9 +318,6 @@ ACTIONDOMAINS = {
     'SETTINGS_HOSTNAME_SET': frozenset(('settings',)),
     'SETTINGS_TIME_SET': frozenset(('settings',)),
     'TIME_SAMPLE_SET': frozenset(('reign',)),
-    'ARCHITECT_AUTHORIZE': frozenset(('brick', 'settings')),
-    'ARCHITECT_REVOKE': frozenset(('brick', 'settings')),
-    'ARCHITECT_CAPABILITY_CHECK': frozenset(('python',)),
     'REGISTER_PID': frozenset(('window', 'brick', 'desktop', 'video', 'settings', 'snap', 'chromium', 'picker')),
     'COMPLETE_PID': frozenset(('brick', 'desktop', 'video', 'settings', 'snap', 'chromium')),
     'READY_PID': frozenset(('window', 'brick', 'desktop', 'video', 'settings', 'snap', 'chromium', 'picker')),
@@ -2342,26 +2339,39 @@ def handlesettingstime(request):
 
 def handlesettingsrecovery(request):
 
-    """Authenticate a destructive request and hand one opaque token to PID 1."""
+    """Authenticate recovery and hand destructive authority only to PID 1."""
 
     try:
         action = str(request.get('recovery_action') or request.get('recovery') or '').strip().lower()
-        if action not in authbroker.RECOVERY_ACTIONS:
+        if action not in VALIDRECOVERYACTIONS:
             raise ValueError('recovery action denied')
         password = boundedpassword(request, 'password')
-        issued = authbroker.issue_recovery_authorization(
-            MASTERFILE, password, action, ttl=60)
-        if not issued.authentication.ok or not issued.token:
+        token = None
+        if action in authbroker.RECOVERY_ACTIONS:
+            # The lifetime includes firmware startup, device discovery and the
+            # bounded RootHealth gate.  Five minutes remains well inside the
+            # broker's maximum while avoiding expiry during an ordinary boot.
+            issued = authbroker.issue_recovery_authorization(
+                MASTERFILE, password, action, ttl=300)
+            authentication = issued.authentication
+            token = issued.token or None
+        else:
+            # Python and build recovery do not receive a destructive token, but
+            # Settings still authenticates the person requesting the restart.
+            authentication = authbroker.authenticate_master(
+                MASTERFILE, password, scope=f'recovery:{action}', migrate=False)
+        if not authentication.ok or (
+                action in authbroker.RECOVERY_ACTIONS and not token):
             return {
                 'status': 'error', 'message': 'authentication failed',
-                'retry_after': float(issued.authentication.retry_after or 0.0),
+                'retry_after': float(authentication.retry_after or 0.0),
             }
-        # The token is sent over the credential-bound local power transport and
-        # never returned to Settings or placed in argv/environment.
+        # A destructive token is sent over the credential-bound local power
+        # transport and never returned to Settings or placed in argv/environment.
         from operations.operations import requestpower
         requestpower(
             'restart', timeout=5.0, recovery_action=action,
-            recovery_token=issued.token)
+            recovery_token=token)
         return {'status': 'ok', 'accepted': True, 'recovery_action': action}
     except (OSError, ValueError, authbroker.AuthenticationError) as error:
         return {'status': 'error', 'message': str(error) or 'recovery authorization failed'}
@@ -2474,142 +2484,6 @@ def handlesessionlockstart(request):
     except Exception as error:
         print(f'> operations server session lock error {error}', file=sys.stderr)
         return {'status': 'error', 'message': 'session lock unavailable'}
-
-
-def architectcapabilitykey(peer):
-
-    return f"{int(peer['pid'])}:{int(peer['started'])}:{peer['domain']}"
-
-
-def pythoncapabilitypolicy(request):
-
-    operation = str(request.get('python_operation') or '').strip()
-    scope = str(request.get('scope') or '').strip()
-    resource = str(request.get('resource') or '').strip()
-    expected = {
-        'remove_module': 'python:remove',
-        'pin_module': 'python:pin',
-        'unpin_module': 'python:unpin',
-        'update_module': 'python:update',
-        'update_modules': 'python:update',
-        'repair_modules': 'python:repair',
-        'restore_modules': 'python:restore',
-        'clear_cache': 'python:clear-cache',
-        'install_module': 'python:install',
-        'install_wheel': 'python:install-wheel',
-        'apply_lock': 'python:apply-lock',
-    }.get(operation)
-    if expected is None or scope != expected:
-        raise ValueError('Python capability operation denied')
-    if operation == 'install_module':
-        valid = re.fullmatch(
-            r'[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?@'
-            r'[A-Za-z0-9](?:[A-Za-z0-9.!+_-]{0,126}[A-Za-z0-9])?',
-            resource)
-    elif operation == 'install_wheel':
-        valid = re.fullmatch(
-            r'[A-Za-z0-9][A-Za-z0-9._+-]{0,254}\.whl@[0-9a-f]{64}',
-            resource)
-    elif operation == 'apply_lock':
-        valid = re.fullmatch(r'[0-9a-f]{64}', resource)
-    elif operation in ('remove_module', 'pin_module', 'unpin_module', 'update_module'):
-        valid = re.fullmatch(
-            r'[a-z0-9](?:[a-z0-9-]{0,126}[a-z0-9])?', resource)
-    else:
-        valid = resource == {
-            'update_modules': '*',
-            'repair_modules': 'current-lock',
-            'restore_modules': 'previous-generation',
-            'clear_cache': 'unused',
-        }[operation]
-    if not valid:
-        raise ValueError('Python capability resource denied')
-    return operation, scope, resource
-
-
-def handlearchitectauthorize(request):
-
-    try:
-        password = boundedpassword(request, 'password')
-        operation, scope, resource = pythoncapabilitypolicy(request)
-        result = authbroker.authenticate_master(
-            MASTERFILE, password, scope='architect:' + scope, migrate=True)
-        if not result.ok:
-            return {
-                'status': 'error', 'message': 'authentication failed',
-                'retry_after': float(result.retry_after or 0.0),
-            }
-        peer = request['_peer']
-        key = architectcapabilitykey(peer)
-        with STATELOCK:
-            ARCHITECTCAPABILITIES[key] = {
-                'scope': scope,
-                'operation': operation,
-                'resource': resource,
-                'uid': int(peer['uid']),
-                'uses': 1,
-                'expires': time.monotonic() + 60.0,
-            }
-        return {'status': 'ok', 'authorized': True, 'scope': scope, 'expires_in': 60}
-    except (OSError, ValueError, authbroker.AuthenticationError):
-        return {'status': 'error', 'message': 'authentication failed'}
-
-
-def handlearchitectrevoke(request):
-
-    key = architectcapabilitykey(request['_peer'])
-    with STATELOCK:
-        ARCHITECTCAPABILITIES.pop(key, None)
-    return {'status': 'ok', 'revoked': True}
-
-
-def handlearchitectcheck(request):
-
-    try:
-        operation, scope, resourcevalue = pythoncapabilitypolicy(request)
-    except ValueError:
-        return {'status': 'error', 'message': 'capability request denied'}
-    peer = request['_peer']
-    # Python service asks on behalf of a client whose immutable peer tuple it
-    # observed.  It may not invent a different domain or omit start time.
-    if peer['domain'] == 'python':
-        try:
-            subject = {
-                'pid': int(request['client_pid']),
-                'started': int(request['client_started']),
-                'domain': processdomain(int(request['client_pid'])),
-            }
-            clientuid = int(request['client_uid'])
-            record = processstat(subject['pid'])
-            status = processstatus(subject['pid'])
-            procuid = int(status.get('uid', -1))
-            if (record is None or int(record.get('started', -1)) != subject['started'] or
-                    subject['domain'] not in ('brick', 'settings') or
-                    clientuid != DESKTOPUID or procuid != clientuid):
-                raise ValueError
-        except (KeyError, TypeError, ValueError):
-            return {'status': 'error', 'message': 'capability subject denied'}
-    else:
-        subject = peer
-    key = architectcapabilitykey(subject)
-    now = time.monotonic()
-    with STATELOCK:
-        capability = dict(ARCHITECTCAPABILITIES.get(key, {}))
-        if capability and float(capability.get('expires', 0.0)) <= now:
-            ARCHITECTCAPABILITIES.pop(key, None)
-            capability = {}
-        if (
-            capability.get('scope') != scope or
-            capability.get('operation') != operation or
-            capability.get('resource') != resourcevalue or
-            int(capability.get('uid', -1)) != DESKTOPUID or
-            int(capability.get('uses', 0)) != 1
-        ):
-            return {'status': 'error', 'message': 'capability denied'}
-        # Consume before acknowledging. A failed mutation requires a fresh
-        # password and cannot reuse stale authority.
-        ARCHITECTCAPABILITIES.pop(key, None)
-    return {'status': 'ok', 'authorized': True, 'scope': scope}
 
 
 # Boot-scoped state helpers. Operations Server is the sole writer. The
@@ -4284,15 +4158,6 @@ def handlerequest(request):
 
     if op == 'TIME_SAMPLE_SET':
         return handletimesample(request)
-
-    if op == 'ARCHITECT_AUTHORIZE':
-        return handlearchitectauthorize(request)
-
-    if op == 'ARCHITECT_REVOKE':
-        return handlearchitectrevoke(request)
-
-    if op == 'ARCHITECT_CAPABILITY_CHECK':
-        return handlearchitectcheck(request)
 
     if op == 'RUN':
         return handlelegacyrun(request)

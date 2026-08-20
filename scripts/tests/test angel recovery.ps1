@@ -53,12 +53,22 @@ mkdir -p "$recovery" "$root" "$esp/T1OS"
 for tree in \
     boot \
     'the one/build' \
+    'the one/catalogue/audio' \
+    'the one/catalogue/graphics' \
     'the one/catalogue/python' \
     'the one/catalogue/image' \
+    'the one/catalogue/network' \
+    'the one/catalogue/virtualbox' \
     'the one/drivers' \
     'the one/logs' \
     'the one/resources' \
     'the one/settings' \
+    'the one/software/audio' \
+    'the one/software/chromium' \
+    'the one/software/graphics' \
+    'the one/software/network' \
+    'the one/software/system' \
+    'the one/software/virtualbox' \
     'the one/software/python'; do
     mkdir -p "$recovery/$tree"
     printf 'baseline:%s\n' "$tree" >"$recovery/$tree/baseline.txt"
@@ -80,6 +90,7 @@ find "$recovery" -mindepth 1 ! -path "$manifest" -print0 |
             printf 'F\t%s\t%s\t%s\t%s\n' "$relative" "$size" "$digest" "$mode"
         fi
     done >>"$manifest"
+chmod 0444 "$manifest"
 
 angel_prefix='~ '
 angel_suffix=' ~'
@@ -90,7 +101,9 @@ angel_root_mount=$root
 angel_esp_mount=$esp
 angel_root_mounted=1
 angel_root_safe=1
+angel_root_identity=1
 angel_reinstall_allowed=1
+angel_recovery_ready=1
 angel_say() { :; }
 angel_ask() { :; }
 angel_append_log() { :; }
@@ -204,6 +217,10 @@ grep -Fxq profile-user "$root/the one/master/user.txt"
 test ! -e "$root/.recover"
 
 printf 'erase-me\n' >"$root/user-file.txt"
+recovery_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+continuation_digest=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+angel_write_continuation reinstall "$continuation_digest" manual
+angel_validate_continuation reinstall "$continuation_digest"
 angel_install_fresh_root
 test ! -e "$root/user-file.txt"
 test ! -e "$root/master"
@@ -213,8 +230,106 @@ test ! -e "$root/.recover"
 test -d "$root/.ephemeral"
 test -d "$root/.rubbish"
 test -d "$root/.remainder"
+angel_validate_continuation reinstall "$continuation_digest"
+rm -f -- "$root/.angel-recovery-authorization"
 grep -Fxq 'baseline:boot' "$root/boot/baseline.txt"
 angel_verify_prefix_at "$root" 'the one'
+
+# Recovery advice is scoped to the smallest baseline tree which differs.
+angel_selection_source=
+roothealth_refusal_code=
+roothealth_refusal_class=
+angel_recovery_generation=test-generation
+angel_diagnose_recovery
+test -z "$angel_recommended_action"
+
+mkdir "$root/etc"
+angel_diagnose_recovery
+test -z "$angel_recommended_action"
+test "$angel_recommendation_confidence" = unavailable
+mkdir -p "$root/the one/master"
+printf 'Architect:placeholder\n' >"$root/the one/master/master.txt"
+chmod 0600 "$root/the one/master/master.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = reinstall
+rm -rf -- "$root/etc" "$root/the one/master"
+
+printf 'unexpected\n' >"$root/the one/software/chromium/unexpected.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = reset
+rm -f -- "$root/the one/software/chromium/unexpected.txt"
+
+chmod 0600 "$root/the one/software/python/baseline.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = python
+chmod 0644 "$root/the one/software/python/baseline.txt"
+
+printf 'damaged\n' >"$root/the one/software/python/baseline.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = python
+angel_restore_tree 'the one/software/python' Python
+
+printf 'damaged\n' >"$root/the one/build/baseline.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = build
+angel_restore_tree 'the one/build' 'build software'
+
+printf 'damaged\n' >"$root/the one/drivers/baseline.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = reset
+angel_restore_tree 'the one/drivers' 'The One OS'
+
+printf 'damaged\n' >"$root/the one/software/chromium/baseline.txt"
+angel_diagnose_recovery
+test "$angel_recommended_action" = reset
+angel_restore_tree 'the one/software/chromium' Chromium
+
+roothealth_refusal_code=MFT_BITMAP_MISMATCH
+roothealth_refusal_class=ambiguous-corruption
+angel_selection_source=settings
+angel_selected_action=reset
+mkdir -p \
+    "$esp/T1OS/diagnostics/roothealth-history/boot-1" \
+    "$esp/T1OS/diagnostics/roothealth-history/boot-2"
+printf 'refusal_code=MFT_BITMAP_MISMATCH\n' \
+    >"$esp/T1OS/diagnostics/roothealth-history/boot-1/manifest.env"
+printf 'refusal_code=MFT_BITMAP_MISMATCH\n' \
+    >"$esp/T1OS/diagnostics/roothealth-history/boot-2/manifest.env"
+angel_roothealth_history_summary
+test "$angel_roothealth_recurrence" = exact
+printf '%s\n' \
+    'refusal_code=MFT_BITMAP_MISMATCH' \
+    'refusal_fingerprint=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' \
+    >"$esp/T1OS/diagnostics/roothealth-history/boot-2/manifest.env"
+angel_roothealth_history_summary
+test "$angel_roothealth_recurrence" = varying
+angel_diagnose_recovery
+test -z "$angel_recommended_action"
+test "$angel_recommendation_confidence" = unavailable
+angel_root_safe=0
+if angel_action_available reset; then
+    echo 'Angel allowed a selected action while RootHealth refused the filesystem.' >&2
+    exit 1
+fi
+angel_root_safe=1
+roothealth_refusal_code=
+roothealth_refusal_class=
+angel_selection_source=
+angel_selected_action=
+
+angel_failure_reason='I could not find the root filesystem UUID=test.'
+printf 'failure_kind=root-not-found\n' \
+    >"$esp/T1OS/diagnostics/roothealth-history/boot-1/manifest.env"
+printf 'failure_kind=root-not-found\n' \
+    >"$esp/T1OS/diagnostics/roothealth-history/boot-2/manifest.env"
+angel_roothealth_history_summary
+test "$angel_roothealth_recurrence" = exact
+angel_root_safe=0
+angel_diagnose_recovery
+test -z "$angel_recommended_action"
+test "$angel_recommendation_confidence" = unavailable
+angel_root_safe=1
+angel_failure_reason=
 
 # A failed post-copy verification must put the previous tree back.
 rm -rf -- "$root/the one/build"

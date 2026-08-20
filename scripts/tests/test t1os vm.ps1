@@ -761,7 +761,6 @@ function Wait-T1OSBrickPythonStage {
         [Parameter(Mandatory)][int]$ProcessId,
         [Parameter(Mandatory)][string]$Operation,
         [Parameter(Mandatory)][string]$Stage,
-        [string]$PythonName = '',
         [int]$TimeoutSeconds = 300
     )
 
@@ -770,13 +769,8 @@ function Wait-T1OSBrickPythonStage {
         $feature = Get-T1OSFeatureStatus
         $status = $feature.brick_status
         if ([int]$status.pid -eq $ProcessId -and
-            [string]$status.python_operation -eq $Operation -and
-            ([string]::IsNullOrEmpty($PythonName) -or
-             [string]$status.python_name -eq $PythonName)) {
+            [string]$status.python_operation -eq $Operation) {
             $actual = [string]$status.stage
-            if ($actual -in @('python-auth-error', 'python-cancelled')) {
-                throw "Brick Python authorisation failed: $actual $([string]$status.python_error)"
-            }
             if ($actual -eq $Stage) {
                 if ($Stage -eq 'python-complete' -and -not [bool]$status.python_ok) {
                     $detail = if ($null -ne $status.python_data) {
@@ -914,9 +908,6 @@ function Invoke-T1OSSettingsPythonInstall {
     Send-T1OSClick -X $actionX -Y $queryY
     Start-Sleep -Seconds 1
     Send-T1OSClick -X $actionX -Y $confirmY
-    Start-Sleep -Seconds 1
-    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 75
-    Send-T1OSKey -ScanCode '1c'
 
     [void](Wait-T1OSPythonModule -Name $Name -Present $true -TimeoutSeconds 300)
     [void](Wait-T1OSSettingsPythonOperation -Operation 'install_module' -TimeoutSeconds 300)
@@ -968,13 +959,6 @@ function Invoke-T1OSBrickPythonMutation {
         default { throw "No Python manager operation mapping for Brick directive: $Command" }
     }
     $brickPid = [int]$launch.response.pid
-    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid -Operation $operation `
-        -Stage 'python-password-ready' -TimeoutSeconds 30)
-    # Brick's modal password reader consumes the keyboard stream.  Use actual
-    # press/release scan codes so the test follows the same path as a physical
-    # keyboard instead of VirtualBox's separate text-injection path.
-    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
-    Send-T1OSKey -ScanCode '1c'
     [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid -Operation $operation `
         -Stage 'python-complete' -TimeoutSeconds 300)
     [void](Wait-T1OSPythonIdle -TimeoutSeconds 300)
@@ -1033,23 +1017,11 @@ function Invoke-T1OSPythonDirectiveTest {
     Start-Sleep -Seconds 1
     Send-T1OSAsciiScanText -Text 'yes' -DelayMilliseconds 75
     Send-T1OSKey -ScanCode '1c'
-    $brickPid = [int]$promptLaunch.response.pid
-    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid `
-        -Operation 'install_module' -Stage 'python-password-ready' `
-        -PythonName 'paramiko' -TimeoutSeconds 30)
-    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
-    Send-T1OSKey -ScanCode '1c'
     [void](Wait-T1OSPythonModule -Name 'paramiko' -Present $true -TimeoutSeconds 300)
-    Start-Sleep -Seconds 2
-    [void](Wait-T1OSBrickPythonStage -ProcessId $brickPid `
-        -Operation 'install_module' -Stage 'python-password-ready' `
-        -PythonName 'requests' -TimeoutSeconds 30)
-    Send-T1OSAsciiScanText -Text $Password -DelayMilliseconds 100
-    Send-T1OSKey -ScanCode '1c'
     [void](Wait-T1OSPythonModule -Name 'requests' -Present $true -TimeoutSeconds 300)
+    [void](Wait-T1OSPythonIdle -TimeoutSeconds 300)
     $pythonChecks.missing_module_prompt_lowercase_yes = $true
     $pythonChecks.missing_modules_installed = $true
-    Invoke-T1OSCreepFrontTest
 
     Write-Host 'PYTHON: installing requests and paramiko through Settings...'
     Invoke-T1OSSettingsPythonInstall -Name 'requests'
@@ -1190,16 +1162,9 @@ function Invoke-T1OSFeatureTest {
 
     Send-T1OSClick -X $actionX -Y $confirmY
     Start-Sleep -Seconds 1
-    $passwordEmpty = Save-T1OSGuiStage -Name '11-password-prompt-empty' -DifferentFrom $pending.sha256
-    $featureChecks.native_password_prompt_empty_visible = $true
-
-    Send-T1OSText -Text $Password
-    Start-Sleep -Seconds 1
-    $passwordFilled = Save-T1OSGuiStage -Name '12-password-prompt-filled' -DifferentFrom $passwordEmpty.sha256
-    $featureChecks.native_password_prompt_masks_input = $true
-    Send-T1OSKey -ScanCode '1c'
-    Start-Sleep -Seconds 3
-    [void](Save-T1OSGuiStage -Name '12a-password-submit-result' -DifferentFrom $passwordFilled.sha256)
+    $progress = Save-T1OSGuiStage -Name '11-settings-python-progress' -DifferentFrom $pending.sha256
+    $featureChecks.settings_python_progress_visible = $true
+    $featureChecks.settings_python_password_not_required = $true
 
     Write-Host 'FEATURES: waiting for Settings to install humanize...'
     $installed = $null
@@ -1216,12 +1181,13 @@ function Invoke-T1OSFeatureTest {
         throw 'Settings did not install the humanize Python module within 240 seconds.'
     }
     $featureChecks.settings_python_module_installed = $true
+    [void](Wait-T1OSSettingsPythonOperation -Operation 'install_module' -TimeoutSeconds 300)
     Start-Sleep -Seconds 2
-    [void](Save-T1OSGuiStage -Name '13-settings-humanize-installed' -DifferentFrom $passwordFilled.sha256)
+    [void](Save-T1OSGuiStage -Name '12-settings-humanize-installed' -DifferentFrom $progress.sha256)
 
     Send-T1OSClick -X $checkX -Y $checkY
     Start-Sleep -Seconds 4
-    [void](Save-T1OSGuiStage -Name '14-settings-python-check')
+    [void](Save-T1OSGuiStage -Name '13-settings-python-check')
     $featureChecks.settings_python_health_check_exercised = $true
 
     # Prove the fixed spaced-path fixture remains visible after the package

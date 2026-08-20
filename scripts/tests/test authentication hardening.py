@@ -41,7 +41,8 @@ ARCHITECT_PATH = BUILD_ROOT / "architect" / "architect.py"
 STARTUP_PATH = BUILD_ROOT / "startup" / "startup.py"
 RECOVERY_PATH = PROJECT_ROOT / "source" / "entry" / "init" / "angel recovery.sh"
 INIT_PATH = PROJECT_ROOT / "source" / "entry" / "init" / "init hardware.sh"
-DISK_USER_PATH = PROJECT_ROOT / "scripts" / "create disk user.ps1"
+DEPLOYMENT_PATH = PROJECT_ROOT / "scripts" / "deployment"
+DISK_USER_PATH = DEPLOYMENT_PATH / "create disk user.ps1"
 
 
 def load_module(name, path):
@@ -358,10 +359,10 @@ class SourcePolicyTests(unittest.TestCase):
         self.assertIn("$passwordInput = $password", disk_user)
         self.assertIn("[switch]$UsbDrive", disk_user)
         self.assertIn("change-user", (
-            PROJECT_ROOT / "scripts" / "change disk user.ps1"
+            DEPLOYMENT_PATH / "change disk user.ps1"
         ).read_text(encoding="utf-8"))
         self.assertIn("remove-user", (
-            PROJECT_ROOT / "scripts" / "remove disk user.ps1"
+            DEPLOYMENT_PATH / "remove disk user.ps1"
         ).read_text(encoding="utf-8"))
 
 

@@ -75,8 +75,6 @@ from rubbish.rubbish import emptyrubbish, restorefromrubbish, storepaths
 import rubbish.rubbish as rubbishapi
 _prefer_source_build()
 from operations.operations import (
-    architect_authorize,
-    architect_revoke,
     PowerRequestError,
     requestpower,
     requestsessionlogout,
@@ -6097,11 +6095,11 @@ def preparepythonmodules(path):
         'python-missing-prompt', python_missing=missing,
         python_script=os.path.abspath(path))
     if HEADLESS:
-        guiprint(f'> missing python modules: {names}', colour=ERRORCOLOUR)
+        guiprint(f'> missing python modules {names}', colour=ERRORCOLOUR)
         return False
     while True:
         answer = arch.guiline(
-            f'> missing python modules: {names}. install them? (yes/no) ')
+            f'> missing python modules {names}. install them yes or no ')
         if answer in ('yes', 'no'):
             break
         guiprint('> answer yes or no in lowercase', colour=ERRORCOLOUR)
@@ -6112,7 +6110,7 @@ def preparepythonmodules(path):
         guiprint('> python software launch cancelled', colour=TEXTCOLOUR)
         return False
     for name in missing:
-        result = authorisedpythoncall(
+        result = pythonmutationcall(
             'install_module', {'name': name}, timeout=900.0)
         if not result.get('ok'):
             guiprint(
@@ -13243,7 +13241,7 @@ def architectdir(args=None):
         colour=TEXTCOLOUR)
     return {
         'ok': True,
-        'authorization': 'request-scoped',
+        'authorization': 'trusted application',
         'message': 'Protected actions request one-time authorisation.',
     }
 
@@ -18599,52 +18597,17 @@ def pythoncall(operation, arguments=None, timeout=10.0, quiet=False,
         }
 
 
-def authorisedpythoncall(operation, arguments=None, timeout=900.0,
-                         descriptor=None):
-    password = ''
-    try:
-        password = arch.readpass(
-            '> enter master password to authorise this Python change ',
-            ready=lambda: writebrickvmteststatus(
-                'python-password-ready', python_operation=str(operation),
-                python_name=str((arguments or {}).get('name') or '')),
-        )
-        if not password:
-            writebrickvmteststatus(
-                'python-cancelled', python_operation=str(operation))
-            return {
-                'ok': False, 'code': 'cancelled', 'message': 'cancelled',
-                'items': [], 'data': {},
-            }
-        architect_authorize(password, operation, arguments, timeout=10.0)
-        writebrickvmteststatus(
-            'python-authorised', python_operation=str(operation))
-    except Exception as error:
-        writebrickvmteststatus(
-            'python-auth-error', python_operation=str(operation),
-            python_error=str(error))
-        guiprint(f'> Python change authorisation failed: {error}', colour=ERRORCOLOUR)
-        return {
-            'ok': False, 'code': 'architect_required', 'message': str(error),
-            'items': [], 'data': {},
-        }
-    finally:
-        password = ''
-    try:
-        result = pythoncall(
-            operation, arguments, timeout=timeout, descriptor=descriptor)
-        writebrickvmteststatus(
-            'python-complete', python_operation=str(operation),
-            python_ok=bool(result.get('ok')),
-            python_code=str(result.get('code') or ''),
-            python_error=str(result.get('message') or ''),
-            python_data=dict(result.get('data') or {}))
-        return result
-    finally:
-        try:
-            architect_revoke(timeout=3.0)
-        except Exception as error:
-            guiprint(f'> Python authorisation revocation failed: {error}', colour=ERRORCOLOUR)
+def pythonmutationcall(operation, arguments=None, timeout=900.0,
+                       descriptor=None):
+    result = pythoncall(
+        operation, arguments, timeout=timeout, descriptor=descriptor)
+    writebrickvmteststatus(
+        'python-complete', python_operation=str(operation),
+        python_ok=bool(result.get('ok')),
+        python_code=str(result.get('code') or ''),
+        python_error=str(result.get('message') or ''),
+        python_data=dict(result.get('data') or {}))
+    return result
 
 
 def pythonstatus(args=None):
@@ -18665,7 +18628,7 @@ def pythonstatus(args=None):
         ['release', str(core.get('release') or 'unrecorded')],
         ['version', str(core.get('version') or 'unknown')],
         ['ABI', str(core.get('abi') or 'unknown')],
-        ['authorization', str(data.get('authorization') or 'request-scoped')],
+        ['authorization', str(data.get('authorization') or 'trusted application')],
         ['health', str(data.get('health') or 'unknown')],
         ['transaction', str(data.get('generation') or 'base')],
         ['system modules', str(data.get('system_modules', 0))],
@@ -18879,8 +18842,8 @@ def installpythonmodule(args=None):
         guiprint('> use install python module <name> [version <version>]', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_arguments', 'message': 'invalid install syntax'}
 
-    guiprint('> resolving and checking a protected system Python change', colour=TEXTCOLOUR)
-    return authorisedpythoncall('install_module', arguments, timeout=900.0)
+    guiprint('> resolving and checking the Python module change', colour=TEXTCOLOUR)
+    return pythonmutationcall('install_module', arguments, timeout=900.0)
 
 
 def openpythoninput(value, suffix, maximum, label):
@@ -18928,7 +18891,7 @@ def installpythonwheel(args=None):
         }
         guiprint('> checking and installing a local Python wheel',
                  colour=TEXTCOLOUR)
-        return authorisedpythoncall(
+        return pythonmutationcall(
             'install_wheel', arguments, timeout=900.0,
             descriptor=descriptor)
     except Exception as error:
@@ -18946,8 +18909,8 @@ def pythonmodulechange(operation, usage, args=None):
         guiprint(f'> use {usage}', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_arguments', 'message': 'enter one module name'}
 
-    guiprint('> preparing a protected system Python change', colour=TEXTCOLOUR)
-    return authorisedpythoncall(operation, {'name': args[0]}, timeout=900.0)
+    guiprint('> preparing the Python module change', colour=TEXTCOLOUR)
+    return pythonmutationcall(operation, {'name': args[0]}, timeout=900.0)
 
 
 def removepythonmodule(args=None):
@@ -18972,7 +18935,7 @@ def pythonchange(operation, usage, args=None, timeout=900.0):
         guiprint(f'> {usage} takes no arguments', colour=ERRORCOLOUR)
         return {'ok': False, 'code': 'invalid_arguments', 'message': usage + ' takes no arguments'}
 
-    return authorisedpythoncall(operation, timeout=timeout)
+    return pythonmutationcall(operation, timeout=timeout)
 
 
 def updatepythonmodules(args=None):
@@ -19102,7 +19065,7 @@ def applypythonlock(args=None):
             value, '.toml', 1024 * 1024, 'Python lock')
         arguments = {'size': size, 'sha256': digest}
         guiprint('> checking and applying the Python lock', colour=TEXTCOLOUR)
-        return authorisedpythoncall(
+        return pythonmutationcall(
             'apply_lock', arguments, timeout=900.0,
             descriptor=descriptor)
     except Exception as error:
@@ -19197,17 +19160,17 @@ DIRECTIVESPECS = [
     makespec('show python module', ['spm'], 'show an installed Python module', ['show python module <name>'], showpythonmodule, category='python'),
     makespec('find python module', ['fpm'], 'find compatible module versions', ['find python module <name>'], findpythonmodule, category='python'),
     makespec('list python updates', ['lpu'], 'list available module updates', ['list python updates'], listpythonupdates, category='python'),
-    makespec('install python module', ['ipm'], 'install a Python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python', architect=True),
-    makespec('install python wheel', ['ipw'], 'install a local Python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
-    makespec('remove python module', ['rpm'], 'remove a Python module', ['remove python module <name>'], removepythonmodule, True, category='python', architect=True),
-    makespec('update python module', ['upm'], 'update one Python module', ['update python module <name>'], updatepythonmodule, True, category='python', architect=True),
-    makespec('update python modules', ['upms'], 'update added Python modules', ['update python modules'], updatepythonmodules, True, category='python', architect=True),
-    makespec('pin python module', ['ppm'], 'hold a module version', ['pin python module <name>'], pinpythonmodule, True, category='python', architect=True),
-    makespec('unpin python module', ['unpm'], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python', architect=True),
-    makespec('repair python modules', ['rprm'], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python', architect=True),
-    makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python', architect=True),
+    makespec('install python module', ['ipm'], 'install a Python module', ['install python module <name>', 'install python module <name> version <version>'], installpythonmodule, True, grammar=makegrammar(terms=['version']), category='python'),
+    makespec('install python wheel', ['ipw'], 'install a local Python wheel', ['install python wheel <file>'], installpythonwheel, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
+    makespec('remove python module', ['rpm'], 'remove a Python module', ['remove python module <name>'], removepythonmodule, True, category='python'),
+    makespec('update python module', ['upm'], 'update one Python module', ['update python module <name>'], updatepythonmodule, True, category='python'),
+    makespec('update python modules', ['upms'], 'update added Python modules', ['update python modules'], updatepythonmodules, True, category='python'),
+    makespec('pin python module', ['ppm'], 'hold a module version', ['pin python module <name>'], pinpythonmodule, True, category='python'),
+    makespec('unpin python module', ['unpm'], 'allow a module to update', ['unpin python module <name>'], unpinpythonmodule, True, category='python'),
+    makespec('repair python modules', ['rprm'], 'rebuild modules from their lock', ['repair python modules'], repairpythonmodules, True, category='python'),
+    makespec('restore python modules', ['rspm'], 'restore the previous module set', ['restore python modules'], restorepythonmodules, True, category='python'),
     makespec('export python lock', ['epl'], 'export the exact module lock', ['export python lock <file>'], exportpythonlock, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
-    makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python', architect=True),
+    makespec('apply python lock', ['apl'], 'apply an exact module lock', ['apply python lock <file>'], applypythonlock, True, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='python'),
     makespec('test', [], 'run an isolated registered diagnostic', ['test <component>'], test, grammar=makegrammar(terms=['brick', 'directives', 'parsing', 'files', 'rubbish', 'search', 'operations', 'development', 'dogfood']), category='development'),
     makespec('play', [], 'play an audio or video file', ['play <media file>'], play, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
     makespec('view', [], 'view an image inline', ['view <image file>'], view, headless=False, grammar=makegrammar('file', completion='path', highlight_type='file', highlight='single'), category='media'),
@@ -21323,7 +21286,7 @@ def runfilewithoutwindow(path, arguments=None):
         return status
 
     except Exception as error:
-        print(formatlog('brick', f'could not run selected Python file: {error}'), file=sys.stderr)
+        print(formatlog('brick', f'could not run selected Python file — {error}'), file=sys.stderr)
         return 1
 
 

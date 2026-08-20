@@ -121,6 +121,13 @@ def test_recovery_cli_voice() -> None:
             "catalogue/python",
             "restore_tree \"$item\" Python",
             "Choose python",
+            "Choose recommended, python",
+            "Resetting Python",
+            "recommendation python",
+            "Only Python",
+            "outside the Python",
+            "boot, Python, build",
+            "replaces Python",
         )
         for line_number, line in enumerate(source.splitlines(), start=1):
             if re.search(r"\bpython(?:3(?:\.\d+)?)?\b", line, re.IGNORECASE) and not any(

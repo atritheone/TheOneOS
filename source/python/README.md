@@ -93,8 +93,8 @@ separate generation directory and `sitecustomize` does not add a private module
 path. A newly started program imports an added package through Python's normal
 system `site-packages` processing.
 
-Package management commands are deliberately provided only as Brick Python
-directives:
+Package management is available through the Python page in Settings and through
+recognisable Brick Python directives:
 
 ```text
 install python module requests
@@ -117,11 +117,14 @@ hash-locked `pip-26.1.2` wheel remains inaccessible to users and is used by
 `/the one/build/python/python.py` only to resolve dependencies and unpack wheels
 inside a transaction workspace.
 
-Settings lists both built-in and added packages. An Architect can type a
-package name, review the change, and choose **add**. Selecting a directly added
-package exposes **remove**, **update**, and **pin/unpin**. Dependencies are
-shown separately and are removed automatically when no requested package needs
-them.
+Settings lists both built-in and added packages. Any signed-in user can search
+for a package, review the transaction, and choose **add** without changing role
+or entering a password. Selecting a directly added package exposes version,
+remove, update, and pin controls. The sortable and resizable table separates
+requested packages, dependencies, system packages, and available updates. Its
+advanced area provides local wheels, repair, one-step restore, history, and
+lock import and export. Package work runs outside the Settings event loop and
+shows visible progress.
 
 Brick provides the same operations in plain language:
 
@@ -151,11 +154,15 @@ there is no separate module-check directive. Unused package downloads are
 cleaned automatically by the manager rather than through an end-user cache
 command.
 
-Status, inventory, history, search, update checks, and lock export work in
-Master. Installing, removing, updating, pinning,
-repair, restore, and lock application require Architect in both
-the frontend and the service. The T1OS LSM is the final runtime write boundary;
-Linux permission bits on an offline NTFS USB are not the authorization model.
+The user does not receive general write access to Python. Settings and Brick
+send bounded requests to the measured Python service, and only that service is
+allowed by the T1OS LSM to modify package children in the normal
+`site-packages`, command, and Python native-library locations. The interpreter
+and its versioned entrypoints remain protected. The service also owns its
+private transaction state under `/the one/software/python/pip`. This narrow
+exception keeps ordinary Python paths and behaviour while preserving the LSM as
+the final write boundary; Linux permission bits on an offline NTFS image are
+not the authorization model.
 
 Local wheel and lock imports never give the privileged manager a caller path.
 Brick opens a read-only regular file without following symbolic links. Wheels
@@ -194,11 +201,11 @@ partly. A future compatibility recipe can then describe that package explicitly.
 The commit journal is fsynced before its first rename. Old owned files are moved
 to transaction backup, new files are installed, and `state.json` becomes live
 last. Recovery handles crashes on either side of each rename. `previous.json`
-supports one-step restore, while `.t1pip/pylock.toml` records exact artifact
+supports one-step restore, while `pip/pylock.toml` records exact artifact
 URLs and SHA-256 hashes for repair and export. User-modified managed files are
 never silently overwritten.
 
-Managed-Python pushes to USB and `storage.img` preserve `.t1pip` state and only
+Managed-Python pushes to USB and `storage.img` preserve `pip` state and only
 the package and catalogue files whose size and SHA-256 match that state. Base
 release files remain governed by the immutable Python manifest. A collision
 between an installed package and a new system release aborts the update rather

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Security-contract tests for the native T1OS system package manager.
+"""Security-contract tests for the native T1OS Python package manager.
 
 Wheel imports use authenticated SCM_RIGHTS descriptors. Lock imports use a
 bounded stream after the manager-ready handshake; caller path strings never
@@ -30,14 +30,6 @@ def expect_manager_error(manager, code, operation):
         assert error.code == code, (error.code, code, str(error))
     else:
         raise AssertionError("operation unexpectedly succeeded")
-
-
-def expect_value_error(operation):
-    try:
-        operation()
-    except ValueError:
-        return
-    raise AssertionError("authorization policy unexpectedly accepted input")
 
 
 def request(manager, operation, arguments=None):
@@ -71,7 +63,7 @@ def main(argv):
 
     with tempfile.TemporaryDirectory(prefix="t1pip-security-", dir="/var/tmp") as temporary:
         root = os.path.join(temporary, "the one")
-        management = os.path.join(root, "software", "python", ".t1pip")
+        management = os.path.join(root, "software", "python", "pip")
         os.makedirs(management, mode=0o700)
         os.environ.update({
             "T1OS_SYSTEM_ROOT": root,
@@ -81,11 +73,10 @@ def main(argv):
         specification = importlib.util.spec_from_file_location("t1pip_tested", manager_path)
         manager = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(manager)
-        operations_client = importlib.import_module("operations.operations")
-
         expected_reads = {
             "status", "list_modules", "show_module", "find_module",
             "list_updates", "check_modules", "history", "export_lock",
+            "preview_change",
         }
         expected_mutations = {
             "install_module", "remove_module", "pin_module", "unpin_module",
@@ -97,7 +88,20 @@ def main(argv):
         assert set(manager.DESCRIPTOR_OPERATIONS) == {"install_wheel", "apply_lock"}
         assert set(manager.OPERATIONS) == expected_reads | expected_mutations
         assert not any(name.startswith("pip_") for name in manager.OPERATIONS)
+        assert manager.management_root() == management
+        assert ".t1pip" not in manager.management_root()
         assert manager.manager_python_command() == [os.path.realpath(sys.executable)]
+
+        legacy_state = manager.default_state()
+        legacy_state.update({
+            "format": 2,
+            "updated_at": 1234567890.0,
+            "packages": [{"name": "example", "version": "1.0"}],
+        })
+        migrated_state = manager.validate_state(legacy_state)
+        assert migrated_state["format"] == manager.STATE_FORMAT == 3
+        assert migrated_state["packages"][0]["installed_at"] == 1234567890.0
+        assert migrated_state["packages"][0]["updated_at"] == 1234567890.0
 
         class FakeDistribution:
             def __init__(self, top_level, files):
@@ -263,18 +267,19 @@ def main(argv):
             os.fspath(missing_script)
         ) == ["t1os_module_that_is_not_installed"]
         assert "importlib.invalidate_caches()" in missing_source
-        assert "install them? (yes/no)" in prepare_source
+        assert "install them yes or no" in prepare_source
         assert "answer yes or no in lowercase" in prepare_source
         assert "if answer in ('yes', 'no')" in prepare_source
-        assert "authorisedpythoncall" in prepare_source
-        server_policy = function_source(
-            operations_server_path, "pythoncapabilitypolicy"
-        )
-        for required_policy in (
-            "'install_wheel': 'python:install-wheel'",
-            "'apply_lock': 'python:apply-lock'",
+        assert "pythonmutationcall" in prepare_source
+        assert "authorisedpythoncall" not in brick_source
+        operations_server_source = operations_server_path.read_text(encoding="utf-8")
+        for retired_capability in (
+            "ARCHITECTCAPABILITIES", "pythoncapabilitypolicy",
+            "handlearchitectauthorize", "handlearchitectcheck",
+            "ARCHITECT_AUTHORIZE", "ARCHITECT_REVOKE",
+            "ARCHITECT_CAPABILITY_CHECK",
         ):
-            assert required_policy in server_policy
+            assert retired_capability not in operations_server_source
 
         invalid_requests = (
             ("install_module", {"name": "safe-name", "path": "/tmp/hostile.whl"}),
@@ -305,59 +310,27 @@ def main(argv):
                     request(manager, operation), None),
             )
 
-        policy_cases = {
-            ("install_module", (("name", "Safe.Name"),)): (
-                "python:install", "safe-name@latest"),
-            ("install_module", (("name", "Safe.Name"), ("version", "1.2"))): (
-                "python:install", "safe-name@1.2"),
-            ("install_wheel", (
-                ("filename", "safe_name-1.0-py3-none-any.whl"),
-                ("size", 1234), ("sha256", "a" * 64),
-            )): (
-                "python:install-wheel",
-                "safe_name-1.0-py3-none-any.whl@" + "a" * 64,
-            ),
-            ("remove_module", (("name", "Safe.Name"),)): (
-                "python:remove", "safe-name"),
-            ("pin_module", (("name", "Safe.Name"),)): (
-                "python:pin", "safe-name"),
-            ("unpin_module", (("name", "Safe.Name"),)): (
-                "python:unpin", "safe-name"),
-            ("update_module", (("name", "Safe.Name"),)): (
-                "python:update", "safe-name"),
-            ("update_modules", ()): ("python:update", "*"),
-            ("repair_modules", ()): ("python:repair", "current-lock"),
-            ("restore_modules", ()): ("python:restore", "previous-generation"),
-            ("clear_cache", ()): ("python:clear-cache", "unused"),
-            ("apply_lock", (("size", 1234), ("sha256", "b" * 64))): (
-                "python:apply-lock", "b" * 64),
+        valid_arguments = {
+            "install_module": {"name": "Safe.Name"},
+            "install_wheel": {
+                "filename": "safe_name-1.0-py3-none-any.whl",
+                "size": 1234, "sha256": "a" * 64,
+            },
+            "remove_module": {"name": "Safe.Name"},
+            "pin_module": {"name": "Safe.Name"},
+            "unpin_module": {"name": "Safe.Name"},
+            "update_module": {"name": "Safe.Name"},
+            "update_modules": {},
+            "repair_modules": {},
+            "restore_modules": {},
+            "clear_cache": {},
+            "apply_lock": {"size": 1234, "sha256": "b" * 64},
         }
-        valid_arguments = {}
-        for (operation, pairs), expected in policy_cases.items():
-            arguments = dict(pairs)
-            valid_arguments[operation] = arguments
-            assert operations_client.python_authorization_policy(
-                operation, arguments) == expected
-        for arguments in (
-            {"name": "safe-name", "path": "/tmp/hostile.whl"},
-            {"name": "safe-name", "pin": True},
-            {"name": "safe-name", "version": "1", "extra": True},
-        ):
-            expect_value_error(
-                lambda arguments=arguments: operations_client.python_authorization_policy(
-                    "install_module", arguments))
 
         peer = {
             "pid": 4100, "uid": 1000, "gid": 1000,
             "started": 9001, "domain": "brick",
         }
-        authorizations = []
-
-        def authorize(operation, arguments, **identity):
-            authorizations.append((operation, dict(arguments), dict(identity)))
-            return {"authorized": True}
-
-        manager.architect_capability_check = authorize
         original_operations = dict(manager.OPERATIONS)
         try:
             for operation in expected_mutations:
@@ -375,7 +348,6 @@ def main(argv):
                         }
                     )
             for operation in sorted(expected_mutations):
-                authorizations.clear()
                 descriptors = [7] if operation in manager.DESCRIPTOR_OPERATIONS else None
                 manager.set_progress(operation, "testing", "test-transaction")
                 response = manager.dispatch(
@@ -384,25 +356,22 @@ def main(argv):
                 )
                 assert response["ok"] is True
                 assert manager.progress()["running"] is False
-                assert len(authorizations) == 1
-                authorised_operation, authorised_arguments, identity = authorizations[0]
-                assert authorised_operation == operation
-                assert authorised_arguments == valid_arguments[operation]
-                assert identity == {
-                    "client_pid": peer["pid"],
-                    "client_started": peer["started"],
-                    "client_uid": peer["uid"],
-                    "timeout": 3.0,
-                }
-
-            manager.architect_capability_check = lambda *args, **kwargs: {
-                "authorized": False,
-            }
-            expect_manager_error(
-                manager, "architect_required",
-                lambda: manager.dispatch(
-                    request(manager, "clear_cache"), peer),
-            )
+            settings_peer = dict(peer, domain="settings")
+            assert manager.dispatch(
+                request(manager, "clear_cache"), settings_peer)["ok"] is True
+            for denied_peer in (
+                None,
+                dict(peer, uid=0),
+                dict(peer, gid=0),
+                dict(peer, domain="array"),
+                dict(peer, pid=1),
+                dict(peer, started=0),
+            ):
+                expect_manager_error(
+                    manager, "operation_denied",
+                    lambda denied_peer=denied_peer: manager.dispatch(
+                        request(manager, "clear_cache"), denied_peer),
+                )
         finally:
             manager.OPERATIONS.clear()
             manager.OPERATIONS.update(original_operations)
@@ -414,18 +383,24 @@ def main(argv):
         assert hashlib.sha256(content).hexdigest() == exported["sha256"]
         assert b"/tmp/" not in content
 
-        operations_server = (
-            Path(manager_path).parent.parent / "operations" / "operationsserver.py"
-        )
-        authorize_source = function_source(operations_server, "handlearchitectauthorize")
-        check_source = function_source(operations_server, "handlearchitectcheck")
-        assert "'uses': 1" in authorize_source
-        assert "time.monotonic() + 60.0" in authorize_source
-        consume = check_source.rfind("ARCHITECTCAPABILITIES.pop(key, None)")
-        success = check_source.rfind("'authorized': True")
-        assert consume >= 0 and success > consume
-        assert "client_started" in check_source and "processstat" in check_source
-        assert "subject['domain'] not in ('brick', 'settings')" in check_source
+        settings_path = Path(manager_path).parent.parent / "settings" / "settings.py"
+        settings_source = settings_path.read_text(encoding="utf-8")
+        for required_control in (
+            "python_find", "python_add", "('installed', 82)",
+            "('requested', 94)", "('dependencies', 112)",
+            "('system', 76)", "('updates', 82)",
+            "python_version", "python_remove", "python_update", "python_pin",
+            "python_advanced_wheel", "python_advanced_repair",
+            "python_advanced_restore", "python_advanced_history",
+            "python_advanced_export_lock", "python_advanced_apply_lock",
+            "preview_change", "resizepythoncolumn", "PYTHONWORKOPERATION",
+        ):
+            assert required_control in settings_source, required_control
+        for retired_authorization in (
+            "architect_authorize", "architect_revoke",
+            "authorisedpythonchange", "python_change",
+        ):
+            assert retired_authorization not in settings_source
 
     print("python_package_security_contracts=pass")
     return 0
