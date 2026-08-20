@@ -35,7 +35,13 @@ sys.path.insert(0, '/the one/build')
 
 from reign.reign import timestamp
 from GODDESS.GODDESS import formatlog, popenisolated, softwarelogpath
-from operations.operations import PowerRequestError, requestpower
+from operations.operations import (
+    OperationsRequestError,
+    PowerRequestError,
+    createdesktopitem,
+    renamedesktopitem,
+    requestpower,
+)
 from exchange.exchange import exmeta
 from graphics.graphics import fillbufferfile, initbuffer, clear, present, drawrect, drawline, initttffont, drawtextttf, measuretext, getttfface
 from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
@@ -389,6 +395,7 @@ DESKTOPSETTINGSFILE = "/the one/settings/expanse/desktop.json"
 DESKTOPSHOW = True
 DESKTOPITEMSIZE = "medium"
 DESKTOPORDER = []
+DESKTOPPOSITIONS = {}
 DESKTOPEXPANDED = set()
 DESKTOPITEMS = []
 DESKTOPITEMRECTS = []
@@ -401,7 +408,17 @@ DESKTOPNEXTSCAN = 0.0
 DESKTOPSCANSIGNATURE = None
 DESKTOPDRAGPATH = None
 DESKTOPDRAGSTART = None
+DESKTOPDRAGOFFSET = None
 DESKTOPDRAGACTIVE = False
+DESKTOPCREATEACTIVE = False
+DESKTOPCREATEKIND = None
+DESKTOPCREATETEXT = ""
+DESKTOPCREATECARETPOS = 0
+DESKTOPCREATECELL = None
+DESKTOPCREATETARGET = None
+DESKTOPCREATESELECTION = None
+DESKTOPCREATEERROR = ""
+DESKTOPCREATEBUSY = False
 
 # network
 NETICONX = 0
@@ -3179,6 +3196,62 @@ def desktopmetrics():
     }
 
 
+def desktopblocks():
+
+    blocks = []
+    for item in DESKTOPITEMS:
+        if int(item.get("depth", 0)) == 0:
+            blocks.append([item])
+        elif blocks:
+            blocks[-1].append(item)
+    return blocks
+
+
+def desktopgrid(metrics=None):
+
+    metrics = metrics or desktopmetrics()
+    availableheight = max(
+        1, int(DESKTOPH - TASKBARH - metrics["margin"] * 2))
+    availablewidth = max(1, int(DESKTOPW - metrics["margin"] * 2))
+    return (
+        max(1, availablewidth // int(metrics["width"])),
+        max(1, availableheight // int(metrics["height"])),
+    )
+
+
+def desktopblockcells(column, row, count, rows):
+
+    cells = []
+    for offset in range(max(1, int(count))):
+        linearrow = int(row) + offset
+        cells.append((int(column) + linearrow // rows, linearrow % rows))
+    return cells
+
+
+def desktopfindcell(desired, count, columns, rows, occupied):
+
+    column = max(0, min(int(desired[0]), columns - 1))
+    row = max(0, min(int(desired[1]), rows - 1))
+    candidates = [
+        (candidatecolumn, candidaterow)
+        for candidatecolumn in range(columns)
+        for candidaterow in range(rows)
+    ]
+    candidates.sort(key=lambda cell: (
+        abs(cell[0] - column) + abs(cell[1] - row),
+        cell[0],
+        cell[1],
+    ))
+
+    for candidate in candidates:
+        cells = desktopblockcells(candidate[0], candidate[1], count, rows)
+        if all(cell[0] < columns and cell not in occupied for cell in cells):
+            return candidate, cells
+
+    cells = desktopblockcells(column, row, count, rows)
+    return (column, row), cells
+
+
 def desktoplayout():
 
     global DESKTOPITEMRECTS
@@ -3188,28 +3261,48 @@ def desktoplayout():
         return DESKTOPITEMRECTS
 
     metrics = desktopmetrics()
-    available = max(1, int(DESKTOPH - TASKBARH - metrics["margin"] * 2))
-    rows = max(1, available // int(metrics["height"]))
+    columns, rows = desktopgrid(metrics)
+    occupied = set()
+    automaticindex = 0
 
-    for index, item in enumerate(DESKTOPITEMS):
-        column = index // rows
-        row = index % rows
-        x = metrics["margin"] + column * metrics["width"]
-        y = metrics["margin"] + row * metrics["height"]
-        width = max(1, metrics["width"] - metrics["gap"])
+    for block in desktopblocks():
+        root = block[0]
+        name = str(root.get("name", ""))
+        desired = DESKTOPPOSITIONS.get(name)
+        if not (
+            isinstance(desired, (list, tuple))
+            and len(desired) == 2
+            and all(type(value) is int and value >= 0 for value in desired)
+        ):
+            desired = [automaticindex // rows, automaticindex % rows]
 
-        if x >= DESKTOPW:
-            break
+        placement, cells = desktopfindcell(
+            desired, len(block), columns, rows, occupied)
+        if name not in DESKTOPPOSITIONS:
+            DESKTOPPOSITIONS[name] = [placement[0], placement[1]]
+        occupied.update(cells)
+        automaticindex += len(block)
 
-        width = min(width, max(1, DESKTOPW - x))
-        arrowx = x + metrics["padding"] + int(item.get("depth", 0)) * metrics["indent"]
-        arrowwidth = metrics["indent"]
-        record = dict(item)
-        record.update({
-            "rect": [x, y, width, metrics["height"]],
-            "arrowrect": [arrowx, y, arrowwidth, metrics["height"]],
-        })
-        DESKTOPITEMRECTS.append(record)
+        for item, (column, row) in zip(block, cells):
+            x = metrics["margin"] + column * metrics["width"]
+            y = metrics["margin"] + row * metrics["height"]
+            if x >= DESKTOPW or y >= DESKTOPH - TASKBARH:
+                continue
+
+            width = max(1, metrics["width"] - metrics["gap"])
+            width = min(width, max(1, DESKTOPW - x))
+            arrowx = (
+                x + metrics["padding"]
+                + int(item.get("depth", 0)) * metrics["indent"]
+            )
+            record = dict(item)
+            record.update({
+                "grid": [column, row],
+                "rootpath": root.get("path"),
+                "rect": [x, y, width, metrics["height"]],
+                "arrowrect": [arrowx, y, metrics["indent"], metrics["height"]],
+            })
+            DESKTOPITEMRECTS.append(record)
 
     return DESKTOPITEMRECTS
 
@@ -3241,32 +3334,263 @@ def desktoptoplevelitem(path):
     return None
 
 
-def desktopreorder(sock, sourcepath, targetpath=None):
+def desktopgridcell(x, y, offset=None):
+
+    metrics = desktopmetrics()
+    columns, rows = desktopgrid(metrics)
+    offsetx, offsety = offset if offset is not None else (0, 0)
+    cellx = float(x) - float(offsetx) - metrics["margin"]
+    celly = float(y) - float(offsety) - metrics["margin"]
+    column = int(round(cellx / max(1, metrics["width"])))
+    row = int(round(celly / max(1, metrics["height"])))
+    return [
+        max(0, min(column, columns - 1)),
+        max(0, min(row, rows - 1)),
+    ]
+
+
+def desktopnextfreecell():
+
+    metrics = desktopmetrics()
+    columns, rows = desktopgrid(metrics)
+    occupied = {
+        tuple(item.get("grid", ()))
+        for item in desktoplayout()
+        if len(item.get("grid", ())) == 2
+    }
+    for column in range(columns):
+        for row in range(rows):
+            if (column, row) not in occupied:
+                return [column, row]
+    return [max(0, columns - 1), max(0, rows - 1)]
+
+
+def desktopcreationrect():
+
+    if not DESKTOPCREATEACTIVE:
+        return None
+    if DESKTOPCREATETARGET is not None:
+        target = desktopsecurepath(DESKTOPCREATETARGET)
+        record = next((
+            item for item in desktoplayout()
+            if item.get("path") == target
+        ), None)
+        return list(record.get("rect")) if record is not None else None
+    if not isinstance(DESKTOPCREATECELL, list):
+        return None
+    metrics = desktopmetrics()
+    column, row = DESKTOPCREATECELL
+    x = metrics["margin"] + int(column) * metrics["width"]
+    y = metrics["margin"] + int(row) * metrics["height"]
+    if x >= DESKTOPW or y >= DESKTOPH - TASKBARH:
+        return None
+    return [
+        x,
+        y,
+        min(max(1, metrics["width"] - metrics["gap"]), max(1, DESKTOPW - x)),
+        metrics["height"],
+    ]
+
+
+def desktopcancelcreate(sock=None):
+
+    globals()["DESKTOPCREATEACTIVE"] = False
+    globals()["DESKTOPCREATEKIND"] = None
+    globals()["DESKTOPCREATETEXT"] = ""
+    globals()["DESKTOPCREATECARETPOS"] = 0
+    globals()["DESKTOPCREATECELL"] = None
+    globals()["DESKTOPCREATETARGET"] = None
+    globals()["DESKTOPCREATESELECTION"] = None
+    globals()["DESKTOPCREATEERROR"] = ""
+    globals()["DESKTOPCREATEBUSY"] = False
+    if sock is not None and DESKTOPBUF is not None:
+        paintdesktop(sock)
+
+
+def desktopstartcreate(sock, kind):
+
+    kind = str(kind or "").strip().lower()
+    if kind not in ("file", "tier") or not DESKTOPROOT:
+        return False
+    globals()["DESKTOPCREATEACTIVE"] = True
+    globals()["DESKTOPCREATEKIND"] = kind
+    globals()["DESKTOPCREATETEXT"] = ""
+    globals()["DESKTOPCREATECARETPOS"] = 0
+    globals()["DESKTOPCREATECELL"] = desktopnextfreecell()
+    globals()["DESKTOPCREATETARGET"] = None
+    globals()["DESKTOPCREATESELECTION"] = None
+    globals()["DESKTOPCREATEERROR"] = ""
+    globals()["DESKTOPCREATEBUSY"] = False
+    globals()["DESKTOPSELECTED"] = None
+    if sock is not None and DESKTOPID is not None:
+        sendline(sock, {"op": "FOCUS_SET", "winid": DESKTOPID})
+    if sock is not None and DESKTOPBUF is not None:
+        paintdesktop(sock)
+    return True
+
+
+def desktopstartrename(sock, path):
+
+    target = desktopsecurepath(path)
+    if target is None or not os.path.lexists(target) or os.path.islink(target):
+        return False
+    record = next((
+        item for item in desktoplayout()
+        if item.get("path") == target
+    ), None)
+    if record is None:
+        return False
+    name = os.path.basename(target)
+    if os.path.isdir(target):
+        selectionend = len(name)
+        kind = "tier"
+    else:
+        stem, extension = os.path.splitext(name)
+        selectionend = len(stem) if stem and extension else len(name)
+        kind = "file"
+    globals()["DESKTOPCREATEACTIVE"] = True
+    globals()["DESKTOPCREATEKIND"] = kind
+    globals()["DESKTOPCREATETEXT"] = name
+    globals()["DESKTOPCREATECARETPOS"] = selectionend
+    globals()["DESKTOPCREATECELL"] = list(record.get("grid", [0, 0]))
+    globals()["DESKTOPCREATETARGET"] = target
+    globals()["DESKTOPCREATESELECTION"] = [0, selectionend]
+    globals()["DESKTOPCREATEERROR"] = ""
+    globals()["DESKTOPCREATEBUSY"] = False
+    globals()["DESKTOPSELECTED"] = target
+    if sock is not None and DESKTOPID is not None:
+        sendline(sock, {"op": "FOCUS_SET", "winid": DESKTOPID})
+    if sock is not None and DESKTOPBUF is not None:
+        paintdesktop(sock)
+    return True
+
+
+def desktopeditselection():
+
+    selection = DESKTOPCREATESELECTION
+    if not isinstance(selection, (list, tuple)) or len(selection) != 2:
+        return None
+    start = max(0, min(int(selection[0]), len(DESKTOPCREATETEXT)))
+    end = max(0, min(int(selection[1]), len(DESKTOPCREATETEXT)))
+    if start == end:
+        return None
+    return (min(start, end), max(start, end))
+
+
+def desktopdeletemarkedtext():
+
+    selection = desktopeditselection()
+    if selection is None:
+        return False
+    start, end = selection
+    globals()["DESKTOPCREATETEXT"] = (
+        DESKTOPCREATETEXT[:start] + DESKTOPCREATETEXT[end:]
+    )
+    globals()["DESKTOPCREATECARETPOS"] = start
+    globals()["DESKTOPCREATESELECTION"] = None
+    return True
+
+
+def desktopcommitcreate(sock=None):
+
+    if not DESKTOPCREATEACTIVE or DESKTOPCREATEBUSY:
+        return False
+    name = str(DESKTOPCREATETEXT).strip()
+    if not name:
+        globals()["DESKTOPCREATEERROR"] = "enter a name"
+        if sock is not None and DESKTOPBUF is not None:
+            paintdesktop(sock)
+        return False
+
+    globals()["DESKTOPCREATEBUSY"] = True
+    renaming = DESKTOPCREATETARGET is not None
+    globals()["DESKTOPCREATEERROR"] = "renaming" if renaming else "creating"
+    if sock is not None and DESKTOPBUF is not None:
+        paintdesktop(sock)
+    try:
+        oldpath = desktopsecurepath(DESKTOPCREATETARGET) if renaming else None
+        response = (
+            renamedesktopitem(desktoprelative(oldpath), name)
+            if renaming else createdesktopitem(DESKTOPCREATEKIND, name)
+        )
+        path = desktopsecurepath(response.get("path"))
+        expectedparent = (
+            os.path.dirname(oldpath) if renaming else os.path.abspath(DESKTOPROOT)
+        )
+        if path is None or os.path.dirname(path) != expectedparent:
+            raise OperationsRequestError(
+                "rename returned an invalid path" if renaming
+                else "creation returned an invalid path"
+            )
+        cell = list(DESKTOPCREATECELL or desktopnextfreecell())
+        if renaming:
+            oldname = os.path.basename(oldpath)
+            newname = os.path.basename(path)
+            if os.path.dirname(oldpath) == os.path.abspath(DESKTOPROOT):
+                DESKTOPPOSITIONS.pop(oldname, None)
+                DESKTOPPOSITIONS[newname] = cell
+                globals()["DESKTOPORDER"] = [
+                    newname if item == oldname else item
+                    for item in DESKTOPORDER
+                ]
+            globals()["DESKTOPEXPANDED"] = {
+                path + expanded[len(oldpath):]
+                if expanded == oldpath or expanded.startswith(oldpath + os.sep)
+                else expanded
+                for expanded in DESKTOPEXPANDED
+            }
+        else:
+            DESKTOPPOSITIONS[os.path.basename(path)] = cell
+        desktopcancelcreate(None)
+        globals()["DESKTOPSELECTED"] = path
+        savedesktopsettings()
+        desktoprefresh(sock, force=True)
+        return True
+    except Exception as error:
+        message = " ".join(str(error).strip().lower().replace(":", " ").split())
+        globals()["DESKTOPCREATEBUSY"] = False
+        globals()["DESKTOPCREATEERROR"] = message or (
+            "rename failed" if renaming else "creation failed")
+        if sock is not None and DESKTOPBUF is not None:
+            paintdesktop(sock)
+        return False
+
+
+def desktopmoveitem(sock, sourcepath, x, y, offset=None):
 
     source = desktoptoplevelitem(sourcepath)
-    target = desktoptoplevelitem(targetpath) if targetpath else None
     if source is None:
         return False
-    if target is not None and target.get("path") == source.get("path"):
+
+    sourcerecord = next((
+        item for item in DESKTOPITEMRECTS
+        if int(item.get("depth", 0)) == 0
+        and item.get("path") == source.get("path")
+    ), None)
+    if sourcerecord is None:
         return False
 
-    roots = [
-        str(item.get("name", ""))
-        for item in DESKTOPITEMS
-        if int(item.get("depth", 0)) == 0
-    ]
     source_name = str(source.get("name", ""))
-    target_name = str(target.get("name", "")) if target else None
-    roots = [name for name in roots if name != source_name]
+    oldcell = list(sourcerecord.get("grid", [0, 0]))
+    newcell = desktopgridcell(x, y, offset=offset)
+    if newcell == oldcell:
+        return False
 
-    if target_name in roots:
-        roots.insert(roots.index(target_name), source_name)
-    else:
-        roots.append(source_name)
+    displaced = next((
+        item for item in DESKTOPITEMRECTS
+        if item.get("rootpath") != source.get("path")
+        and list(item.get("grid", [])) == newcell
+    ), None)
+    if displaced is not None:
+        target = desktoptoplevelitem(displaced.get("rootpath"))
+        if target is not None:
+            DESKTOPPOSITIONS[str(target.get("name", ""))] = oldcell
 
-    globals()["DESKTOPORDER"] = roots
+    DESKTOPPOSITIONS[source_name] = newcell
     savedesktopsettings()
-    desktoprefresh(sock, force=True)
+    desktoplayout()
+    if sock is not None and DESKTOPID is not None and DESKTOPBUF is not None:
+        paintdesktop(sock)
     return True
 
 
@@ -3322,11 +3646,12 @@ def desktoprefresh(sock=None, force=False):
 
 def loaddesktopsettings():
 
-    global DESKTOPSHOW, DESKTOPITEMSIZE, DESKTOPORDER, DESKTOPEXPANDED
+    global DESKTOPSHOW, DESKTOPITEMSIZE, DESKTOPORDER, DESKTOPPOSITIONS, DESKTOPEXPANDED
 
     DESKTOPSHOW = True
     DESKTOPITEMSIZE = "medium"
     DESKTOPORDER = []
+    DESKTOPPOSITIONS = {}
     DESKTOPEXPANDED = set()
 
     try:
@@ -3349,6 +3674,18 @@ def loaddesktopsettings():
             str(name) for name in data["order"]
             if isinstance(name, str) and name and "/" not in name and "\\" not in name
         ]
+    if isinstance(data.get("positions"), dict):
+        for name, position in data["positions"].items():
+            if (
+                isinstance(name, str)
+                and name
+                and "/" not in name
+                and "\\" not in name
+                and isinstance(position, list)
+                and len(position) == 2
+                and all(type(value) is int and value >= 0 for value in position)
+            ):
+                DESKTOPPOSITIONS[name] = list(position)
     if isinstance(data.get("expanded"), list):
         for relative in data["expanded"]:
             if not isinstance(relative, str):
@@ -3376,6 +3713,17 @@ def savedesktopsettings():
             "show": bool(DESKTOPSHOW),
             "size": str(DESKTOPITEMSIZE),
             "order": list(DESKTOPORDER),
+            "positions": {
+                str(name): list(position)
+                for name, position in DESKTOPPOSITIONS.items()
+                if (
+                    isinstance(name, str)
+                    and name
+                    and isinstance(position, (list, tuple))
+                    and len(position) == 2
+                    and all(type(value) is int and value >= 0 for value in position)
+                )
+            },
             "expanded": expanded,
         }
         with open(temporary, "w") as stream:
@@ -7618,10 +7966,6 @@ def desktopcontextmenuitems(context):
                 items.append({"label": "paste", "action": "paste"})
         except Exception:
             pass
-        items.append({
-            "label": "pin current tier to sidebar",
-            "action": "sidebarpin",
-        })
     items.append({"label": "settings", "action": "desktop-settings"})
     return items
 
@@ -7842,38 +8186,45 @@ def painttaskmenu(sock):
             textx = pad
 
             checkcolumn = bool(
-                TASKMENUTASKBAR
-                or (TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW)
-            )
+                TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW)
 
             if checkcolumn:
                 textx += checkboxsize + checkboxgap
 
-                if "checked" in it:
+            if "checked" in it:
+                if TASKMENUTASKBAR:
+                    checkboxx = (
+                        textx
+                        + measurettffile(str(it.get("label", "")), fsz)
+                        + checkboxgap
+                    )
+                else:
                     checkboxx = pad
-                    checkboxy = y + (itemheight - checkboxsize) // 2
+                checkboxy = y + (itemheight - checkboxsize) // 2
+                fillbufferfile(
+                    TASKMENUBUF,
+                    w,
+                    checkboxx,
+                    checkboxy,
+                    checkboxsize,
+                    checkboxsize,
+                    (239, 239, 239) if it.get("checked") else (0, 0, 0),
+                )
+                drawrect(
+                    checkboxx, checkboxy, checkboxsize, checkboxsize,
+                    (58, 58, 58))
+
+                if it.get("checked"):
+                    inset = max(2, checkboxsize // 4)
                     fillbufferfile(
                         TASKMENUBUF,
                         w,
-                        checkboxx,
-                        checkboxy,
-                        checkboxsize,
-                        checkboxsize,
-                        (239, 239, 239) if it.get("checked") else (0, 0, 0),
+                        checkboxx + inset,
+                        checkboxy + inset,
+                        max(1, checkboxsize - inset * 2),
+                        max(1, checkboxsize - inset * 2),
+                        (0, 0, 0),
                     )
-                    drawrect(checkboxx, checkboxy, checkboxsize, checkboxsize, (58, 58, 58))
-
-                    if it.get("checked"):
-                        inset = max(2, checkboxsize // 4)
-                        fillbufferfile(
-                            TASKMENUBUF,
-                            w,
-                            checkboxx + inset,
-                            checkboxy + inset,
-                            max(1, checkboxsize - inset * 2),
-                            max(1, checkboxsize - inset * 2),
-                            (0, 0, 0),
-                        )
 
             drawtextttf(
                 textx,
@@ -8145,9 +8496,10 @@ def showtaskbarcontextmenu(sock, anchorrect):
         checkboxgap = s(8, 4)
         w = max(
             measurettffile(str(item.get("label", "")), size)
+            + (checkboxsize + checkboxgap if "checked" in item else 0)
             for item in items
-        ) + (pad * 2) + checkboxsize + checkboxgap
-        w = max(pad * 2 + checkboxsize + checkboxgap + 1, min(w, int(MENUMAXW)))
+        ) + (pad * 2)
+        w = max(pad * 2 + 1, min(w, int(MENUMAXW)))
         h = itemheight * len(items)
 
         ax, ay, _, _ = [int(value) for value in anchorrect]
@@ -8311,7 +8663,19 @@ def rundesktopcontextaction(sock, context, action):
         launchstartsoftware("settings")
         return
 
+    if action == "newfile":
+        desktopstartcreate(sock, "file")
+        return
+
+    if action == "newtier":
+        desktopstartcreate(sock, "tier")
+        return
+
     if target is None:
+        return
+
+    if action == "rename":
+        desktopstartrename(sock, target)
         return
 
     if action == "open":
@@ -8983,9 +9347,13 @@ def handledesktopbutton(sock, msg):
     if state == "down" and DESKTOPID is not None:
         sendline(sock, {"op": "FOCUS_SET", "winid": DESKTOPID})
 
+    if state == "down" and DESKTOPCREATEACTIVE:
+        desktopcancelcreate(sock)
+
     if button in (2, 3):
         globals()["DESKTOPDRAGPATH"] = None
         globals()["DESKTOPDRAGSTART"] = None
+        globals()["DESKTOPDRAGOFFSET"] = None
         globals()["DESKTOPDRAGACTIVE"] = False
         if state == "down":
             globals()["DESKTOPSELECTED"] = item.get("path") if item else None
@@ -9019,9 +9387,12 @@ def handledesktopbutton(sock, msg):
         ):
             globals()["DESKTOPDRAGPATH"] = item.get("path")
             globals()["DESKTOPDRAGSTART"] = (x, y)
+            rx, ry, _, _ = item.get("rect", [x, y, 0, 0])
+            globals()["DESKTOPDRAGOFFSET"] = (x - rx, y - ry)
         else:
             globals()["DESKTOPDRAGPATH"] = None
             globals()["DESKTOPDRAGSTART"] = None
+            globals()["DESKTOPDRAGOFFSET"] = None
         globals()["DESKTOPDRAGACTIVE"] = False
         if DESKTOPBUF is not None:
             paintdesktop(sock)
@@ -9031,13 +9402,15 @@ def handledesktopbutton(sock, msg):
         return
 
     dragpath = DESKTOPDRAGPATH
+    dragoffset = DESKTOPDRAGOFFSET
     dragactive = bool(DESKTOPDRAGACTIVE)
     globals()["DESKTOPDRAGPATH"] = None
     globals()["DESKTOPDRAGSTART"] = None
+    globals()["DESKTOPDRAGOFFSET"] = None
     globals()["DESKTOPDRAGACTIVE"] = False
 
     if dragpath is not None and dragactive:
-        desktopreorder(sock, dragpath, item.get("path") if item else None)
+        desktopmoveitem(sock, dragpath, x, y, offset=dragoffset)
         globals()["DESKTOPLASTCLICKPATH"] = None
         globals()["DESKTOPLASTCLICKAT"] = 0.0
         return
@@ -9075,16 +9448,64 @@ def handledesktopkey(sock, msg):
             return
         if str(msg.get("state", "down")) not in ("down", "repeat"):
             return
+        key = str(msg.get("key", "")).strip().upper()
+        if DESKTOPCREATEACTIVE:
+            if key in ("ESC", "ESCAPE"):
+                desktopcancelcreate(sock)
+            elif key in ("ENTER", "RETURN"):
+                desktopcommitcreate(sock)
+            elif key == "HOME":
+                globals()["DESKTOPCREATECARETPOS"] = 0
+                globals()["DESKTOPCREATESELECTION"] = None
+            elif key == "END":
+                globals()["DESKTOPCREATECARETPOS"] = len(DESKTOPCREATETEXT)
+                globals()["DESKTOPCREATESELECTION"] = None
+            elif key == "LEFT":
+                selection = desktopeditselection()
+                globals()["DESKTOPCREATECARETPOS"] = (
+                    selection[0] if selection is not None
+                    else max(0, DESKTOPCREATECARETPOS - 1)
+                )
+                globals()["DESKTOPCREATESELECTION"] = None
+            elif key == "RIGHT":
+                selection = desktopeditselection()
+                globals()["DESKTOPCREATECARETPOS"] = (
+                    selection[1] if selection is not None
+                    else min(len(DESKTOPCREATETEXT), DESKTOPCREATECARETPOS + 1)
+                )
+                globals()["DESKTOPCREATESELECTION"] = None
+            elif key in ("BACKSPACE", "BKSP"):
+                if not desktopdeletemarkedtext() and DESKTOPCREATECARETPOS > 0:
+                    position = DESKTOPCREATECARETPOS
+                    globals()["DESKTOPCREATETEXT"] = (
+                        DESKTOPCREATETEXT[:position - 1] + DESKTOPCREATETEXT[position:]
+                    )
+                    globals()["DESKTOPCREATECARETPOS"] = position - 1
+                globals()["DESKTOPCREATEERROR"] = ""
+            elif key in ("DELETE", "DEL"):
+                if (
+                    not desktopdeletemarkedtext() and
+                    DESKTOPCREATECARETPOS < len(DESKTOPCREATETEXT)
+                ):
+                    position = DESKTOPCREATECARETPOS
+                    globals()["DESKTOPCREATETEXT"] = (
+                        DESKTOPCREATETEXT[:position] + DESKTOPCREATETEXT[position + 1:]
+                    )
+                globals()["DESKTOPCREATEERROR"] = ""
+            else:
+                return
+            if sock is not None and DESKTOPBUF is not None and DESKTOPCREATEACTIVE:
+                paintdesktop(sock)
+            return
         target = desktopsecurepath(DESKTOPSELECTED)
         if target is None:
             return
-        key = str(msg.get("key", "")).strip().upper()
         if key in ("ENTER", "RETURN", "SPACE"):
             desktopactivate(target)
         elif key in ("DELETE", "DEL"):
             launcharraycontext("delete", target)
         elif key == "F2":
-            launcharraycontext("rename", target)
+            desktopstartrename(sock, target)
         elif key == "RIGHT" and os.path.isdir(target):
             if target not in DESKTOPEXPANDED:
                 desktoptoggleexpanded(sock, target)
@@ -9092,6 +9513,52 @@ def handledesktopkey(sock, msg):
             desktoptoggleexpanded(sock, target)
     except Exception as error:
         log(f"desktop key error {error}")
+
+
+def desktopinserttext(value):
+
+    value = "".join(
+        character for character in str(value or "")
+        if character >= " " and character != "\x7f" and character != "/"
+    )
+    if not value:
+        return False
+    selection = desktopeditselection()
+    if selection is not None:
+        position = selection[0]
+        candidate = (
+            DESKTOPCREATETEXT[:selection[0]] + value +
+            DESKTOPCREATETEXT[selection[1]:]
+        )
+    else:
+        position = DESKTOPCREATECARETPOS
+        candidate = (
+            DESKTOPCREATETEXT[:position] + value + DESKTOPCREATETEXT[position:]
+        )
+    if len(candidate.encode("utf-8")) > 255:
+        globals()["DESKTOPCREATEERROR"] = "name is too long"
+        return False
+    globals()["DESKTOPCREATETEXT"] = candidate
+    globals()["DESKTOPCREATECARETPOS"] = position + len(value)
+    globals()["DESKTOPCREATESELECTION"] = None
+    globals()["DESKTOPCREATEERROR"] = ""
+    return True
+
+
+def handledesktoptext(sock, msg):
+
+    try:
+        if (
+            not DESKTOPCREATEACTIVE or DESKTOPCREATEBUSY or
+            DESKTOPID is None or int(msg.get("winid", 0)) != int(DESKTOPID)
+        ):
+            return
+        if not desktopinserttext(msg.get("text", "")):
+            return
+        if sock is not None and DESKTOPBUF is not None:
+            paintdesktop(sock)
+    except Exception as error:
+        log(f"desktop text error {error}")
 
 
 def settaskbarcursor(sock, mode):
@@ -11472,6 +11939,129 @@ def desktoppaintcontent():
             metrics["font"],
             fontpath=FONTPATH,
         )
+
+    creationrect = desktopcreationrect()
+    if creationrect is not None:
+        x, y, width, height = creationrect
+        fillbufferfile(DESKTOPBUF, DESKTOPW, x, y, width, height, (36, 36, 36))
+        fillbufferfile(DESKTOPBUF, DESKTOPW, x, y, width, 1, (239, 239, 239))
+        fillbufferfile(
+            DESKTOPBUF, DESKTOPW, x, y + height - 1, width, 1, (58, 58, 58))
+
+        arrowx = x + metrics["padding"]
+        arrowwidth = metrics["indent"]
+        namex = arrowx + arrowwidth
+        if DESKTOPCREATEKIND == "tier":
+            drawtextttf(
+                arrowx,
+                y + (height - metrics["font"]) // 2,
+                ">",
+                0x8A8A8A,
+                metrics["font"],
+                fontpath=FONTPATH,
+            )
+
+        boxpad = max(2, metrics["padding"] // 2)
+        boxx = namex - boxpad
+        boxy = y + max(2, metrics["padding"] // 2)
+        boxw = max(1, x + width - metrics["padding"] - boxx)
+        status = str(DESKTOPCREATEERROR or "").lower()
+        boxh = max(
+            metrics["font"] + boxpad * 2,
+            height - metrics["padding"] - (metrics["font"] if status else 0),
+        )
+        boxh = min(boxh, max(1, height - max(2, metrics["padding"] // 2)))
+        drawrect(
+            boxx,
+            boxy,
+            boxw,
+            boxh,
+            (190, 96, 96)
+            if status and status not in ("creating", "renaming")
+            else (239, 239, 239),
+        )
+
+        available = max(1, boxw - boxpad * 2)
+        text = str(DESKTOPCREATETEXT)
+        caret = max(0, min(int(DESKTOPCREATECARETPOS), len(text)))
+        visible_start = 0
+        while (
+            visible_start < caret and
+            measurettffile(text[visible_start:caret], metrics["font"]) > available
+        ):
+            visible_start += 1
+        visible_end = len(text)
+        while (
+            visible_end > caret and
+            measurettffile(text[visible_start:visible_end], metrics["font"]) > available
+        ):
+            visible_end -= 1
+        visible = text[visible_start:visible_end]
+        texty = boxy + max(1, (boxh - metrics["font"]) // 2)
+        drawtextttf(
+            boxx + boxpad,
+            texty,
+            visible,
+            0xEFEFEF,
+            metrics["font"],
+            fontpath=FONTPATH,
+        )
+        selection = desktopeditselection()
+        if selection is not None:
+            selectedstart = max(visible_start, selection[0])
+            selectedend = min(visible_end, selection[1])
+            if selectedstart < selectedend:
+                selectedx = (
+                    boxx + boxpad +
+                    measurettffile(
+                        text[visible_start:selectedstart], metrics["font"])
+                )
+                selectedwidth = max(
+                    1,
+                    measurettffile(
+                        text[selectedstart:selectedend], metrics["font"]),
+                )
+                fillbufferfile(
+                    DESKTOPBUF,
+                    DESKTOPW,
+                    selectedx,
+                    texty,
+                    selectedwidth,
+                    metrics["font"] + 1,
+                    (239, 239, 239),
+                )
+                drawtextttf(
+                    selectedx,
+                    texty,
+                    text[selectedstart:selectedend],
+                    0x000000,
+                    metrics["font"],
+                    fontpath=FONTPATH,
+                )
+        caretx = (
+            boxx + boxpad +
+            measurettffile(text[visible_start:caret], metrics["font"])
+        )
+        drawline(
+            caretx,
+            texty,
+            caretx,
+            min(boxy + boxh - 2, texty + metrics["font"]),
+            (239, 239, 239),
+        )
+        if status:
+            statussize = max(s(9, 7), metrics["font"] - s(3, 2))
+            statuslabel = searchfittext(
+                status, max(1, width - metrics["padding"] * 2), statussize)
+            drawtextttf(
+                namex,
+                max(y, y + height - statussize - 2),
+                statuslabel,
+                0xC97979
+                if status not in ("creating", "renaming") else 0x8A8A8A,
+                statussize,
+                fontpath=FONTPATH,
+            )
 
 
 def paintdesktop(sock):
@@ -13888,6 +14478,8 @@ def main():
 
                             handlesearchtext(s, m)
 
+                            handledesktoptext(s, m)
+
                         elif op == "TASKBAR_WINDOW_CREATED":
                             handletaskbarcreated(s, m)
 
@@ -14352,6 +14944,7 @@ def graphicsdiagnostic():
         globals()["DESKTOPSHOW"] = True
         globals()["DESKTOPITEMSIZE"] = "medium"
         globals()["DESKTOPORDER"] = []
+        globals()["DESKTOPPOSITIONS"] = {}
         globals()["DESKTOPEXPANDED"] = {alphatier}
         globals()["DESKTOPSCANSIGNATURE"] = None
         globals()["DESKTOPSELECTED"] = testfile
@@ -14386,6 +14979,30 @@ def graphicsdiagnostic():
         ):
             raise RuntimeError("desktop items did not snap to the active grid")
 
+        rootgridsbefore = {
+            str(item.get("name", "")): list(item.get("grid", []))
+            for item in layouts
+            if int(item.get("depth", -1)) == 0
+        }
+        movedcell = [1, 2]
+        movedx = metrics["margin"] + movedcell[0] * metrics["width"]
+        movedy = metrics["margin"] + movedcell[1] * metrics["height"]
+        if not desktopmoveitem(None, betatier, movedx, movedy, offset=(0, 0)):
+            raise RuntimeError("desktop tier could not be moved to an independent grid cell")
+        rootgridsafter = {
+            str(item.get("name", "")): list(item.get("grid", []))
+            for item in DESKTOPITEMRECTS
+            if int(item.get("depth", -1)) == 0
+        }
+        if (
+            rootgridsafter.get("beta tier") != movedcell
+            or rootgridsafter.get("alpha tier") != rootgridsbefore.get("alpha tier")
+            or rootgridsafter.get("test.txt") != rootgridsbefore.get("test.txt")
+        ):
+            raise RuntimeError(
+                f"desktop item movement changed unrelated grid positions {rootgridsafter}"
+            )
+
         originaldesktopsettingsfile = DESKTOPSETTINGSFILE
         globals()["DESKTOPSHOW"] = False
         globals()["DESKTOPITEMSIZE"] = "small"
@@ -14394,8 +15011,15 @@ def graphicsdiagnostic():
         globals()["DESKTOPITEMSIZE"] = "large"
         globals()["DESKTOPEXPANDED"] = set()
         loaddesktopsettings()
-        if DESKTOPSHOW or DESKTOPITEMSIZE != "small" or alphatier not in DESKTOPEXPANDED:
-            raise RuntimeError("desktop visibility, size, or expansion did not persist")
+        if (
+            DESKTOPSHOW
+            or DESKTOPITEMSIZE != "small"
+            or alphatier not in DESKTOPEXPANDED
+            or DESKTOPPOSITIONS.get("beta tier") != movedcell
+        ):
+            raise RuntimeError(
+                "desktop visibility, size, expansion, or grid positions did not persist"
+            )
 
         globals()["DESKTOPSHOW"] = True
         globals()["DESKTOPITEMSIZE"] = "medium"
@@ -14407,6 +15031,7 @@ def graphicsdiagnostic():
             "rows": [item[0] for item in expecteddesktoprows],
             "expanded_depth": 1,
             "grid": "medium",
+            "independent_position": movedcell,
         }
         result["checks"]["desktop_settings_persistence"] = True
         result["checks"]["desktop_path_confinement"] = True
@@ -14419,10 +15044,12 @@ def graphicsdiagnostic():
         desktopmainmenu = taskmenuitems()
         desktopmainactions = [str(item.get("action", "")) for item in desktopmainmenu]
         requiredmainactions = [
-            "desktop-view", "newfile", "newtier", "sidebarpin", "desktop-settings",
+            "desktop-view", "newfile", "newtier", "desktop-settings",
         ]
         if any(action not in desktopmainactions for action in requiredmainactions):
             raise RuntimeError(f"desktop context menu is incomplete {desktopmainactions}")
+        if "sidebarpin" in desktopmainactions:
+            raise RuntimeError("desktop context menu still exposes sidebar pinning")
         if desktopmainactions[0] != "desktop-view" or desktopmainactions[-1] != "desktop-settings":
             raise RuntimeError("desktop view and settings actions are out of order")
 
@@ -14454,11 +15081,83 @@ def graphicsdiagnostic():
 
         desktopactionevents = []
         originallaunchsoftware = globals().get("launchsoftware")
+        originalcreatedesktopitem = globals().get("createdesktopitem")
+        originalrenamedesktopitem = globals().get("renamedesktopitem")
+
+        def diagnosticdesktopcreate(kind, name):
+            path = os.path.join(desktopdiagnosticroot, str(name))
+            if str(kind) == "tier":
+                os.mkdir(path)
+            else:
+                with open(path, "x"):
+                    pass
+            return {"status": "ok", "kind": str(kind), "path": path}
+
+        def diagnosticdesktoprename(relative, name):
+            source = os.path.join(desktopdiagnosticroot, str(relative))
+            destination = os.path.join(os.path.dirname(source), str(name))
+            os.rename(source, destination)
+            return {"status": "ok", "path": destination}
+
         try:
             globals()["launchsoftware"] = lambda software: desktopactionevents.append({
                 "name": str(software.get("name", "")),
                 "args": list(software.get("args", [])),
             })
+            globals()["createdesktopitem"] = diagnosticdesktopcreate
+            globals()["renamedesktopitem"] = diagnosticdesktoprename
+            rundesktopcontextaction(
+                None,
+                {"kind": "empty", "path": desktopdiagnosticroot},
+                "newfile",
+            )
+            if not DESKTOPCREATEACTIVE or DESKTOPCREATEKIND != "file":
+                raise RuntimeError("desktop file naming field did not open")
+            globals()["DESKTOPCREATETEXT"] = "new note.txt"
+            globals()["DESKTOPCREATECARETPOS"] = len(DESKTOPCREATETEXT)
+            if not desktopcommitcreate(None):
+                raise RuntimeError("desktop file naming field did not create the file")
+            creatednote = os.path.join(desktopdiagnosticroot, "new note.txt")
+            if not os.path.isfile(creatednote) or DESKTOPSELECTED != creatednote:
+                raise RuntimeError("desktop file creation did not refresh its selection")
+
+            rundesktopcontextaction(
+                None,
+                {"kind": "empty", "path": desktopdiagnosticroot},
+                "newtier",
+            )
+            globals()["DESKTOPCREATETEXT"] = "new tier"
+            globals()["DESKTOPCREATECARETPOS"] = len(DESKTOPCREATETEXT)
+            if not desktopcommitcreate(None):
+                raise RuntimeError("desktop tier naming field did not create the tier")
+            if not os.path.isdir(os.path.join(desktopdiagnosticroot, "new tier")):
+                raise RuntimeError("desktop tier was not created")
+
+            renamesource = os.path.join(
+                desktopdiagnosticroot, "rename source.txt")
+            with open(renamesource, "x"):
+                pass
+            desktoprefresh(force=True)
+            rundesktopcontextaction(
+                None, {"kind": "row", "path": renamesource}, "rename")
+            if (
+                not DESKTOPCREATEACTIVE or
+                DESKTOPCREATETARGET != renamesource or
+                desktopeditselection() != (0, len("rename source"))
+            ):
+                raise RuntimeError("desktop inline rename field did not open")
+            if not desktopinserttext("renamed") or DESKTOPCREATETEXT != "renamed.txt":
+                raise RuntimeError("desktop inline rename did not replace the file stem")
+            if not desktopcommitcreate(None):
+                raise RuntimeError("desktop inline rename did not commit")
+            renamedpath = os.path.join(desktopdiagnosticroot, "renamed.txt")
+            if (
+                os.path.exists(renamesource) or
+                not os.path.isfile(renamedpath) or
+                DESKTOPSELECTED != renamedpath
+            ):
+                raise RuntimeError("desktop inline rename did not refresh the row")
+
             rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "open")
             rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "properties")
             rundesktopcontextaction(
@@ -14468,6 +15167,9 @@ def graphicsdiagnostic():
             )
         finally:
             globals()["launchsoftware"] = originallaunchsoftware
+            globals()["createdesktopitem"] = originalcreatedesktopitem
+            globals()["renamedesktopitem"] = originalrenamedesktopitem
+            desktopcancelcreate(None)
 
         if (
             len(desktopactionevents) != 3
@@ -14485,6 +15187,16 @@ def graphicsdiagnostic():
             "settings": True,
         }
         result["checks"]["desktop_array_dispatch"] = True
+        result["checks"]["desktop_inline_creation"] = {
+            "file": "new note.txt",
+            "tier": "new tier",
+            "array_opened": False,
+        }
+        result["checks"]["desktop_inline_rename"] = {
+            "source": "rename source.txt",
+            "destination": "renamed.txt",
+            "array_opened": False,
+        }
 
         capabilities = {
             "version": 2,
@@ -14618,6 +15330,11 @@ def graphicsdiagnostic():
         }
         globals()["HOVERRECT"] = [100, 100, tooltipwidth, tooltipheight]
 
+        desktopstartcreate(None, "file")
+        globals()["DESKTOPCREATETEXT"] = "draft.txt"
+        globals()["DESKTOPCREATECARETPOS"] = len(DESKTOPCREATETEXT)
+        globals()["DESKTOPSELECTED"] = testfile
+
         scenes = {}
         maximumcommands = 0
         totalcommands = 0
@@ -14668,6 +15385,24 @@ def graphicsdiagnostic():
             raise RuntimeError(f"desktop scene did not render tiers, carets, and files {sorted(desktoptexts)}")
         if int(desktoptexts["child.txt"].get("x", 0)) <= int(desktoptexts["alpha tier"].get("x", 0)):
             raise RuntimeError("expanded desktop child was not indented under its tier")
+        if "draft.txt" not in desktoptexts:
+            raise RuntimeError("desktop scene did not render the inline naming field")
+        result["checks"]["desktop_inline_creation_gpu_scene"] = True
+        desktopcancelcreate(None)
+
+        if not desktopstartrename(None, renamedpath):
+            raise RuntimeError("desktop rename field could not enter its managed scene")
+        globals()["DESKTOPSELECTED"] = testfile
+        renamescene = graphicsbuildscene("desktop")
+        if not any(
+            command.get("kind") == "text"
+            and command.get("text") == "renamed"
+            and command.get("color") == graphicscolour(0x000000)
+            for command in renamescene
+        ):
+            raise RuntimeError("desktop managed scene did not render rename selection")
+        result["checks"]["desktop_inline_rename_gpu_scene"] = True
+        desktopcancelcreate(None)
 
         selecteddesktop = next(
             item for item in DESKTOPITEMRECTS if item.get("path") == testfile
@@ -14765,10 +15500,11 @@ def graphicsdiagnostic():
         contextgap = s(8, 4)
         contextwidth = max(
             measurettffile(str(item.get("label", "")), contextfont)
+            + (contextcheckbox + contextgap if "checked" in item else 0)
             for item in taskbarcontextitems
-        ) + (contextpad * 2) + contextcheckbox + contextgap
+        ) + (contextpad * 2)
         contextwidth = max(
-            contextpad * 2 + contextcheckbox + contextgap + 1,
+            contextpad * 2 + 1,
             min(contextwidth, int(MENUMAXW)),
         )
         globals()["TASKMENURECT"] = [300, 300, contextwidth, contextheight]
@@ -14784,7 +15520,7 @@ def graphicsdiagnostic():
             raise RuntimeError("taskbar context menu labels are not aligned")
 
         checkboxrect = [
-            contextpad,
+            contextpad + measurettffile("search", contextfont) + contextgap,
             (taskmenuitemheight() - contextcheckbox) // 2,
             contextcheckbox,
             contextcheckbox,

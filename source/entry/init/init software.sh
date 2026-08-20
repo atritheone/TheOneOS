@@ -103,6 +103,9 @@ export TERMINFO="/the one/settings/terminfo"
 export PYTHONHASHSEED=0
 export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
+# Normal VM boots keep GODDESS dialogue on the serial and persistent log
+# streams.  She can still force the local console mirror for fatal recovery.
+export T1OS_QUIET=1
 unset PYTHONHOME PYTHONPATH
 
 case " $(/bin/busybox cat /proc/cmdline) " in

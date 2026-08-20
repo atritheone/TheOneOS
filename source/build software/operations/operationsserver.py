@@ -30,6 +30,7 @@ import resource
 import datetime
 import zoneinfo
 import fcntl
+import errno
 
 sys.path.insert(0, '/the one/build')
 from GODDESS.GODDESS import (
@@ -314,6 +315,8 @@ ACTIONDOMAINS = {
     'LAUNCH_CATALOGUE': frozenset(('expanse', 'desktop', 'brick')),
     'CATALOGUE_LIST': frozenset(('brick',)),
     'SESSION_LOGOUT': frozenset(('expanse', 'brick')),
+    'DESKTOP_CREATE': frozenset(('expanse',)),
+    'DESKTOP_RENAME': frozenset(('expanse',)),
     'SESSION_LOCK_START': frozenset(('window',)),
     'SESSION_AUTH_VERIFY': frozenset(('lockscreen',)),
     'PROCEDURE_LAUNCH': frozenset(('procedures',)),
@@ -1030,7 +1033,9 @@ def cataloguearguments(kind, arguments):
                 raise ValueError('search session denied')
             return [values[0], session, values[2][:1024]]
         if values[0] == '--context-action' and len(values) == 3:
-            if values[1] not in ('copy', 'copypath', 'rename', 'delete', 'opennew', 'openwith'):
+            if values[1] not in (
+                'copy', 'copypath', 'rename', 'delete', 'opennew', 'openwith',
+            ):
                 raise ValueError('context action denied')
             return [values[0], values[1], userpath(values[2])]
         if len(values) == 1:
@@ -1062,6 +1067,248 @@ def sessionidentityfor(peerpid):
             return str(currentrecord.get('identity', ''))
         current = int(currentrecord.get('parent', 0))
     return ''
+
+
+def desktopitemname(value):
+
+    name = str(value or '').strip()
+    if (
+        not name or name in ('.', '..') or '/' in name or
+        any(character in name for character in ('\x00', '\n', '\r')) or
+        len(name.encode('utf-8')) > 255
+    ):
+        raise ValueError('invalid name')
+    return name
+
+
+def createdesktopentry(root, kind, name, owner):
+
+    kind = str(kind or '').strip().lower()
+    if kind not in ('file', 'tier'):
+        raise ValueError('invalid item type')
+    name = desktopitemname(name)
+    root = os.path.abspath(str(root or ''))
+    if not root.startswith('/'):
+        raise ValueError('invalid desktop tier')
+
+    rootfd = None
+    createdfd = None
+    created = False
+    try:
+        rootstate = os.stat(root, follow_symlinks=False)
+        if not statmodule.S_ISDIR(rootstate.st_mode):
+            raise PermissionError('desktop tier is unavailable')
+        owneruid, ownergid = int(owner[0]), int(owner[1])
+        if rootstate.st_uid != owneruid or rootstate.st_gid != ownergid:
+            raise PermissionError('desktop tier ownership is unsafe')
+
+        directoryflags = (
+            os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+            getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+        )
+        rootfd = os.open(root, directoryflags)
+        openedstate = os.fstat(rootfd)
+        if (
+            openedstate.st_dev != rootstate.st_dev or
+            openedstate.st_ino != rootstate.st_ino or
+            not statmodule.S_ISDIR(openedstate.st_mode)
+        ):
+            raise PermissionError('desktop tier changed during creation')
+
+        if kind == 'file':
+            fileflags = (
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+            )
+            createdfd = os.open(name, fileflags, 0o600, dir_fd=rootfd)
+            created = True
+            os.fchown(createdfd, owneruid, ownergid)
+            os.fchmod(createdfd, 0o600)
+            os.fsync(createdfd)
+        else:
+            os.mkdir(name, 0o700, dir_fd=rootfd)
+            created = True
+            createdfd = os.open(name, directoryflags, dir_fd=rootfd)
+            os.fchown(createdfd, owneruid, ownergid)
+            os.fchmod(createdfd, 0o700)
+            os.fsync(createdfd)
+
+        os.fsync(rootfd)
+        return os.path.join(root, name)
+    except FileExistsError:
+        raise FileExistsError('name already exists')
+    except Exception:
+        if created and rootfd is not None:
+            try:
+                if kind == 'tier':
+                    os.rmdir(name, dir_fd=rootfd)
+                else:
+                    os.unlink(name, dir_fd=rootfd)
+            except OSError:
+                pass
+        raise
+    finally:
+        if createdfd is not None:
+            os.close(createdfd)
+        if rootfd is not None:
+            os.close(rootfd)
+
+
+def handledesktopcreate(request):
+
+    permittedfields = {
+        'action', 'op', 'kind', 'name', '_peer_checked', '_peer',
+        '_peer_pid', '_peer_uid', '_peer_gid',
+    }
+    if set(request) - permittedfields:
+        return {'status': 'error', 'message': 'unexpected desktop field'}
+    peer = request.get('_peer', {})
+    try:
+        if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
+            raise PermissionError('desktop session ownership unavailable')
+        username, _credentialhash = authbroker.read_credentials(MASTERFILE)
+        username = authbroker.canonicalize_username(username)
+        root = os.path.join('/master', username, 'expanse')
+        path = createdesktopentry(
+            root, request.get('kind'), request.get('name'),
+            (DESKTOPUID, DESKTOPGID),
+        )
+        return {
+            'status': 'ok',
+            'kind': str(request.get('kind')).strip().lower(),
+            'path': path,
+        }
+    except (FileExistsError, OSError, TypeError, ValueError, PermissionError) as error:
+        return {'status': 'error', 'message': str(error).lower() or 'creation failed'}
+    except Exception as error:
+        print(f'> operations server desktop create error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'creation failed'}
+
+
+def desktoprelativeparts(value):
+
+    relative = str(value or '')
+    if (
+        not relative or relative.startswith('/') or
+        len(relative.encode('utf-8')) > 4096 or
+        any(character in relative for character in ('\x00', '\n', '\r'))
+    ):
+        raise ValueError('invalid desktop item')
+    parts = relative.split('/')
+    if any(not part or part in ('.', '..') for part in parts):
+        raise ValueError('invalid desktop item')
+    if any(len(part.encode('utf-8')) > 255 for part in parts):
+        raise ValueError('invalid desktop item')
+    return parts
+
+
+def renamedesktopentry(root, relative, name, owner):
+
+    parts = desktoprelativeparts(relative)
+    name = desktopitemname(name)
+    root = os.path.abspath(str(root or ''))
+    if not root.startswith('/'):
+        raise ValueError('invalid desktop tier')
+
+    owneruid, ownergid = int(owner[0]), int(owner[1])
+    directoryflags = (
+        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+        getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_CLOEXEC', 0)
+    )
+    descriptors = []
+    try:
+        rootstate = os.stat(root, follow_symlinks=False)
+        if (
+            not statmodule.S_ISDIR(rootstate.st_mode) or
+            rootstate.st_uid != owneruid or rootstate.st_gid != ownergid
+        ):
+            raise PermissionError('desktop tier ownership is unsafe')
+        rootfd = os.open(root, directoryflags)
+        descriptors.append(rootfd)
+        openedstate = os.fstat(rootfd)
+        if (
+            openedstate.st_dev != rootstate.st_dev or
+            openedstate.st_ino != rootstate.st_ino
+        ):
+            raise PermissionError('desktop tier changed during rename')
+
+        parentfd = rootfd
+        for component in parts[:-1]:
+            parentfd = os.open(component, directoryflags, dir_fd=parentfd)
+            descriptors.append(parentfd)
+            parentstate = os.fstat(parentfd)
+            if (
+                not statmodule.S_ISDIR(parentstate.st_mode) or
+                parentstate.st_uid != owneruid or parentstate.st_gid != ownergid
+            ):
+                raise PermissionError('desktop item ownership is unsafe')
+
+        source = parts[-1]
+        sourcestate = os.stat(source, dir_fd=parentfd, follow_symlinks=False)
+        if (
+            statmodule.S_ISLNK(sourcestate.st_mode) or
+            not (
+                statmodule.S_ISREG(sourcestate.st_mode) or
+                statmodule.S_ISDIR(sourcestate.st_mode)
+            ) or
+            sourcestate.st_uid != owneruid or sourcestate.st_gid != ownergid
+        ):
+            raise PermissionError('desktop item ownership is unsafe')
+
+        if source != name:
+            library = ctypes.CDLL(None, use_errno=True)
+            operation = getattr(library, 'renameat2', None)
+            if operation is None:
+                raise OSError(errno.ENOSYS, 'safe rename is unavailable')
+            operation.argtypes = (
+                ctypes.c_int, ctypes.c_char_p,
+                ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+            )
+            operation.restype = ctypes.c_int
+            if operation(
+                parentfd, os.fsencode(source),
+                parentfd, os.fsencode(name), 1,
+            ) != 0:
+                number = ctypes.get_errno()
+                if number in (errno.EEXIST, errno.ENOTEMPTY):
+                    raise FileExistsError('name already exists')
+                raise OSError(number, os.strerror(number))
+            os.fsync(parentfd)
+
+        renamedparts = [*parts[:-1], name]
+        return os.path.join(root, *renamedparts)
+    except FileNotFoundError:
+        raise FileNotFoundError('desktop item no longer exists')
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def handledesktoprename(request):
+
+    permittedfields = {
+        'action', 'op', 'relative', 'name', '_peer_checked', '_peer',
+        '_peer_pid', '_peer_uid', '_peer_gid',
+    }
+    if set(request) - permittedfields:
+        return {'status': 'error', 'message': 'unexpected desktop field'}
+    peer = request.get('_peer', {})
+    try:
+        if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
+            raise PermissionError('desktop session ownership unavailable')
+        username, _credentialhash = authbroker.read_credentials(MASTERFILE)
+        username = authbroker.canonicalize_username(username)
+        root = os.path.join('/master', username, 'expanse')
+        path = renamedesktopentry(
+            root, request.get('relative'), request.get('name'),
+            (DESKTOPUID, DESKTOPGID),
+        )
+        return {'status': 'ok', 'path': path}
+    except (FileExistsError, FileNotFoundError, OSError, TypeError, ValueError, PermissionError) as error:
+        return {'status': 'error', 'message': str(error).lower() or 'rename failed'}
+    except Exception as error:
+        print(f'> operations server desktop rename error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'rename failed'}
 
 
 def spawnsandboxed(path, arguments, profile, environment, *, name, state='starting'):
@@ -4346,6 +4593,12 @@ def handlerequest(request):
     if op == 'SESSION_LOGOUT':
         return handlesessionlogout(request)
 
+    if op == 'DESKTOP_CREATE':
+        return handledesktopcreate(request)
+
+    if op == 'DESKTOP_RENAME':
+        return handledesktoprename(request)
+
     if op == 'SESSION_LOCK_START':
         return handlesessionlockstart(request)
 
@@ -4777,6 +5030,40 @@ def diagnostic():
         else:
             raise RuntimeError('non-Python /software launch was accepted')
         result['checks']['software_python_through_brick'] = True
+
+        desktopcreateroot = os.path.join(root, 'desktop-create')
+        os.makedirs(desktopcreateroot, exist_ok=False)
+        diagnosticowner = (os.getuid(), os.getgid())
+        createdfile = createdesktopentry(
+            desktopcreateroot, 'file', 'notes.txt', diagnosticowner)
+        createdtier = createdesktopentry(
+            desktopcreateroot, 'tier', 'work', diagnosticowner)
+        try:
+            createdesktopentry(
+                desktopcreateroot, 'file', 'notes.txt', diagnosticowner)
+        except FileExistsError:
+            duplicateblocked = True
+        else:
+            duplicateblocked = False
+        renamedfile = renamedesktopentry(
+            desktopcreateroot, 'notes.txt', 'journal.txt', diagnosticowner)
+        try:
+            renamedesktopentry(
+                desktopcreateroot, 'journal.txt', 'work', diagnosticowner)
+        except FileExistsError:
+            overwriteblocked = True
+        else:
+            overwriteblocked = False
+        if (
+            os.path.exists(createdfile) or
+            not os.path.isfile(renamedfile) or
+            not os.path.isdir(createdtier) or
+            not duplicateblocked or
+            not overwriteblocked
+        ):
+            raise RuntimeError('scoped desktop creation or rename failed')
+        result['checks']['scoped_desktop_creation'] = True
+        result['checks']['scoped_desktop_rename'] = True
 
         with GRAPHICSLOCK:
             GRAPHICSPREVIOUS = {'sampled': 0.0, 'render_total_ms': 0.0, 'frames': 0, 'windows': {}}

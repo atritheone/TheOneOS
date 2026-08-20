@@ -112,6 +112,24 @@ def requestsessionlogout(timeout=10.0):
     return requestoperations({'action': 'SESSION_LOGOUT'}, timeout=timeout)
 
 
+def createdesktopitem(kind, name, timeout=3.0):
+
+    return requestoperations({
+        'action': 'DESKTOP_CREATE',
+        'kind': str(kind),
+        'name': str(name),
+    }, timeout=timeout)
+
+
+def renamedesktopitem(relative, name, timeout=3.0):
+
+    return requestoperations({
+        'action': 'DESKTOP_RENAME',
+        'relative': str(relative),
+        'name': str(name),
+    }, timeout=timeout)
+
+
 def listcatalogueapplications(timeout=3.0):
 
     return requestoperations({'action': 'CATALOGUE_LIST'}, timeout=timeout)
