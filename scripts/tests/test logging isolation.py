@@ -17,6 +17,7 @@ if __name__ == "__main__":
 
 import ast
 import os
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -29,7 +30,7 @@ import types
 ROOT = Path(__file__).resolve().parents[2]
 GODDESS = ROOT / "source" / "build software" / "GODDESS" / "GODDESS.py"
 REIGN = ROOT / "source" / "build software" / "reign" / "reign.py"
-HARDWARE_INIT = ROOT / "resource" / "entry" / "init" / "init hardware.sh"
+HARDWARE_INIT = ROOT / "source" / "entry" / "init" / "init hardware.sh"
 
 
 def loadlogging(systemroot):
@@ -38,6 +39,7 @@ def loadlogging(systemroot):
     tree = ast.parse(source)
     names = {
         "softwarelogpath",
+        "_normaliselogdescriptor",
         "_LazyLogPopen",
         "_securedlaunchoptions",
         "_validateprofilecommand",
@@ -53,6 +55,7 @@ def loadlogging(systemroot):
         "SYSTEMROOT": str(systemroot),
         "os": os,
         "subprocess": subprocess,
+        "statmodule": stat,
         "threading": threading,
         "time": time,
     }
@@ -103,6 +106,9 @@ def checkruntime():
         assert secondline in secondtext
         assert firstline not in secondtext
         assert firsterror not in secondtext
+        if os.name != "nt":
+            assert stat.S_IMODE(firstlog.stat().st_mode) == 0o640
+            assert stat.S_IMODE(secondlog.stat().st_mode) == 0o640
 
         silentlog = systemroot / "logs" / "silent.py.log"
         silent = logging.popenisolated(
@@ -152,7 +158,8 @@ def checklaunchers():
     graphicslog = graphics.split("def log(msg, flush=False):", 1)[1].split(
         "def normalisecolor", 1
     )[0]
-    assert "sys.stderr" not in graphicslog
+    assert "openreadablelog(LOGFILE" in graphicslog
+    assert "file=sys.stderr" in graphicslog
 
     goddess = (
         ROOT / "source" / "build software" / "GODDESS" / "GODDESS.py"
@@ -205,6 +212,9 @@ def checklaunchers():
         assert loggingname in goddess, f"GODDESS does not own {loggingname}"
 
     hardwareinit = HARDWARE_INIT.read_text(encoding="utf-8")
+    assert "ensure_log_user_readability()" in hardwareinit
+    assert '-exec "$busybox" chown 0:1000 {} +' in hardwareinit
+    assert '-exec "$busybox" chmod 0640 {} +' in hardwareinit
     archive = hardwareinit.split("archive_previous_boot_logs() {", 1)[1].split(
         "persist_ntfs_health_report() {", 1
     )[0]

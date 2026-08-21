@@ -74,7 +74,7 @@ INTERACTIVESTREAMMINBUFFERSECONDS = 0.04
 
 # t1os modules
 from reign.reign import timestamp
-from GODDESS.GODDESS import formatlog
+from GODDESS.GODDESS import formatlog, openreadablelog
 from exchange.exchange import exset, exget
 
 
@@ -186,7 +186,7 @@ def log(line):
 
     try:
 
-        with open(AUDIOLOG, 'a', buffering=1) as f:
+        with openreadablelog(AUDIOLOG, 'a', buffering=1) as f:
 
             f.write(msg + '\n')
 

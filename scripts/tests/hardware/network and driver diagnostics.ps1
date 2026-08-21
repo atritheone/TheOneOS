@@ -152,6 +152,7 @@ sys.modules["reign.reign"] = reign_module
 goddess_package = types.ModuleType("GODDESS")
 goddess_module = types.ModuleType("GODDESS.GODDESS")
 goddess_module.formatlog = reign_module.formatlog
+goddess_module.openreadablelog = open
 goddess_module.popenisolated = lambda *args, **kwargs: None
 sys.modules["GODDESS"] = goddess_package
 sys.modules["GODDESS.GODDESS"] = goddess_module

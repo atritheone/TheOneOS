@@ -30,7 +30,6 @@ from collections import OrderedDict
 
 sys.path.insert(0, '/the one/build')
 
-from architect.architect import check
 from GODDESS.GODDESS import formatlog
 from exchange.exchange import exset, exget
 from graphics.graphics import initbuffer, fillbufferfile, initttffont, drawtextttf, measuretext, clear, presentdirty, drawrect, setpixel, fillrect, fillrectfast, getdirty, resetdirty, measurelineadvances
@@ -45,6 +44,8 @@ import graphics.graphics as gfx
 WRITEPATH = '/the one/build/write/write.py'
 WRITELOGBASE = "/the one/logs"
 WRITESETTINGSVERSION = 2
+WRITESETTINGSDIRECTORY = '/the one/settings/write'
+WRITESETTINGSFILE = '/the one/settings/write/settings.json'
 DEFAULTDIR = None
 SESSIONIDENTITYFILE = "/the one/settings/session/identity.json"
 SESSIONIDENTITYMAXBYTES = 1024
@@ -362,28 +363,13 @@ def loadsettings():
     global WORD_WRAP, TAB_WIDTH, INDENT_USE_TABS, FONT_SIZE_BASE
     global RECENT_FILES, FIND_MATCH_CASE
 
+    migrated = False
     try:
-        path = writesettingspath()
-        descriptor = os.open(
-            path,
-            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-        )
         try:
-            metadata = os.fstat(descriptor)
-            if (
-                not stat.S_ISREG(metadata.st_mode) or
-                metadata.st_uid != 1000 or
-                metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
-                metadata.st_nlink != 1 or
-                metadata.st_size > 65536
-            ):
-                raise PermissionError('unsafe Write settings file')
-            raw = os.read(descriptor, 65537)
-            if len(raw) > 65536:
-                raise ValueError('Write settings file is too large')
-            data = json.loads(raw.decode('utf-8', errors='strict'))
-        finally:
-            os.close(descriptor)
+            data = readsettingsfile(writesettingspath())
+        except FileNotFoundError:
+            data = readsettingsfile(legacywritesettingspath())
+            migrated = True
 
     except FileNotFoundError:
 
@@ -426,6 +412,9 @@ def loadsettings():
 
         gfx.TEXTTABWIDTH = int(TAB_WIDTH)
 
+        if migrated:
+            savesettings()
+
     except Exception as e:
 
         logmsg(f'> error applying write settings {e}')
@@ -445,13 +434,7 @@ def savesettings():
 
     try:
         payload = json.dumps(data, indent=2, sort_keys=True) + '\n'
-        writeuserfilesnapshot(
-            writesettingspath(),
-            (payload,),
-            'utf-8',
-            False,
-            '\n',
-        )
+        writeapplicationsettingssnapshot(payload.encode('utf-8'))
 
     except Exception as e:
 
@@ -8403,9 +8386,39 @@ def getusername():
 
 def writesettingspath():
 
-    # Preferences are user data, not a global system-setting mutation.  The
-    # provisioner creates the private expanse directory in every user home.
+    return WRITESETTINGSFILE
+
+
+def legacywritesettingspath():
+
+    """Return the pre-centralisation location for one-way migration."""
+
     return f'/master/{getusername()}/expanse/write settings.json'
+
+
+def readsettingsfile(path):
+
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode) or
+            metadata.st_uid != 1000 or
+            metadata.st_gid != 1000 or
+            metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
+            metadata.st_nlink != 1 or
+            metadata.st_size > 65536
+        ):
+            raise PermissionError('unsafe Write settings file')
+        raw = os.read(descriptor, 65537)
+        if len(raw) > 65536:
+            raise ValueError('Write settings file is too large')
+        return json.loads(raw.decode('utf-8', errors='strict'))
+    finally:
+        os.close(descriptor)
 
 
 def parseargs():
@@ -8549,18 +8562,15 @@ def readfilepayload(path):
     path = userreadpath(path)
     descriptor = os.open(
         path,
-        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK,
     )
     try:
         metadata = os.fstat(descriptor)
         if (
             not stat.S_ISREG(metadata.st_mode) or
-            metadata.st_uid not in (0, os.geteuid()) or
-            metadata.st_mode & (stat.S_IWGRP | stat.S_IWOTH) or
-            metadata.st_nlink != 1 or
             metadata.st_size > MAXDOCUMENTBYTES
         ):
-            raise PermissionError('unsafe document input')
+            raise PermissionError('document input is not a bounded regular file')
         sample = os.read(descriptor, 65536)
         os.lseek(descriptor, 0, os.SEEK_SET)
         encoding, bom, readencoding = detectfileformatsample(sample)
@@ -8716,7 +8726,7 @@ def usersavepath(raw):
 
 def userreadpath(raw):
 
-    """Return a bounded document path from a user-visible file namespace."""
+    """Return an absolute path; kernel policy and DAC decide readability."""
 
     try:
         value = os.fspath(raw)
@@ -8729,31 +8739,7 @@ def userreadpath(raw):
     if not os.path.isabs(value):
         raise PermissionError('document path must be absolute')
 
-    path = os.path.normpath(value)
-    roots = (
-        os.path.normpath(f'/master/{getusername()}'),
-        '/.ephemeral/volumes',
-        '/software',
-        '/the one/logs',
-    )
-    contained = False
-
-    for root in roots:
-
-        try:
-
-            if path != root and os.path.commonpath((root, path)) == root:
-                contained = True
-                break
-
-        except ValueError:
-
-            continue
-
-    if not contained:
-        raise PermissionError('document path is outside user-visible storage')
-
-    return path
+    return os.path.normpath(value)
 
 
 def validateduserdirectory(fd):
@@ -8869,6 +8855,71 @@ def writeuserfilesnapshot(path, lines, encoding, bom, newline):
             except OSError:
                 pass
 
+        os.close(parentfd)
+
+
+def writeapplicationsettingssnapshot(payload):
+
+    """Atomically replace Write's private central settings file."""
+
+    if os.geteuid() != 1000:
+        raise PermissionError('Write is not running as the desktop user')
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
+    parentfd = os.open(WRITESETTINGSDIRECTORY, flags)
+    temporary = f'.settings-{os.getpid()}-{secrets.token_hex(16)}.tmp'
+    temporarycreated = False
+    name = os.path.basename(WRITESETTINGSFILE)
+
+    try:
+        parentstate = os.fstat(parentfd)
+        if (
+            not stat.S_ISDIR(parentstate.st_mode) or
+            parentstate.st_uid != 1000 or parentstate.st_gid != 1000 or
+            parentstate.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+        ):
+            raise PermissionError('unsafe Write settings directory')
+        validateusersavetarget(parentfd, name)
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parentfd,
+        )
+        temporarycreated = True
+        try:
+            metadata = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != 1000 or metadata.st_gid != 1000 or
+                metadata.st_nlink != 1
+            ):
+                raise PermissionError('unsafe temporary Write settings file')
+            offset = 0
+            while offset < len(payload):
+                written = os.write(descriptor, payload[offset:])
+                if written <= 0:
+                    raise OSError('short Write settings write')
+                offset += written
+            os.fchmod(descriptor, 0o600)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+        validateusersavetarget(parentfd, name)
+        os.replace(
+            temporary,
+            name,
+            src_dir_fd=parentfd,
+            dst_dir_fd=parentfd,
+        )
+        temporarycreated = False
+        os.fsync(parentfd)
+    finally:
+        if temporarycreated:
+            try:
+                os.unlink(temporary, dir_fd=parentfd)
+            except OSError:
+                pass
         os.close(parentfd)
 
 
@@ -9568,18 +9619,6 @@ def handlepickerresult(msg):
         return True
 
     path = os.path.abspath(str(paths[0]))
-
-    if kind == 'open':
-        try:
-            if not check(path):
-                setstatus('permission denied')
-                redrawstatusbar()
-                return True
-        except Exception as error:
-            logmsg(f'> architect check error on picker result {error}')
-            setstatus('permission check unavailable')
-            redrawstatusbar()
-            return True
 
     if kind == 'open':
         if not os.path.isfile(path):

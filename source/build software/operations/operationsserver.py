@@ -72,6 +72,11 @@ DESKTOPUID = 1000
 DESKTOPGID = 1000
 MAXIMUMREQUEST = 65536
 VALIDRECOVERYACTIONS = frozenset(('python', 'build', 'reset', 'reinstall'))
+ARRAYCONTEXTACTIONS = frozenset((
+    'compress', 'copy', 'copypath', 'createlink', 'cut', 'delete', 'destroy',
+    'extract', 'filelocation', 'newfile', 'newtier', 'opennew', 'openwith',
+    'paste', 'properties', 'rename', 'restore', 'run', 'sidebarpin',
+))
 VMTESTMAXOUTPUT = 4 * 1024 * 1024
 VMTESTMAXDIRECTIVE = 32 * 1024
 VMTESTMEDIA = '/software/without_a_blush.mp4'
@@ -100,6 +105,9 @@ MASTERSETTINGSFILEMODE = 0o644
 MASTERIMAGEIMPORTROOT = '/the one/settings/master/images'
 MASTERIMAGEEXTERNALROOT = '/.ephemeral/volumes'
 MASTERIMAGEIMPORTMAXBYTES = 64 * 1024 * 1024
+DESKTOPACTIONWORKER = '/the one/build/expanse/expanse.py'
+DESKTOPACTIONTIMEOUT = 300.0
+DESKTOPACTIONMAXIMUMOUTPUT = 64 * 1024
 RTCSETTIME = 0x4024700A
 RTCREADTIME = 0x80247009
 TIMEZONEFILE = '/the one/settings/time/timezone.txt'
@@ -321,6 +329,7 @@ ACTIONDOMAINS = {
     'SESSION_LOGOUT': frozenset(('expanse', 'brick')),
     'DESKTOP_CREATE': frozenset(('expanse',)),
     'DESKTOP_RENAME': frozenset(('expanse',)),
+    'DESKTOP_ACTION': frozenset(('expanse',)),
     'SESSION_LOCK_START': frozenset(('window',)),
     'SESSION_AUTH_VERIFY': frozenset(('lockscreen',)),
     'PROCEDURE_LAUNCH': frozenset(('procedures',)),
@@ -1037,9 +1046,7 @@ def cataloguearguments(kind, arguments):
                 raise ValueError('search session denied')
             return [values[0], session, values[2][:1024]]
         if values[0] == '--context-action' and len(values) == 3:
-            if values[1] not in (
-                'copy', 'copypath', 'rename', 'delete', 'opennew', 'openwith',
-            ):
+            if values[1] not in ARRAYCONTEXTACTIONS:
                 raise ValueError('context action denied')
             return [values[0], values[1], userpath(values[2])]
         if len(values) == 1:
@@ -1313,6 +1320,182 @@ def handledesktoprename(request):
     except Exception as error:
         print(f'> operations server desktop rename error {error}', file=sys.stderr)
         return {'status': 'error', 'message': 'rename failed'}
+
+
+def desktopactiontarget(root, value, *, rootallowed=False):
+
+    root = os.path.abspath(str(root))
+    target = userpath(value)
+    try:
+        contained = os.path.commonpath((root, target)) == root
+    except ValueError:
+        contained = False
+    if not contained or (not rootallowed and target == root):
+        raise PermissionError('desktop action escaped its tier')
+    return target
+
+
+def handledesktopaction(request):
+
+    permittedfields = {
+        'action', 'op', 'operation', 'target', 'sources', 'mode', 'kind',
+        'name', '_peer_checked', '_peer', '_peer_pid', '_peer_uid',
+        '_peer_gid',
+    }
+    if set(request) - permittedfields:
+        return {'status': 'error', 'message': 'unexpected desktop action field'}
+    peer = request.get('_peer', {})
+    try:
+        if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
+            raise PermissionError('desktop session ownership unavailable')
+        username, _credentialhash = authbroker.read_credentials(MASTERFILE)
+        username = authbroker.canonicalize_username(username)
+        root = os.path.join('/master', username, 'expanse')
+        rootstate = os.stat(root, follow_symlinks=False)
+        if (
+            not statmodule.S_ISDIR(rootstate.st_mode) or
+            rootstate.st_uid != DESKTOPUID or rootstate.st_gid != DESKTOPGID
+        ):
+            raise PermissionError('desktop tier ownership is unsafe')
+
+        operation = str(request.get('operation', '')).strip().lower()
+        if operation not in {
+            'create', 'paste', 'delete', 'destroy', 'link', 'compress',
+            'extract', 'execute',
+        }:
+            raise ValueError('unknown desktop action')
+        target = desktopactiontarget(
+            root, request.get('target'),
+            rootallowed=operation in ('create', 'paste'),
+        )
+        workerrequest = {
+            'root': root,
+            'operation': operation,
+            'target': target,
+        }
+
+        if operation == 'execute':
+            targetstate = os.stat(target, follow_symlinks=False)
+            if (
+                not statmodule.S_ISREG(targetstate.st_mode) or
+                targetstate.st_uid != DESKTOPUID or
+                targetstate.st_gid != DESKTOPGID or
+                targetstate.st_nlink != 1 or
+                not targetstate.st_mode & 0o111 or
+                targetstate.st_mode & (statmodule.S_IWGRP | statmodule.S_IWOTH)
+            ):
+                raise PermissionError('desktop executable ownership or mode is unsafe')
+            environment = applicationenvironment({}, {'environment': {}})
+            environment['PYTHONDONTWRITEBYTECODE'] = '1'
+            process = popenisolated(
+                [DESKTOPACTIONWORKER, 'desktop-executable-worker', target],
+                softwarepath=DESKTOPACTIONWORKER,
+                logpath=softwarelogpath(target),
+                security_profile='desktop',
+                preexec_fn=dropsandboxidentity,
+                start_new_session=True,
+                env=environment,
+            )
+            info = {
+                'name': os.path.splitext(os.path.basename(target))[0] or 'software',
+                'script': target,
+                'log': softwarelogpath(target),
+                'user': 'desktop',
+                'mode': 'front',
+                'state': 'starting',
+                '_broker_owned': True,
+                '_owner_pid': int(peer['pid']),
+                '_owner_started': int(peer['started']),
+                '_session_identity': sessionidentityfor(peer['pid']),
+            }
+            record = processrecord(process.pid)
+            if record is None:
+                process.kill()
+                raise RuntimeError('desktop executable identity is unavailable')
+            info['_process_identity'] = str(record['identity'])
+            if not recordstart(process.pid, process, info, []):
+                process.kill()
+                raise RuntimeError('desktop executable registration failed')
+            return {
+                'status': 'ok', 'operation': operation,
+                'paths': [], 'pid': process.pid,
+            }
+
+        if operation == 'create':
+            kind = str(request.get('kind', '')).strip().lower()
+            if kind not in ('file', 'tier'):
+                raise ValueError('invalid desktop item type')
+            workerrequest['kind'] = kind
+            workerrequest['name'] = desktopitemname(request.get('name'))
+        elif operation == 'paste':
+            sources = request.get('sources')
+            if not isinstance(sources, list) or not 0 < len(sources) <= 128:
+                raise ValueError('invalid clipboard files')
+            workerrequest['sources'] = [userpath(source) for source in sources]
+            mode = str(request.get('mode', 'copy')).strip().lower()
+            if mode not in ('copy', 'cut'):
+                raise ValueError('invalid clipboard mode')
+            workerrequest['mode'] = mode
+        elif operation == 'link':
+            workerrequest['name'] = desktopitemname(request.get('name'))
+
+        encoded = json.dumps(
+            workerrequest, ensure_ascii=False, separators=(',', ':'),
+        ).encode('utf-8')
+        if len(encoded) > MAXIMUMREQUEST:
+            raise ValueError('desktop action is too large')
+        environment = applicationenvironment({}, {'environment': {}})
+        environment['PYTHONDONTWRITEBYTECODE'] = '1'
+        process = popensecured(
+            [DESKTOPACTIONWORKER, 'desktop-action-worker'],
+            softwarepath=DESKTOPACTIONWORKER,
+            security_profile='desktop',
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            preexec_fn=dropsandboxidentity,
+            start_new_session=True,
+            env=environment,
+        )
+        try:
+            output, errors = process.communicate(
+                encoded, timeout=DESKTOPACTIONTIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate()
+            raise TimeoutError('desktop action timed out')
+        if len(output) > DESKTOPACTIONMAXIMUMOUTPUT:
+            raise RuntimeError('desktop action returned too much output')
+        try:
+            response = json.loads(output.decode('utf-8', errors='strict').strip())
+        except (UnicodeError, ValueError, TypeError) as error:
+            detail = errors.decode('utf-8', errors='replace').strip()[:512]
+            raise RuntimeError(detail or 'desktop action returned an invalid response') from error
+        if not isinstance(response, dict):
+            raise RuntimeError('desktop action returned an invalid response')
+        if response.get('status') != 'ok':
+            return {
+                'status': 'error',
+                'message': str(response.get('message') or 'desktop action failed')[:512],
+            }
+        paths = response.get('paths', [])
+        if not isinstance(paths, list) or len(paths) > 128:
+            raise RuntimeError('desktop action returned invalid paths')
+        cleanpaths = [
+            desktopactiontarget(root, path)
+            for path in paths
+        ]
+        return {
+            'status': 'ok', 'operation': operation, 'paths': cleanpaths,
+        }
+    except (OSError, TypeError, ValueError, PermissionError, TimeoutError) as error:
+        return {
+            'status': 'error',
+            'message': str(error).lower() or 'desktop action failed',
+        }
+    except Exception as error:
+        print(f'> operations server desktop action error {error}', file=sys.stderr)
+        return {'status': 'error', 'message': 'desktop action failed'}
 
 
 def spawnsandboxed(path, arguments, profile, environment, *, name, state='starting'):
@@ -4795,6 +4978,9 @@ def handlerequest(request):
     if op == 'DESKTOP_RENAME':
         return handledesktoprename(request)
 
+    if op == 'DESKTOP_ACTION':
+        return handledesktopaction(request)
+
     if op == 'SESSION_LOCK_START':
         return handlesessionlockstart(request)
 
@@ -5226,6 +5412,25 @@ def diagnostic():
         else:
             raise RuntimeError('non-Python /software launch was accepted')
         result['checks']['software_python_through_brick'] = True
+
+        arraycontexttarget = '/master/diagnostic/expanse/item'
+        for arraycontextaction in ARRAYCONTEXTACTIONS:
+            expected = [
+                '--context-action', arraycontextaction, arraycontexttarget,
+            ]
+            if cataloguearguments('array', expected) != expected:
+                raise RuntimeError(
+                    f'Array context action was not preserved: '
+                    f'{arraycontextaction}')
+        try:
+            cataloguearguments('array', [
+                '--context-action', 'untrusted-action', arraycontexttarget,
+            ])
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError('unknown Array context action was accepted')
+        result['checks']['array_context_actions'] = sorted(ARRAYCONTEXTACTIONS)
 
         desktopcreateroot = os.path.join(root, 'desktop-create')
         os.makedirs(desktopcreateroot, exist_ok=False)

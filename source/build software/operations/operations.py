@@ -130,6 +130,25 @@ def renamedesktopitem(relative, name, timeout=3.0):
     }, timeout=timeout)
 
 
+def desktopfileaction(operation, target, *, sources=None, mode=None,
+                      kind=None, name=None, timeout=300.0):
+
+    request = {
+        'action': 'DESKTOP_ACTION',
+        'operation': str(operation),
+        'target': str(target),
+    }
+    if sources is not None:
+        request['sources'] = [str(path) for path in sources]
+    if mode is not None:
+        request['mode'] = str(mode)
+    if kind is not None:
+        request['kind'] = str(kind)
+    if name is not None:
+        request['name'] = str(name)
+    return requestoperations(request, timeout=timeout)
+
+
 def listcatalogueapplications(timeout=3.0):
 
     return requestoperations({'action': 'CATALOGUE_LIST'}, timeout=timeout)

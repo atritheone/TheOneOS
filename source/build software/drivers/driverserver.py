@@ -3282,6 +3282,20 @@ class DriverServer:
         return readonly
 
     @staticmethod
+    def desktopmodepermits(metadata, writable=False):
+        """Model uid/gid 1000 DAC access to a mounted directory inode."""
+
+        mode = stat.S_IMODE(metadata.st_mode)
+        required = 0o7 if writable else 0o5
+        if metadata.st_uid == 1000:
+            granted = (mode >> 6) & 0o7
+        elif metadata.st_gid == 1000:
+            granted = (mode >> 3) & 0o7
+        else:
+            granted = mode & 0o7
+        return granted & required == required
+
+    @staticmethod
     def probevolumeaccess(target, writable):
         directorydescriptor = -1
         probedescriptor = -1
@@ -3290,12 +3304,16 @@ class DriverServer:
             rootstate = os.stat(target, follow_symlinks=False)
             if (
                 not stat.S_ISDIR(rootstate.st_mode) or
-                rootstate.st_uid != 1000 or rootstate.st_gid != 1000 or
-                stat.S_IMODE(rootstate.st_mode) & 0o077
+                not DriverServer.desktopmodepermits(rootstate, writable=writable)
             ):
                 raise OSError(
                     errno.EACCES,
-                    'mounted volume does not expose the private desktop identity',
+                    (
+                        'mounted volume root is not accessible to the desktop '
+                        f'identity (uid={rootstate.st_uid} gid={rootstate.st_gid} '
+                        f'mode={stat.S_IMODE(rootstate.st_mode):04o} '
+                        f'writable={bool(writable)})'
+                    ),
                     str(target),
                 )
             directorydescriptor = os.open(

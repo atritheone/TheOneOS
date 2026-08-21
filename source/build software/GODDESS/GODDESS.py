@@ -274,6 +274,7 @@ def normalisedesktopsettings():
         'chromium',
         'expanse',
         'operations centre',
+        'write',
     ):
         path = os.path.join(settingsroot, relative)
         os.makedirs(path, mode=0o700, exist_ok=True)
@@ -419,6 +420,44 @@ def softwarelogpath(softwarepath, logpath=None):
     return os.path.join(SYSTEMROOT, 'logs', f'{name}.log')
 
 
+def _normaliselogdescriptor(descriptor):
+
+    """Keep every persistent log readable by the desktop identity."""
+
+    metadata = os.fstat(descriptor)
+    if not statmodule.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+        raise PermissionError('unsafe persistent log file')
+    if hasattr(os, 'fchown'):
+        owner = 0 if os.geteuid() == 0 else 1000
+        if owner != 0 and metadata.st_uid != owner:
+            raise PermissionError('persistent log is owned by another identity')
+        os.fchown(descriptor, owner, 1000)
+    os.fchmod(descriptor, 0o640)
+
+
+def openreadablelog(path, mode='a', **options):
+
+    if mode not in ('a', 'ab'):
+        raise ValueError('persistent logs must be opened for append')
+    flags = (
+        os.O_WRONLY | os.O_APPEND | os.O_CREAT |
+        getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    )
+    if 'b' in mode:
+        flags |= getattr(os, 'O_BINARY', 0)
+    descriptor = os.open(path, flags, 0o640)
+    try:
+        _normaliselogdescriptor(descriptor)
+        stream = os.fdopen(descriptor, mode, **options)
+        descriptor = -1
+    except BaseException:
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    return stream
+
+
 class _LazyLogPopen(subprocess.Popen):
 
     """A process whose combined output creates its log on first write."""
@@ -479,10 +518,14 @@ class _LazyLogPopen(subprocess.Popen):
                         directory = os.path.dirname(self.logpath)
                         if directory:
                             os.makedirs(directory, exist_ok=True)
-                        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                        flags = (
+                            os.O_WRONLY | os.O_APPEND | os.O_CREAT |
+                            getattr(os, 'O_CLOEXEC', 0) |
+                            getattr(os, 'O_NOFOLLOW', 0)
+                        )
                         logdescriptor = os.open(self.logpath, flags, 0o600)
                         try:
-                            os.fchmod(logdescriptor, 0o600)
+                            _normaliselogdescriptor(logdescriptor)
                             stream = os.fdopen(
                                 logdescriptor,
                                 'ab',
@@ -2751,7 +2794,7 @@ def recordfatalerror(component, reason, logpaths=(), recovery=()):
 
     try:
         os.makedirs(LOGDIR, exist_ok=True)
-        with open(FATALERRORLOG, 'a', encoding='utf-8') as stream:
+        with openreadablelog(FATALERRORLOG, 'a', encoding='utf-8') as stream:
             stream.write(json.dumps(payload, sort_keys=True, separators=(',', ':')) + '\n')
             stream.flush()
             os.fsync(stream.fileno())
@@ -3843,7 +3886,7 @@ def capturegpufailureevidence(payload):
 
     os.makedirs(LOGDIR, exist_ok=True)
 
-    with open(GRAPHICSSOFTWARELOG, 'a', encoding='utf-8') as stream:
+    with openreadablelog(GRAPHICSSOFTWARELOG, 'a', encoding='utf-8') as stream:
         stream.write('\n===== accelerated GPU failure =====\n')
         json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
         stream.write('\n')
@@ -3987,7 +4030,7 @@ def capturewindowserverhangpid(pid, phase):
 
     os.makedirs(LOGDIR, exist_ok=True)
 
-    with open(WINDOWSERVERSOFTWARELOG, 'a', encoding='utf-8') as stream:
+    with openreadablelog(WINDOWSERVERSOFTWARELOG, 'a', encoding='utf-8') as stream:
         stream.write('\n'.join(lines))
         stream.write('\n')
         stream.flush()
@@ -4108,7 +4151,7 @@ def recordgraphicsrecovery(
     try:
         os.makedirs(LOGDIR, exist_ok=True)
 
-        with open(GRAPHICSRECOVERYLOG, 'a', encoding='utf-8') as stream:
+        with openreadablelog(GRAPHICSRECOVERYLOG, 'a', encoding='utf-8') as stream:
             json.dump(payload, stream, sort_keys=True, separators=(',', ':'))
             stream.write('\n')
             stream.flush()

@@ -29,6 +29,7 @@ import subprocess
 import threading
 import queue
 import re
+import zipfile
 from pyroute2 import IPRoute
 
 sys.path.insert(0, '/the one/build')
@@ -39,10 +40,11 @@ from operations.operations import (
     OperationsRequestError,
     PowerRequestError,
     createdesktopitem,
+    desktopfileaction,
     renamedesktopitem,
     requestpower,
 )
-from exchange.exchange import exmeta
+from exchange.exchange import exclear, exget, exmeta, exset, exsetfiles
 from graphics.graphics import fillbufferfile, initbuffer, clear, present, drawrect, drawline, initttffont, drawtextttf, measuretext, getttfface
 from graphics.graphics import managedstate, managedconfigure, manageddisable, managedmarkdamage, managedclear, managedtick, managedsubmit, managedresponse, uiscalefactor, displayuiscale
 from search.search import iterfindnames as searchiterfindnames
@@ -83,6 +85,12 @@ SESSIONIDENTITYFILE = '/the one/settings/session/identity.json'
 SESSIONIDENTITYMAXBYTES = 1024
 SESSIONUSERNAME = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,31}')
 MASTERSETTINGSFILE = '/the one/settings/master/settings.json'
+ARRAYSETTINGSFILE = '/the one/settings/array/settings.json'
+ARRAYPROGRAM = '/the one/build/array/array.py'
+BRICKPROGRAM = '/the one/build/brick/brick.py'
+PLAYERPROGRAM = '/the one/build/player/player.py'
+VIEWERPROGRAM = '/the one/build/viewer/viewer.py'
+WRITEPROGRAM = '/the one/build/write/write.py'
 
 # software icons
 SOFTWAREICONS = {
@@ -424,6 +432,33 @@ DESKTOPCREATETARGET = None
 DESKTOPCREATESELECTION = None
 DESKTOPCREATEERROR = ""
 DESKTOPCREATEBUSY = False
+DESKTOPDIALOGS = {}
+DESKTOPACTIONRESULTS = queue.Queue()
+DESKTOPACTIONBUSY = False
+DESKTOPTEXTEXTENSIONS = frozenset((
+    ".txt", ".md", ".log", ".csv", ".json", ".toml", ".ini", ".cfg",
+    ".conf", ".yaml", ".yml", ".xml", ".html", ".css", ".js", ".jsx",
+    ".ts", ".tsx",
+))
+DESKTOPAUDIOEXTENSIONS = frozenset((
+    ".mp3", ".flac", ".wav", ".ogg", ".opus", ".m4a", ".aac", ".wma",
+))
+DESKTOPVIDEOEXTENSIONS = frozenset((
+    ".mp4", ".m4v", ".mkv", ".mov", ".avi", ".webm", ".wmv", ".mpeg",
+    ".mpg",
+))
+DESKTOPIMAGEEXTENSIONS = frozenset((
+    ".bmp", ".dds", ".dib", ".gif", ".icb", ".ico", ".jfif", ".jpe",
+    ".jpeg", ".jpg", ".pbm", ".pcx", ".pgm", ".png", ".pnm", ".ppm",
+    ".qoi", ".tga", ".tif", ".tiff", ".vda", ".vst", ".webp",
+))
+DESKTOPWORKERMAXIMUMREQUEST = 1024 * 1024
+DESKTOPWORKERMAXIMUMSOURCES = 128
+DESKTOPWORKERMAXIMUMARCHIVEENTRIES = 100000
+DESKTOPWORKERMAXIMUMARCHIVEBYTES = 8 * 1024 * 1024 * 1024
+DESKTOPLINKHEADER = b"T1OS link\n"
+DESKTOPLINKVERSION = 1
+DESKTOPLINKMAXIMUM = 16384
 
 # network
 NETICONX = 0
@@ -5254,7 +5289,7 @@ def launchsoftware(soft):
 
         if not path:
             log("launchsoftware missing path")
-            return
+            return False
 
         name = soft.get("name", "")
 
@@ -5317,19 +5352,19 @@ def launchsoftware(soft):
 
             log(f"launchsoftware permission denied for {path}")
 
-            return
+            return False
 
         except FileNotFoundError:
 
             log(f"launchsoftware file not found {path}")
 
-            return
+            return False
 
         except Exception as e:
 
             log(f"launchsoftware spawn error {e}")
 
-            return
+            return False
 
         try:
 
@@ -5360,9 +5395,12 @@ def launchsoftware(soft):
 
             log(f"launchsoftware register error {e}")
 
+        return True
+
     except Exception as e:
 
         log(f"launchsoftware error {e}")
+        return False
 
 
 def openstartmenu(sock):
@@ -7835,6 +7873,37 @@ def searchresultpath(result):
     return None
 
 
+def desktoparraylinktarget(path):
+
+    try:
+        state = os.lstat(path)
+        if not stat.S_ISREG(state.st_mode) or not 0 < state.st_size <= DESKTOPLINKMAXIMUM:
+            return None
+        with open(path, "rb") as stream:
+            raw = stream.read(DESKTOPLINKMAXIMUM + 1)
+        if len(raw) > DESKTOPLINKMAXIMUM or not raw.startswith(DESKTOPLINKHEADER):
+            return None
+        payload = json.loads(raw[len(DESKTOPLINKHEADER):].decode("utf-8"))
+        target = payload.get("target") if isinstance(payload, dict) else None
+        if (
+            payload.get("version") != DESKTOPLINKVERSION or
+            not isinstance(target, str) or not target or "\x00" in target
+        ):
+            return None
+        if not os.path.isabs(target):
+            target = os.path.join(os.path.dirname(path), target)
+        return os.path.abspath(os.path.normpath(target))
+    except Exception:
+        return None
+
+
+ARRAYCONTEXTACTIONS = frozenset((
+    "compress", "copy", "copypath", "createlink", "cut", "delete", "destroy",
+    "extract", "filelocation", "newfile", "newtier", "opennew", "openwith",
+    "paste", "properties", "rename", "restore", "run", "sidebarpin",
+))
+
+
 def searchcontextmenuitems(result):
 
     path = searchresultpath(result)
@@ -7858,7 +7927,12 @@ def searchcontextmenuitems(result):
             isrunable = extension == ".py" or bool(os.stat(path).st_mode & 0o111)
         except Exception:
             isrunable = extension == ".py"
-        isopenable = isrunable or extension in text or extension in audio
+        isopenable = (
+            isrunable or extension in text or extension in audio or
+            extension in DESKTOPVIDEOEXTENSIONS or
+            extension in DESKTOPIMAGEEXTENSIONS or
+            desktoparraylinktarget(path) is not None
+        )
 
     items = []
     if isopenable:
@@ -8780,32 +8854,458 @@ def launcharrayopen(path):
     target = desktopsecurepath(path)
     if target is None:
         return False
-    launchsoftware({
+    return bool(launchsoftware({
         "label": "array",
         "name": "array",
-        "path": "/the one/build/array/array.py",
+        "path": ARRAYPROGRAM,
         "args": ["--open-item", target],
-    })
+    }))
+
+
+def desktopdialog(sock, title, message, context, *, inputvalue=None,
+                  accept="ok", acceptlabel="ok", cancellabel="cancel"):
+
+    if sock is None or DESKTOPID is None or DESKTOPDIALOGS:
+        return False
+    identifier = f"expanse-desktop-{os.getpid()}-{int(time.monotonic() * 1000)}"
+    request = {
+        "op": "CREATE_DIALOG",
+        "parent": DESKTOPID,
+        "dialog_id": identifier,
+        "title": str(title),
+        "message": str(message),
+        "buttons": [
+            {"id": str(accept), "label": str(acceptlabel)},
+            {"id": "cancel", "label": str(cancellabel), "cancel": True},
+        ],
+        "default": 0,
+    }
+    if inputvalue is not None:
+        request["input"] = {
+            "value": str(inputvalue),
+            "select_all": True,
+            "max_length": 4096,
+            "allow_empty": False,
+        }
+    DESKTOPDIALOGS[identifier] = dict(context or {})
+    sendline(sock, request)
     return True
 
 
-def launcharraycontext(action, path):
+def desktopmessage(sock, title, message):
 
-    target = desktopsecurepath(path)
+    return desktopdialog(
+        sock, title, message, {"kind": "message"},
+        accept="close", acceptlabel="close", cancellabel="close",
+    )
+
+
+def desktopconfirm(sock, action, target):
+
+    name = os.path.basename(str(target).rstrip("/")) or str(target)
+    permanent = action == "destroy"
+    message = (
+        f"permanently destroy {name}? this cannot be undone."
+        if permanent else f"move {name} to rubbish?"
+    )
+    return desktopdialog(
+        sock, "destroy" if permanent else "delete", message,
+        {"kind": "confirm", "action": action, "target": target},
+        accept="yes", acceptlabel="yes", cancellabel="no",
+    )
+
+
+def desktoptextdialog(sock, action, target, title, message, initial):
+
+    return desktopdialog(
+        sock, title, message,
+        {"kind": "text", "action": action, "target": target},
+        inputvalue=initial, accept="save", acceptlabel="save",
+    )
+
+
+def desktopactionthread(operation, target, options):
+
+    try:
+        response = desktopfileaction(operation, target, **options)
+    except Exception as error:
+        response = {
+            "status": "error",
+            "message": str(error).strip().lower() or "desktop action failed",
+        }
+    DESKTOPACTIONRESULTS.put({
+        "operation": operation,
+        "target": target,
+        "options": dict(options),
+        "response": response,
+    })
+
+
+def desktopstartfileaction(sock, operation, target, **options):
+
+    if DESKTOPACTIONBUSY:
+        desktopmessage(sock, "desktop", "another desktop file action is still running")
+        return False
+    target = desktopsecurepath(target)
     if target is None:
         return False
-    launchsoftware({
-        "label": "array",
-        "name": "array",
-        "path": "/the one/build/array/array.py",
-        "args": ["--context-action", str(action), target],
-    })
+    globals()["DESKTOPACTIONBUSY"] = True
+    thread = threading.Thread(
+        target=desktopactionthread,
+        args=(str(operation), target, dict(options)),
+        name=f"expanse-desktop-{operation}",
+        daemon=True,
+    )
+    thread.start()
     return True
+
+
+def desktopactionpump(sock):
+
+    while True:
+        try:
+            result = DESKTOPACTIONRESULTS.get_nowait()
+        except queue.Empty:
+            return
+        globals()["DESKTOPACTIONBUSY"] = False
+        response = result.get("response") or {}
+        if response.get("status") != "ok":
+            message = str(response.get("message") or "desktop action failed")
+            log(f"desktop {result.get('operation')} failed {message}")
+            desktopmessage(sock, str(result.get("operation") or "desktop"), message)
+            continue
+        paths = response.get("paths") if isinstance(response.get("paths"), list) else []
+        clean = [desktopsecurepath(path) for path in paths]
+        clean = [path for path in clean if path is not None]
+        if clean:
+            globals()["DESKTOPSELECTED"] = clean[0]
+            parent = os.path.dirname(clean[0])
+            if parent != DESKTOPROOT:
+                DESKTOPEXPANDED.add(parent)
+        elif result.get("operation") in ("delete", "destroy"):
+            globals()["DESKTOPSELECTED"] = None
+        if (
+            result.get("operation") == "paste" and
+            str((result.get("options") or {}).get("mode", "")) == "cut"
+        ):
+            try:
+                exclear(source="expanse")
+            except Exception:
+                pass
+        desktoprefresh(sock, force=True)
+
+
+def desktopclipboard(action, target):
+
+    target = desktopsecurepath(target)
+    if target is None:
+        return False
+    payload = {
+        "mode": str(action),
+        "paths": [target],
+        "source": "expanse",
+        "ts": int(time.time() * 1000),
+    }
+    ok, response = exsetfiles(payload, source="expanse")
+    if not ok:
+        log(f"desktop clipboard update failed {response}")
+    return bool(ok)
+
+
+def desktoppaste(sock, target):
+
+    ok, state = exget()
+    if not ok or str((state or {}).get("type", "")) != "files":
+        desktopmessage(sock, "paste", "the clipboard does not contain files")
+        return False
+    try:
+        payload = json.loads(str(state.get("data", "")))
+        mode = str(payload.get("mode", "copy")).strip().lower()
+        sources = payload.get("paths")
+        if mode not in ("copy", "cut") or not isinstance(sources, list) or not sources:
+            raise ValueError
+    except Exception:
+        desktopmessage(sock, "paste", "the clipboard file list is invalid")
+        return False
+    return desktopstartfileaction(
+        sock, "paste", target, sources=sources, mode=mode)
+
+
+def desktopdefaultarraysidebar():
+
+    username = os.path.basename(os.path.dirname(DESKTOPROOT.rstrip("/"))) or "master"
+    return [
+        {"label": label, "drive": 1, "path": path}
+        for label, path in (
+            ("root", "/"),
+            ("software", "/software"),
+            (username, f"/master/{username}"),
+            ("expanse", f"/master/{username}/expanse"),
+            ("flash", f"/master/{username}/flash"),
+            ("reference", f"/master/{username}/reference"),
+            ("downloads", f"/master/{username}/flash/downloads"),
+            ("images", f"/master/{username}/flash/images"),
+            ("music", f"/master/{username}/flash/music"),
+            ("videos", f"/master/{username}/flash/videos"),
+            ("rubbish", "/.rubbish"),
+        )
+    ]
+
+
+def desktoparraysidebarpin(target):
+
+    target = desktopsecurepath(target)
+    if target is None or not os.path.isdir(target):
+        return False, "the selected tier is unavailable"
+    data = {}
+    try:
+        with open(ARRAYSETTINGSFILE, "r", encoding="utf-8") as stream:
+            loaded = json.load(stream)
+            if isinstance(loaded, dict):
+                data = loaded
+    except FileNotFoundError:
+        pass
+    except Exception as error:
+        return False, f"could not read Array settings: {error}"
+    sidebar = data.get("sidebar")
+    if not isinstance(sidebar, list):
+        sidebar = desktopdefaultarraysidebar()
+    entry = {
+        "label": os.path.basename(target.rstrip("/")) or "root",
+        "drive": 1,
+        "path": target,
+    }
+    for existing in sidebar:
+        try:
+            if (
+                isinstance(existing, dict) and
+                int(existing.get("drive", 1)) == 1 and
+                str(existing.get("path", "")) == target
+            ):
+                return False, "the tier is already pinned"
+        except (TypeError, ValueError):
+            continue
+    data["sidebar"] = [*sidebar, entry]
+    directory = os.path.dirname(ARRAYSETTINGSFILE)
+    temporary = f"{ARRAYSETTINGSFILE}.tmp.{os.getpid()}"
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        with open(temporary, "x", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, ARRAYSETTINGSFILE)
+        return True, ""
+    except Exception as error:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        return False, f"could not pin the tier: {error}"
+
+
+def desktoparrayassociation(extension):
+
+    try:
+        with open(ARRAYSETTINGSFILE, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+        associations = data.get("associations") if isinstance(data, dict) else None
+        program = associations.get(extension) if isinstance(associations, dict) else None
+        return str(program) if program and os.path.isfile(program) else None
+    except Exception:
+        return None
+
+
+def desktopsavearrayassociation(extension, program):
+
+    try:
+        with open(ARRAYSETTINGSFILE, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+            if not isinstance(data, dict):
+                data = {}
+    except Exception:
+        data = {}
+    associations = data.get("associations")
+    if not isinstance(associations, dict):
+        associations = {}
+    associations[str(extension)] = str(program)
+    data["associations"] = associations
+    directory = os.path.dirname(ARRAYSETTINGSFILE)
+    temporary = f"{ARRAYSETTINGSFILE}.tmp.{os.getpid()}"
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        with open(temporary, "x", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, ARRAYSETTINGSFILE)
+        return True
+    except Exception as error:
+        log(f"save Array association error {error}")
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        return False
+
+
+def desktoplaunchprogram(program, target, *, environment=None, sock=None):
+
+    names = {
+        ARRAYPROGRAM: "array",
+        BRICKPROGRAM: "brick",
+        PLAYERPROGRAM: "player",
+        VIEWERPROGRAM: "viewer",
+        WRITEPROGRAM: "write",
+    }
+    program = os.path.abspath(str(program))
+    launched = launchsoftware({
+        "label": names.get(program, os.path.splitext(os.path.basename(program))[0]),
+        "name": names.get(program, os.path.splitext(os.path.basename(program))[0]),
+        "path": program,
+        "args": [target],
+        "env": dict(environment or {}),
+    })
+    if not launched:
+        desktopmessage(sock, "open", "the selected application could not be opened")
+    return bool(launched)
+
+
+def desktoprunitem(sock, target):
+
+    target = desktopsecurepath(target)
+    if target is None:
+        return False
+    if target.lower().endswith(".py"):
+        launched = launchsoftware({
+            "label": "brick", "name": "brick", "path": BRICKPROGRAM,
+            "args": ["--run-file", target], "env": {"BRICK_WINDOW": "0"},
+        })
+        if not launched:
+            desktopmessage(sock, "run", "the Python file could not be opened")
+        return bool(launched)
+    return desktopstartfileaction(sock, "execute", target)
+
+
+def desktopopenitem(sock, target):
+
+    target = desktopsecurepath(target)
+    if target is None:
+        return False
+    seen = set()
+    for _index in range(16):
+        linked = desktoparraylinktarget(target)
+        if linked is None:
+            break
+        if target in seen:
+            desktopmessage(sock, "open", "the link target contains a loop")
+            return False
+        seen.add(target)
+        target = linked
+    else:
+        desktopmessage(sock, "open", "the link chain is too long")
+        return False
+    if not os.path.exists(target):
+        desktopmessage(sock, "open", "the link target is unavailable")
+        return False
+    if os.path.isdir(target):
+        launched = launchsoftware({
+            "label": "array", "name": "array", "path": ARRAYPROGRAM,
+            "args": [target],
+        })
+        if not launched:
+            desktopmessage(sock, "open", "the tier could not be opened")
+        return bool(launched)
+    extension = os.path.splitext(target.lower())[1]
+    association = desktoparrayassociation(extension)
+    if association:
+        return desktoplaunchprogram(association, target, sock=sock)
+    if extension in DESKTOPAUDIOEXTENSIONS or extension in DESKTOPVIDEOEXTENSIONS:
+        return desktoplaunchprogram(PLAYERPROGRAM, target, sock=sock)
+    if extension in DESKTOPIMAGEEXTENSIONS:
+        return desktoplaunchprogram(VIEWERPROGRAM, target, sock=sock)
+    if extension in DESKTOPTEXTEXTENSIONS:
+        return desktoplaunchprogram(WRITEPROGRAM, target, sock=sock)
+    if extension == ".py":
+        return desktoprunitem(sock, target)
+    try:
+        if os.stat(target).st_mode & 0o111:
+            return desktoprunitem(sock, target)
+    except OSError:
+        return False
+    return desktoptextdialog(
+        sock, "openwith", target, "open with",
+        "enter the application path", "",
+    )
+
+
+def desktopproperties(sock, target):
+
+    target = desktopsecurepath(target)
+    if target is None:
+        return False
+    try:
+        state = os.lstat(target)
+        kind = "tier" if stat.S_ISDIR(state.st_mode) else "file"
+        size = "not calculated" if kind == "tier" else f"{state.st_size} bytes"
+        modified = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(state.st_mtime))
+        message = "\n".join((
+            f"name: {os.path.basename(target.rstrip('/')) or target}",
+            f"type: {kind}",
+            f"location: {os.path.dirname(target)}",
+            f"size: {size}",
+            f"modified: {modified}",
+            f"permissions: {stat.S_IMODE(state.st_mode):04o}",
+        ))
+    except OSError as error:
+        message = f"properties are unavailable: {error}"
+    return desktopmessage(sock, "properties", message)
+
+
+def handledesktopdialog(sock, msg):
+
+    identifier = str(msg.get("dialog_id", ""))
+    context = DESKTOPDIALOGS.pop(identifier, None)
+    if context is None:
+        return
+    result = str(msg.get("result", "cancel"))
+    if result in ("cancel", "no", "close"):
+        return
+    kind = context.get("kind")
+    action = str(context.get("action", ""))
+    target = desktopsecurepath(context.get("target"))
+    if target is None:
+        return
+    if kind == "confirm" and result == "yes":
+        desktopstartfileaction(sock, action, target)
+        return
+    if kind != "text" or result != "save":
+        return
+    value = str(msg.get("value", "")).strip()
+    if not value:
+        return
+    if action == "createlink":
+        desktopstartfileaction(sock, "link", target, name=value)
+    elif action in ("newfile", "newtier"):
+        desktopstartfileaction(
+            sock, "create", target,
+            kind="file" if action == "newfile" else "tier", name=value,
+        )
+    elif action == "openwith":
+        program = os.path.abspath(value)
+        if not os.path.isfile(program):
+            desktopmessage(sock, "open with", "the application is not available")
+            return
+        extension = os.path.splitext(target.lower())[1]
+        if extension:
+            desktopsavearrayassociation(extension, program)
+        desktoplaunchprogram(program, target, sock=sock)
 
 
 def rundesktopcontextaction(sock, context, action):
 
     action = str(action or "").strip().lower()
+    contextkind = str((context or {}).get("kind", "empty")).strip().lower()
     target = desktopsecurepath((context or {}).get("path", DESKTOPROOT))
 
     if action == "desktop-show":
@@ -8828,11 +9328,11 @@ def rundesktopcontextaction(sock, context, action):
         launchstartsoftware("settings")
         return
 
-    if action == "newfile":
+    if action == "newfile" and contextkind != "row":
         desktopstartcreate(sock, "file")
         return
 
-    if action == "newtier":
+    if action == "newtier" and contextkind != "row":
         desktopstartcreate(sock, "tier")
         return
 
@@ -8844,15 +9344,62 @@ def rundesktopcontextaction(sock, context, action):
         return
 
     if action == "open":
-        launcharrayopen(target)
+        desktopopenitem(sock, target)
         return
 
-    launcharraycontext(action, target)
+    if action == "opennew" and os.path.isdir(target):
+        launched = launchsoftware({
+            "label": "array", "name": "array", "path": ARRAYPROGRAM,
+            "args": [target],
+        })
+        if not launched:
+            desktopmessage(sock, "open in a new window", "the tier could not be opened")
+    elif action == "sidebarpin":
+        ok, message = desktoparraysidebarpin(target)
+        if not ok:
+            desktopmessage(sock, "pin to sidebar", message)
+    elif action in ("newfile", "newtier") and os.path.isdir(target):
+        desktoptextdialog(
+            sock, action, target,
+            "new file" if action == "newfile" else "new tier",
+            "enter a name", "newfile" if action == "newfile" else "newtier",
+        )
+    elif action in ("copy", "cut"):
+        if not desktopclipboard(action, target):
+            desktopmessage(sock, action, "the clipboard service is unavailable")
+    elif action == "copypath":
+        ok, _response = exset(target, source="expanse")
+        if not ok:
+            desktopmessage(sock, "copy as path", "the clipboard service is unavailable")
+    elif action == "paste" and os.path.isdir(target):
+        desktoppaste(sock, target)
+    elif action in ("delete", "destroy"):
+        desktopconfirm(sock, action, target)
+    elif action == "run":
+        desktoprunitem(sock, target)
+    elif action == "openwith" and os.path.isfile(target):
+        desktoptextdialog(
+            sock, "openwith", target, "open with",
+            "enter the application path", desktoparrayassociation(
+                os.path.splitext(target.lower())[1]) or "",
+        )
+    elif action == "extract" and os.path.isfile(target):
+        desktopstartfileaction(sock, "extract", target)
+    elif action == "createlink":
+        desktoptextdialog(
+            sock, "createlink", target, "link name",
+            "enter a name for the link",
+            os.path.basename(target.rstrip("/")) + " link",
+        )
+    elif action == "compress":
+        desktopstartfileaction(sock, "compress", target)
+    elif action == "properties":
+        desktopproperties(sock, target)
 
 
-def desktopactivate(path):
+def desktopactivate(path, sock=None):
 
-    return launcharrayopen(path)
+    return desktopopenitem(sock, path)
 
 
 def desktoptoggleexpanded(sock, path):
@@ -8924,6 +9471,10 @@ def runsearchcontextaction(sock, result, action):
 
         path = searchresultpath(result)
         if path is None:
+            return
+
+        if action not in ARRAYCONTEXTACTIONS:
+            log(f"search Array context action denied {action}")
             return
 
         closesearch(sock)
@@ -9599,7 +10150,7 @@ def handledesktopbutton(sock, msg):
     ):
         globals()["DESKTOPLASTCLICKPATH"] = None
         globals()["DESKTOPLASTCLICKAT"] = 0.0
-        desktopactivate(path)
+        desktopactivate(path, sock)
         return
 
     globals()["DESKTOPLASTCLICKPATH"] = path
@@ -9666,9 +10217,9 @@ def handledesktopkey(sock, msg):
         if target is None:
             return
         if key in ("ENTER", "RETURN", "SPACE"):
-            desktopactivate(target)
+            desktopactivate(target, sock)
         elif key in ("DELETE", "DEL"):
-            launcharraycontext("delete", target)
+            desktopconfirm(sock, "delete", target)
         elif key == "F2":
             desktopstartrename(sock, target)
         elif key == "RIGHT" and os.path.isdir(target):
@@ -13348,6 +13899,11 @@ def handleerror(sock, msg):
 
         log(f"server error code={code} winid={wid} detail={detail}")
 
+        if code.startswith("dialog_"):
+            identifier = str(msg.get("dialog_id", ""))
+            if identifier:
+                DESKTOPDIALOGS.pop(identifier, None)
+
         # Only a MAP failure invalidates a pending map.  Graphics/DAMAGE
         # errors can arrive while the first asynchronous managed scene is
         # awaiting its acknowledgement; treating those as MAP failures used
@@ -14575,6 +15131,12 @@ def main():
                         elif op == "ERROR":
                             handleerror(s, m)
 
+                        elif op == "DIALOG_RESULT":
+                            handledesktopdialog(s, m)
+
+                        elif op == "DIALOG_CREATED":
+                            pass
+
                         elif op in ("GRAPHICS_COMMITTED", "GRAPHICS_CLEARED"):
                             graphicsresponse(s, m)
 
@@ -14705,6 +15267,8 @@ def main():
             updatesearchcaret(s)
 
             masterimagesettingstick(s)
+
+            desktopactionpump(s)
 
             desktoprefresh(s)
 
@@ -15331,9 +15895,12 @@ def graphicsdiagnostic():
             raise RuntimeError(f"desktop file actions differ from Array {desktopfileactions}")
 
         desktopactionevents = []
+        desktopdialogevents = []
         originallaunchsoftware = globals().get("launchsoftware")
         originalcreatedesktopitem = globals().get("createdesktopitem")
         originalrenamedesktopitem = globals().get("renamedesktopitem")
+        originalsendline = globals().get("sendline")
+        originaldesktopid = DESKTOPID
 
         def diagnosticdesktopcreate(kind, name):
             path = os.path.join(desktopdiagnosticroot, str(name))
@@ -15350,11 +15917,19 @@ def graphicsdiagnostic():
             os.rename(source, destination)
             return {"status": "ok", "path": destination}
 
-        try:
-            globals()["launchsoftware"] = lambda software: desktopactionevents.append({
+        def diagnosticdesktoplaunch(software):
+            desktopactionevents.append({
                 "name": str(software.get("name", "")),
                 "args": list(software.get("args", [])),
             })
+            return True
+
+        try:
+            globals()["launchsoftware"] = diagnosticdesktoplaunch
+            globals()["sendline"] = lambda _sock, message: desktopdialogevents.append(
+                dict(message))
+            globals()["DESKTOPID"] = 1
+            DESKTOPDIALOGS.clear()
             globals()["createdesktopitem"] = diagnosticdesktopcreate
             globals()["renamedesktopitem"] = diagnosticdesktoprename
             rundesktopcontextaction(
@@ -15409,8 +15984,19 @@ def graphicsdiagnostic():
             ):
                 raise RuntimeError("desktop inline rename did not refresh the row")
 
-            rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "open")
-            rundesktopcontextaction(None, {"kind": "row", "path": testfile}, "properties")
+            diagnosticsock = object()
+            rundesktopcontextaction(
+                diagnosticsock, {"kind": "row", "path": testfile}, "open")
+            rundesktopcontextaction(
+                diagnosticsock, {"kind": "row", "path": testfile}, "properties")
+            propertydialog = desktopdialogevents[-1]
+            handledesktopdialog(diagnosticsock, {
+                "op": "DIALOG_RESULT",
+                "dialog_id": propertydialog.get("dialog_id"),
+                "result": "close",
+            })
+            rundesktopcontextaction(
+                diagnosticsock, {"kind": "row", "path": testfile}, "destroy")
             rundesktopcontextaction(
                 None,
                 {"kind": "empty", "path": desktopdiagnosticroot},
@@ -15420,15 +16006,30 @@ def graphicsdiagnostic():
             globals()["launchsoftware"] = originallaunchsoftware
             globals()["createdesktopitem"] = originalcreatedesktopitem
             globals()["renamedesktopitem"] = originalrenamedesktopitem
+            globals()["sendline"] = originalsendline
+            globals()["DESKTOPID"] = originaldesktopid
+            DESKTOPDIALOGS.clear()
             desktopcancelcreate(None)
 
         if (
-            len(desktopactionevents) != 3
-            or desktopactionevents[0].get("args") != ["--open-item", testfile]
-            or desktopactionevents[1].get("args") != ["--context-action", "properties", testfile]
-            or desktopactionevents[2].get("name") != "settings"
+            len(desktopactionevents) != 2
+            or desktopactionevents[0].get("name") != "write"
+            or desktopactionevents[0].get("args") != [testfile]
+            or desktopactionevents[1].get("name") != "settings"
+            or len(desktopdialogevents) != 2
+            or desktopdialogevents[0].get("title") != "properties"
+            or desktopdialogevents[0].get("parent") != 1
+            or desktopdialogevents[1].get("title") != "destroy"
+            or desktopdialogevents[1].get("parent") != 1
+            or any(
+                event.get("name") == "array" or
+                "--context-action" in event.get("args", [])
+                for event in desktopactionevents
+            )
         ):
-            raise RuntimeError(f"desktop Array and Settings dispatch failed {desktopactionevents}")
+            raise RuntimeError(
+                "desktop native action dispatch failed "
+                f"launches={desktopactionevents} dialogs={desktopdialogevents}")
 
         globals()["TASKMENUDESKTOP"] = None
         globals()["TASKMENUDESKTOPVIEW"] = False
@@ -15437,7 +16038,7 @@ def graphicsdiagnostic():
             "array_file_actions": True,
             "settings": True,
         }
-        result["checks"]["desktop_array_dispatch"] = True
+        result["checks"]["desktop_native_context_dispatch"] = True
         result["checks"]["desktop_inline_creation"] = {
             "file": "new note.txt",
             "tier": "new tier",
@@ -16063,8 +16664,407 @@ def graphicsdiagnostic():
     return bool(result["passed"])
 
 
+def desktopworkernormalisepath(value):
+
+    value = str(value or "")
+    if (
+        not value.startswith("/") or
+        len(value.encode("utf-8")) > 4096 or
+        any(character in value for character in ("\x00", "\n", "\r"))
+    ):
+        raise ValueError("invalid path")
+    return os.path.abspath(os.path.normpath(value))
+
+
+def desktopworkerwithin(root, value, *, rootallowed=False, existing=False):
+
+    root = desktopworkernormalisepath(root)
+    target = desktopworkernormalisepath(value)
+    resolvedroot = os.path.realpath(root)
+    if existing:
+        resolvedtarget = os.path.realpath(target)
+    else:
+        parent = os.path.realpath(os.path.dirname(target) or "/")
+        resolvedtarget = os.path.join(parent, os.path.basename(target))
+    try:
+        contained = os.path.commonpath((resolvedroot, resolvedtarget)) == resolvedroot
+    except ValueError:
+        contained = False
+    if not contained or (not rootallowed and target == root):
+        raise PermissionError("desktop path escaped its tier")
+    return target
+
+
+def desktopworkeritemname(value):
+
+    value = str(value or "").strip()
+    if (
+        not value or value in (".", "..") or "/" in value or "\\" in value or
+        len(value.encode("utf-8")) > 255 or
+        any(character in value for character in ("\x00", "\n", "\r"))
+    ):
+        raise ValueError("invalid item name")
+    return value
+
+
+def desktopworkeruniquepath(directory, name):
+
+    candidate = os.path.join(directory, name)
+    if not os.path.lexists(candidate):
+        return candidate
+    stem, extension = os.path.splitext(name)
+    index = 1
+    while True:
+        suffix = " copy" if index == 1 else f" copy {index}"
+        candidate = os.path.join(directory, f"{stem}{suffix}{extension}")
+        if not os.path.lexists(candidate):
+            return candidate
+        index += 1
+
+
+def desktopworkerrejectsymlinks(path):
+
+    state = os.lstat(path)
+    if stat.S_ISLNK(state.st_mode):
+        raise PermissionError("symbolic links are not desktop items")
+    if not stat.S_ISDIR(state.st_mode):
+        return
+    for directory, directories, files in os.walk(path, followlinks=False):
+        for name in (*directories, *files):
+            if stat.S_ISLNK(os.lstat(os.path.join(directory, name)).st_mode):
+                raise PermissionError("symbolic links are not desktop items")
+
+
+def desktopworkerflush(path):
+
+    current = os.path.abspath(path)
+    targets = []
+    if os.path.exists(current) and not os.path.isdir(current):
+        targets.append(current)
+    targets.append(current if os.path.isdir(current) else os.path.dirname(current))
+    for target in targets:
+        descriptor = None
+        try:
+            flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            if os.path.isdir(target):
+                flags |= getattr(os, "O_DIRECTORY", 0)
+            descriptor = os.open(target, flags)
+            os.fsync(descriptor)
+        except OSError:
+            pass
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+
+def desktopworkercreate(root, request):
+
+    directory = desktopworkerwithin(
+        root, request.get("target"), rootallowed=True, existing=True)
+    if not os.path.isdir(directory):
+        raise NotADirectoryError("the selected tier is unavailable")
+    name = desktopworkeritemname(request.get("name"))
+    destination = desktopworkerwithin(root, os.path.join(directory, name))
+    kind = str(request.get("kind", "")).strip().lower()
+    if kind == "file":
+        descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+        )
+        os.close(descriptor)
+    elif kind == "tier":
+        os.mkdir(destination, 0o700)
+    else:
+        raise ValueError("invalid item type")
+    desktopworkerflush(destination)
+    return [destination]
+
+
+def desktopworkercopyormove(root, request):
+
+    destination = desktopworkerwithin(
+        root, request.get("target"), rootallowed=True, existing=True)
+    if not os.path.isdir(destination):
+        raise NotADirectoryError("the selected tier is unavailable")
+    sources = request.get("sources")
+    if (
+        not isinstance(sources, list) or
+        not 0 < len(sources) <= DESKTOPWORKERMAXIMUMSOURCES
+    ):
+        raise ValueError("invalid clipboard files")
+    mode = str(request.get("mode", "copy")).strip().lower()
+    if mode not in ("copy", "cut"):
+        raise ValueError("invalid clipboard mode")
+    output = []
+    for rawsource in sources:
+        source = desktopworkernormalisepath(rawsource)
+        if not os.path.lexists(source):
+            continue
+        desktopworkerrejectsymlinks(source)
+        target = desktopworkerwithin(
+            root,
+            desktopworkeruniquepath(
+                destination, os.path.basename(source.rstrip("/"))),
+        )
+        try:
+            if os.path.isdir(source) and os.path.commonpath((source, target)) == source:
+                raise ValueError("a tier cannot be copied into itself")
+            if mode == "cut":
+                shutil.move(source, target)
+            elif os.path.isdir(source):
+                shutil.copytree(source, target)
+            else:
+                shutil.copy2(source, target)
+            output.append(target)
+            desktopworkerflush(target)
+        except Exception:
+            if os.path.lexists(target):
+                try:
+                    if os.path.isdir(target):
+                        shutil.rmtree(target)
+                    else:
+                        os.unlink(target)
+                except OSError:
+                    pass
+            raise
+    if not output:
+        raise FileNotFoundError("the clipboard files are unavailable")
+    return output
+
+
+def desktopworkerdelete(root, request, permanent=False):
+
+    target = desktopworkerwithin(root, request.get("target"), existing=True)
+    desktopworkerrejectsymlinks(target)
+    if permanent:
+        if os.path.isdir(target):
+            shutil.rmtree(target)
+        else:
+            os.unlink(target)
+    else:
+        from rubbish.rubbish import storepaths
+        storepaths([target])
+    desktopworkerflush(os.path.dirname(target))
+    return []
+
+
+def desktopworkercreatelink(root, request):
+
+    target = desktopworkerwithin(root, request.get("target"), existing=True)
+    name = desktopworkeritemname(request.get("name"))
+    destination = desktopworkerwithin(
+        root,
+        desktopworkeruniquepath(os.path.dirname(target), name),
+    )
+    payload = json.dumps(
+        {"version": DESKTOPLINKVERSION, "target": target},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    content = DESKTOPLINKHEADER + payload + b"\n"
+    if len(content) > DESKTOPLINKMAXIMUM:
+        raise ValueError("link target is too long")
+    with open(destination, "xb") as stream:
+        stream.write(content)
+        stream.flush()
+        os.fsync(stream.fileno())
+    desktopworkerflush(destination)
+    return [destination]
+
+
+def desktopworkercompress(root, request):
+
+    target = desktopworkerwithin(root, request.get("target"), existing=True)
+    desktopworkerrejectsymlinks(target)
+    destination = desktopworkerwithin(
+        root,
+        desktopworkeruniquepath(
+            os.path.dirname(target), os.path.basename(target.rstrip("/")) + ".zip"),
+    )
+    with zipfile.ZipFile(destination, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        if os.path.isdir(target):
+            base = os.path.dirname(target)
+            for directory, directories, files in os.walk(target):
+                directories.sort(key=str.casefold)
+                files.sort(key=str.casefold)
+                relative = os.path.relpath(directory, base).replace(os.sep, "/")
+                if not directories and not files:
+                    archive.writestr(relative.rstrip("/") + "/", b"")
+                for filename in files:
+                    source = os.path.join(directory, filename)
+                    archive.write(
+                        source, os.path.relpath(source, base).replace(os.sep, "/"))
+        else:
+            archive.write(target, os.path.basename(target))
+    desktopworkerflush(destination)
+    return [destination]
+
+
+def desktopworkerextract(root, request):
+
+    target = desktopworkerwithin(root, request.get("target"), existing=True)
+    if not os.path.isfile(target) or not target.lower().endswith(".zip"):
+        raise ValueError("the selected file is not a zip archive")
+    desktopworkerrejectsymlinks(target)
+    stem = os.path.splitext(os.path.basename(target))[0] or "archive"
+    destination = desktopworkerwithin(
+        root, desktopworkeruniquepath(os.path.dirname(target), stem))
+    os.mkdir(destination, 0o700)
+    try:
+        with zipfile.ZipFile(target, "r") as archive:
+            members = archive.infolist()
+            if len(members) > DESKTOPWORKERMAXIMUMARCHIVEENTRIES:
+                raise ValueError("the archive contains too many items")
+            total = sum(max(0, int(member.file_size)) for member in members)
+            if total > DESKTOPWORKERMAXIMUMARCHIVEBYTES:
+                raise ValueError("the archive is too large")
+            for member in members:
+                relative = str(member.filename).replace("\\", "/")
+                parts = [
+                    part for part in relative.split("/")
+                    if part not in ("", ".")
+                ]
+                mode = (int(member.external_attr) >> 16) & 0o177777
+                if (
+                    not parts or relative.startswith("/") or ".." in parts or
+                    stat.S_ISLNK(mode)
+                ):
+                    raise ValueError("the archive contains an unsafe path")
+                output = os.path.abspath(os.path.join(destination, *parts))
+                if os.path.commonpath((destination, output)) != destination:
+                    raise ValueError("the archive contains an unsafe path")
+                if member.is_dir():
+                    os.makedirs(output, mode=0o700, exist_ok=True)
+                    continue
+                os.makedirs(os.path.dirname(output), mode=0o700, exist_ok=True)
+                with archive.open(member, "r") as source, open(output, "xb") as sink:
+                    shutil.copyfileobj(source, sink, length=1024 * 1024)
+                    sink.flush()
+                    os.fsync(sink.fileno())
+        desktopworkerflush(destination)
+        return [destination]
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+
+
+def desktopworkerperform(request):
+
+    if not isinstance(request, dict):
+        raise ValueError("invalid desktop action")
+    root = desktopworkernormalisepath(request.get("root"))
+    if not os.path.isdir(root):
+        raise FileNotFoundError("the desktop tier is unavailable")
+    operation = str(request.get("operation", "")).strip().lower()
+    handlers = {
+        "create": desktopworkercreate,
+        "paste": desktopworkercopyormove,
+        "delete": desktopworkerdelete,
+        "destroy": lambda usedroot, usedrequest: desktopworkerdelete(
+            usedroot, usedrequest, permanent=True),
+        "link": desktopworkercreatelink,
+        "compress": desktopworkercompress,
+        "extract": desktopworkerextract,
+    }
+    handler = handlers.get(operation)
+    if handler is None:
+        raise ValueError("unknown desktop action")
+    return {
+        "status": "ok",
+        "operation": operation,
+        "paths": handler(root, request),
+    }
+
+
+def desktopworkerdiagnostic():
+
+    import tempfile
+    root = tempfile.mkdtemp(prefix="t1os-expanse-actions-")
+    try:
+        tier = desktopworkerperform({
+            "root": root, "operation": "create", "target": root,
+            "kind": "tier", "name": "work",
+        })["paths"][0]
+        note = desktopworkerperform({
+            "root": root, "operation": "create", "target": tier,
+            "kind": "file", "name": "note.txt",
+        })["paths"][0]
+        with open(note, "w", encoding="utf-8") as stream:
+            stream.write("desktop action diagnostic\n")
+        copied = desktopworkerperform({
+            "root": root, "operation": "paste", "target": root,
+            "mode": "copy", "sources": [note],
+        })["paths"][0]
+        linked = desktopworkerperform({
+            "root": root, "operation": "link", "target": copied,
+            "name": "note link",
+        })["paths"][0]
+        archive = desktopworkerperform({
+            "root": root, "operation": "compress", "target": tier,
+        })["paths"][0]
+        extracted = desktopworkerperform({
+            "root": root, "operation": "extract", "target": archive,
+        })["paths"][0]
+        if not all((
+            os.path.isfile(copied), os.path.isfile(linked),
+            os.path.isfile(archive), os.path.isdir(extracted),
+        )):
+            raise RuntimeError("desktop action result is incomplete")
+        desktopworkerperform({
+            "root": root, "operation": "destroy", "target": copied,
+        })
+        return not os.path.exists(copied)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def desktopworkermain():
+
+    raw = sys.stdin.buffer.read(DESKTOPWORKERMAXIMUMREQUEST + 1)
+    if len(raw) > DESKTOPWORKERMAXIMUMREQUEST:
+        response = {"status": "error", "message": "desktop action is too large"}
+    else:
+        try:
+            response = desktopworkerperform(json.loads(raw.decode("utf-8")))
+        except Exception as error:
+            response = {
+                "status": "error",
+                "message": str(error).strip().lower() or "desktop action failed",
+            }
+    sys.stdout.write(
+        json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+    sys.stdout.flush()
+    return 0 if response.get("status") == "ok" else 1
+
+
+def desktopexecutablemain(path):
+
+    target = desktopworkernormalisepath(path)
+    state = os.stat(target, follow_symlinks=False)
+    if (
+        not stat.S_ISREG(state.st_mode) or
+        state.st_uid != os.getuid() or state.st_gid != os.getgid() or
+        state.st_nlink != 1 or not state.st_mode & 0o111 or
+        state.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise PermissionError("desktop executable ownership or mode is unsafe")
+    name = os.path.basename(target) or target
+    os.execvpe(target, [name], dict(os.environ))
+    return 126
+
+
 # execute main
 if __name__ == "__main__":
+
+    if len(sys.argv) > 1 and str(sys.argv[1]).strip().lower() == "desktop-action-worker":
+        raise SystemExit(desktopworkermain())
+
+    if len(sys.argv) > 1 and str(sys.argv[1]).strip().lower() == "desktop-action-diagnostic":
+        raise SystemExit(0 if desktopworkerdiagnostic() else 1)
+
+    if len(sys.argv) > 2 and str(sys.argv[1]).strip().lower() == "desktop-executable-worker":
+        raise SystemExit(desktopexecutablemain(sys.argv[2]))
 
     if len(sys.argv) > 1 and str(sys.argv[1]).strip().lower() == "graphics-diagnostic":
         raise SystemExit(0 if graphicsdiagnostic() else 1)

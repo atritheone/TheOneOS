@@ -42,6 +42,7 @@ sys.path.insert(0, str(ROOT / 'source' / 'build software'))
 goddesspackage = types.ModuleType('GODDESS')
 goddess = types.ModuleType('GODDESS.GODDESS')
 goddess.formatlog = lambda component, message: f'{component}: {message}'
+goddess.openreadablelog = open
 goddess.popenisolated = None
 sys.modules['GODDESS'] = goddesspackage
 sys.modules['GODDESS.GODDESS'] = goddess

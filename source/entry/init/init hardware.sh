@@ -1169,6 +1169,31 @@ ensure_runtime_permissions() {
     done
 }
 
+ensure_log_user_readability() {
+    logs='/mnt/the one/logs'
+
+    logs_unsafe=$("$busybox" find "$logs" -xdev \
+        ! -type d ! -type f -print -quit 2>/dev/null) || \
+        rescue 'I could not inspect the persistent log tier.'
+    [ -z "$logs_unsafe" ] || \
+        rescue "I found an unsafe object in the persistent log tier at $logs_unsafe."
+
+    # Logs remain root-owned system evidence, but gid 1000 is the identity used
+    # by every signed-in desktop session, including the master account.
+    "$busybox" find "$logs" -xdev -type d \
+        -exec "$busybox" chown 0:1000 {} + \
+        -exec "$busybox" chmod 0750 {} + || \
+        rescue 'I could not make the persistent log directories user-readable.'
+    "$busybox" find "$logs" -xdev -type f \
+        -exec "$busybox" chown 0:1000 {} + \
+        -exec "$busybox" chmod 0640 {} + || \
+        rescue 'I could not make the persistent log files user-readable.'
+    "$busybox" chown 0:0 "$logs" || \
+        rescue 'I could not assign the system log tier to root.'
+    "$busybox" chmod 0755 "$logs" || \
+        rescue 'I could not make the system log tier writable by its broker.'
+}
+
 ensure_persistent_runtime_permissions() {
     software='/mnt/software'
     rubbish='/mnt/.rubbish'
@@ -1254,10 +1279,7 @@ ensure_persistent_runtime_permissions() {
         -exec "$busybox" chmod 0600 {} + || \
         rescue 'I could not repair the rubbish files.'
 
-    "$busybox" chown 0:0 "$logs" || \
-        rescue 'I could not assign the system log tier to root.'
-    "$busybox" chmod 0755 "$logs" || \
-        rescue 'I could not make the system log tier writable by its broker.'
+    ensure_log_user_readability
 
     [ "$("$busybox" stat -c '%u:%g:%a' "$software")" = \
             "$expected_software_metadata" ] || \
@@ -2028,6 +2050,7 @@ if [ "$root_mode" = rw ]; then
         printf '\n===== kernel ring at init handoff =====\n'
         "$busybox" dmesg
     } >'/mnt/the one/logs/kernel.log' 2>/dev/null || true
+    ensure_log_user_readability
 fi
 
 if [ "$quiet" = 1 ] && [ -c /dev/tty0 ]; then

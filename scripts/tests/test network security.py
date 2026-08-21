@@ -52,6 +52,7 @@ def loadnetwork():
     goddesspackage = types.ModuleType('GODDESS')
     goddess = types.ModuleType('GODDESS.GODDESS')
     goddess.formatlog = lambda component, message: f'{component}: {message}'
+    goddess.openreadablelog = open
     goddess.popenisolated = None
     sys.modules['pyroute2'] = pyroute2
     sys.modules['GODDESS'] = goddesspackage

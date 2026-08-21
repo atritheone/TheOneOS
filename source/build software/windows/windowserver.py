@@ -38,6 +38,7 @@ from reign.reign import (
 from GODDESS.GODDESS import (
     dropdesktopidentity,
     formatlog,
+    openreadablelog,
     popenisolated,
     softwarelogpath,
 )
@@ -2631,7 +2632,7 @@ def logopen():
     try:
 
         # open or create the startup log file
-        STARTLOGFD = open(LOGFILE, "a")
+        STARTLOGFD = openreadablelog(LOGFILE, "a")
 
         # ensure file opened
         if not STARTLOGFD:

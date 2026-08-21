@@ -123,6 +123,9 @@ def main():
         'ensure_persistent_runtime_permissions',
         'expected_software_metadata',
         'system log tier is not writable',
+        'ensure_log_user_readability() {',
+        '-exec "$busybox" chown 0:1000 {} +',
+        '-exec "$busybox" chmod 0640 {} +',
     )
     require(
         function(goddess, 'normaliseservicesettings'),
@@ -142,6 +145,7 @@ def main():
         "'chromium'",
         "'expanse'",
         "'operations centre'",
+        "'write'",
         'directorymode=0o700, filemode=0o600',
     )
     require(

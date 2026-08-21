@@ -62,6 +62,7 @@ def loadgraphics(projectroot):
     goddess.formatlog = (
         lambda software, message, epoch=None: f"[{software}] {message}"
     )
+    goddess.openreadablelog = open
     sys.modules["GODDESS"] = goddesspackage
     sys.modules["GODDESS.GODDESS"] = goddess
 
@@ -502,6 +503,7 @@ def validatewindowbufferpermissions(graphics):
     # central log must therefore fall back to supervised stderr without ever
     # replacing the operational exception being diagnosed.
     originalopen = builtins.open
+    originalopenreadablelog = graphics.openreadablelog
     originallogfile = graphics.LOGFILE
     originalgeteuid = getattr(graphics.os, "geteuid", None)
     diagnostics = io.StringIO()
@@ -516,6 +518,7 @@ def validatewindowbufferpermissions(graphics):
         graphics.LOGFILE = "/tmp/t1os-test-protected-graphics.log"
         graphics.os.geteuid = lambda: 0
         builtins.open = denycentrallog
+        graphics.openreadablelog = denycentrallog
 
         with contextlib.redirect_stderr(diagnostics):
             result = graphics.log("test non-fatal graphics failure", flush=True)
@@ -526,6 +529,7 @@ def validatewindowbufferpermissions(graphics):
             )
     finally:
         builtins.open = originalopen
+        graphics.openreadablelog = originalopenreadablelog
         graphics.LOGFILE = originallogfile
 
         if originalgeteuid is None:

@@ -126,6 +126,43 @@ def main():
         'launchstartsoftware("array")',
     )
 
+    desktop_context = function_source(
+        trees["expanse"], sources["expanse"], "rundesktopcontextaction")
+    require(
+        desktop_context,
+        'desktopconfirm(sock, action, target)',
+        'desktopclipboard(action, target)',
+        'desktoppaste(sock, target)',
+        'desktopstartfileaction(sock, "extract", target)',
+        'desktopstartfileaction(sock, "compress", target)',
+        'desktopproperties(sock, target)',
+        'desktoparraysidebarpin(target)',
+        'desktoptextdialog(',
+    )
+    assert "launcharraycontext" not in desktop_context
+    assert "--context-action" not in desktop_context
+    desktop_dialog = function_source(
+        trees["expanse"], sources["expanse"], "desktopdialog")
+    require(desktop_dialog, '"parent": DESKTOPID', '"op": "CREATE_DIALOG"')
+    desktop_worker = function_source(
+        trees["expanse"], sources["expanse"], "desktopworkerperform")
+    for action in (
+        '"create"', '"paste"', '"delete"', '"destroy"', '"link"',
+        '"compress"', '"extract"',
+    ):
+        assert action in desktop_worker, f"Expanse desktop worker lacks {action}"
+    require(
+        sources["expanse"],
+        'str(sys.argv[1]).strip().lower() == "desktop-action-worker"',
+        "raise SystemExit(desktopworkermain())",
+        'str(sys.argv[1]).strip().lower() == "desktop-executable-worker"',
+        "raise SystemExit(desktopexecutablemain(sys.argv[2]))",
+        'result["checks"]["desktop_native_context_dispatch"] = True',
+    )
+    assert not (
+        root / "source/build software/expanse/desktopactions.py"
+    ).exists(), "desktop actions were split out of expanse.py"
+
     catalogue_launch = function_source(
         trees["operations"], sources["operations"], "handlelaunchcatalogue")
     session_check = catalogue_launch.index(
@@ -134,15 +171,35 @@ def main():
     assert session_check < spawn, (
         "Operations spawns catalogue software before session ownership is proven")
 
+    desktop_action = function_source(
+        trees["operations"], sources["operations"], "handledesktopaction")
+    require(
+        sources["operations"],
+        "DESKTOPACTIONWORKER = '/the one/build/expanse/expanse.py'",
+        "'DESKTOP_ACTION': frozenset(('expanse',))",
+    )
+    require(
+        desktop_action,
+        "security_profile='desktop'",
+        "preexec_fn=dropsandboxidentity",
+        "[DESKTOPACTIONWORKER, 'desktop-action-worker']",
+        "target = desktopactiontarget(",
+        "root, request.get('target')",
+        "[DESKTOPACTIONWORKER, 'desktop-executable-worker', target]",
+        "desktop executable ownership or mode is unsafe",
+    )
+
     volume_probe = function_source(
         trees["driver"], sources["driver"], "probevolumeaccess")
     require(
         volume_probe,
-        "rootstate.st_uid != 1000",
-        "rootstate.st_gid != 1000",
+        "desktopmodepermits(rootstate, writable=writable)",
         "probestate.st_uid != 1000",
         "os.write(probedescriptor, b'1')",
     )
+    volume_dac = function_source(
+        trees["driver"], sources["driver"], "desktopmodepermits")
+    require(volume_dac, "required = 0o7 if writable else 0o5")
     for forbidden_transition in (
         "os.fork(", "os.setuid(", "os.setgid(", "os.setgroups(",
     ):
@@ -154,9 +211,32 @@ def main():
         trees["write"], sources["write"], "userreadpath")
     user_save_path = function_source(
         trees["write"], sources["write"], "usersavepath")
-    require(user_read_path, "'/the one/logs'")
+    require(user_read_path, "kernel policy and DAC decide readability")
+    for forbidden_read_root in (
+        "'/the one/logs'", "'/.ephemeral/volumes'", "'/software'",
+        "os.path.commonpath",
+    ):
+        assert forbidden_read_root not in user_read_path, (
+            f"Write still pre-denies an OS-readable path: {forbidden_read_root}")
     assert "'/the one/logs'" not in user_save_path, (
         "Write made the system log tier writable while admitting it for reading")
+    read_payload = function_source(
+        trees["write"], sources["write"], "readfilepayload")
+    for forbidden_metadata_gate in (
+        "metadata.st_uid", "stat.S_IWGRP", "metadata.st_nlink", "O_NOFOLLOW",
+    ):
+        assert forbidden_metadata_gate not in read_payload, (
+            f"Write still rejects readable regular files by metadata: "
+            f"{forbidden_metadata_gate}")
+    picker_result = function_source(
+        trees["write"], sources["write"], "handlepickerresult")
+    assert "check(path)" not in picker_result
+    require(
+        sources["write"],
+        "WRITESETTINGSFILE = '/the one/settings/write/settings.json'",
+        "def legacywritesettingspath():",
+        "def writeapplicationsettingssnapshot(payload):",
+    )
 
     calls = [
         node for node in ast.walk(trees["window"])

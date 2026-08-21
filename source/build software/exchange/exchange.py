@@ -20,7 +20,7 @@ import hashlib
 
 sys.path.insert(0, '/the one/build')
 
-from GODDESS.GODDESS import formatlog
+from GODDESS.GODDESS import formatlog, openreadablelog
 
 
 
@@ -208,7 +208,7 @@ def logline(text):
     os.makedirs(os.path.dirname(LOGPATH), exist_ok=True)
     line = formatlog('exchange', text) + '\n'
 
-    with open(LOGPATH, "a") as f:
+    with openreadablelog(LOGPATH, "a") as f:
 
         f.write(line)
 

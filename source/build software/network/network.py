@@ -28,7 +28,7 @@ from pyroute2 import IPRoute
 
 sys.path.insert(0, '/the one/build')
 
-from GODDESS.GODDESS import formatlog, popenisolated
+from GODDESS.GODDESS import formatlog, openreadablelog, popenisolated
 from operations.operations import service_secret_get
 
 
@@ -347,7 +347,7 @@ def log(msg, debug=False, durable=False):
 
     line = formatlog('network', msg) + '\n'
 
-    with open(LOGFILE, "a") as f:
+    with openreadablelog(LOGFILE, "a") as f:
 
         f.write(line)
 

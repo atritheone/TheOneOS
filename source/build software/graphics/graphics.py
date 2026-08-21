@@ -36,7 +36,7 @@ from freetype import FT_LOAD_DEFAULT
 # the default target.  Keep a fallback for older freetype-py builds.
 FT_LOAD_T1OS_TEXT = getattr(freetype, "FT_LOAD_TARGET_LIGHT", FT_LOAD_DEFAULT)
 from reign.reign import currentdatetime, timestamp
-from GODDESS.GODDESS import formatlog
+from GODDESS.GODDESS import formatlog, openreadablelog
 
 
 class PackedAdvances:
@@ -12634,7 +12634,7 @@ def log(msg, flush=False):
         try:
             os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
 
-            with open(LOGFILE, "a", buffering=1) as stream:
+            with openreadablelog(LOGFILE, "a", buffering=1) as stream:
                 stream.write(line + "\n")
                 stream.flush()
 

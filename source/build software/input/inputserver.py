@@ -25,7 +25,7 @@ import selectors
 
 sys.path.insert(0, '/the one/build')
 
-from GODDESS.GODDESS import formatlog
+from GODDESS.GODDESS import formatlog, openreadablelog
 
 
 
@@ -1140,7 +1140,7 @@ def openlog():
     try:
 
         # open log file for append
-        f = open(LOGFILE, "a")
+        f = openreadablelog(LOGFILE, "a")
 
     except PermissionError:
 
@@ -1180,7 +1180,7 @@ def log(msg):
     # write timestamped log line
     line = formatlog('input server', msg) + '\n'
 
-    with open(LOGFILE, "a") as f:
+    with openreadablelog(LOGFILE, "a") as f:
 
         f.write(line)
 
