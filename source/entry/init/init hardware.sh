@@ -1326,6 +1326,12 @@ prepare_terminfo_runtime() {
         rescue 'I could not assign the private Expanse runtime.'
     "$busybox" chmod 0711 "$ephemeral/expanse" || \
         rescue 'I could not protect the private Expanse runtime.'
+    "$busybox" mkdir -m 02710 "$ephemeral/exchange" || \
+        rescue 'I could not prepare the private Exchange service runtime.'
+    "$busybox" chown 0:1000 "$ephemeral/exchange" || \
+        rescue 'I could not assign the private Exchange service runtime.'
+    "$busybox" chmod 02710 "$ephemeral/exchange" || \
+        rescue 'I could not protect the private Exchange service runtime.'
     "$busybox" mkdir -m 01733 "$ephemeral/network" || \
         rescue 'I could not prepare the network exchange runtime.'
     "$busybox" chown 0:0 "$ephemeral/network" || \

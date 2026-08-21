@@ -1745,7 +1745,7 @@ def clearstaleprofilelock():
             pass
         except IsADirectoryError:
             raise RuntimeError(
-                f"Chromium profile singleton is unexpectedly a directory: {path}"
+                f"Chromium profile singleton is unexpectedly a tier: {path}"
             )
     if removed:
         owner = f" process={process}" if process is not None else ""
@@ -1957,7 +1957,7 @@ def mastername():
 
     userroot = os.path.join("/master", username)
     if not os.path.isdir(userroot) or os.path.islink(userroot):
-        raise RuntimeError(f"the active T1OS user directory is unavailable: {userroot}")
+        raise RuntimeError(f"the active T1OS user tier is unavailable: {userroot}")
     return username
 
 
@@ -2511,7 +2511,7 @@ def setclipboard(text):
             "text": encoded.decode("utf-8"),
         })
     except Exception as error:
-        logline(f"clipboard copy failed: {error}")
+        logline(f"exchange copy failed {error}")
 
 
 def pasteclipboard(message):
@@ -2522,7 +2522,7 @@ def pasteclipboard(message):
         if len(text.encode("utf-8")) <= 1048576:
             enginecommand({"op": "paste", "text": text})
     except Exception as error:
-        logline(f"clipboard paste failed: {error}")
+        logline(f"exchange paste failed {error}")
 
 
 def mkdir(path, mode=0o755):
@@ -2530,11 +2530,11 @@ def mkdir(path, mode=0o755):
         os.makedirs(path, mode=mode, exist_ok=True)
         status = os.lstat(path)
         if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode):
-            raise RuntimeError("path is not a real directory")
+            raise RuntimeError("path is not a real tier")
         os.chmod(path, mode)
     except Exception as error:
         raise RuntimeError(
-            f"could not prepare required Chromium directory {path}: {error}"
+            f"could not prepare required Chromium tier {path}: {error}"
         ) from error
 
 
@@ -2556,14 +2556,14 @@ def removeruntime():
     if stat.S_ISLNK(runtimestatus.st_mode) or not stat.S_ISDIR(
         runtimestatus.st_mode
     ):
-        raise RuntimeError("chromium runtime path is not a real directory")
+        raise RuntimeError("chromium runtime path is not a real tier")
 
     if os.path.lexists(SANDBOXROOT):
         sandboxstatus = os.lstat(SANDBOXROOT)
         if stat.S_ISLNK(sandboxstatus.st_mode) or not stat.S_ISDIR(
             sandboxstatus.st_mode
         ):
-            raise RuntimeError("Chromium sandbox root is not a real directory")
+            raise RuntimeError("Chromium sandbox root is not a real tier")
         if (sandboxstatus.st_uid, sandboxstatus.st_gid) not in (
             (ENGINEUID, ENGINEGID),
             (0, 0),
@@ -2608,7 +2608,7 @@ def repairchromiumownedtree(path, uid=ENGINEUID, gid=ENGINEGID):
         try:
             status = os.fstat(descriptor)
             if not stat.S_ISDIR(status.st_mode):
-                raise RuntimeError("opened object is not a directory")
+                raise RuntimeError("opened object is not a tier")
             if status.st_uid != uid or status.st_gid != gid:
                 os.fchown(descriptor, uid, gid)
             if stat.S_IMODE(status.st_mode) != 0o700:
@@ -2616,7 +2616,7 @@ def repairchromiumownedtree(path, uid=ENGINEUID, gid=ENGINEGID):
             names = sorted(os.listdir(descriptor))
         except Exception as error:
             raise RuntimeError(
-                f"could not secure Chromium owned directory {displaypath}: {error}"
+                f"could not secure Chromium owned tier {displaypath}: {error}"
             ) from error
 
         repaired = 1
@@ -2639,7 +2639,7 @@ def repairchromiumownedtree(path, uid=ENGINEUID, gid=ENGINEGID):
                     child = os.open(name, directoryflags, dir_fd=descriptor)
                 except Exception as error:
                     raise RuntimeError(
-                        f"could not securely open Chromium owned directory "
+                        f"could not securely open Chromium owned tier "
                         f"{candidate}: {error}"
                     ) from error
                 try:
@@ -2855,7 +2855,7 @@ def prepareruntime():
     downloads = downloaddir()
     if not os.path.isdir(downloads) or os.path.islink(downloads):
         raise RuntimeError(
-            f"the T1OS downloads directory is unavailable: {downloads}"
+            f"the T1OS downloads tier is unavailable: {downloads}"
         )
     if os.path.lexists(RUNTIME):
         removeruntime()

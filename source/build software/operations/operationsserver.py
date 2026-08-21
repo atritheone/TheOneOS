@@ -1100,7 +1100,7 @@ def createdesktopentry(root, kind, name, owner):
     name = desktopitemname(name)
     root = os.path.abspath(str(root or ''))
     if not root.startswith('/'):
-        raise ValueError('invalid desktop tier')
+        raise ValueError('invalid expanse tier')
 
     rootfd = None
     createdfd = None
@@ -1108,10 +1108,10 @@ def createdesktopentry(root, kind, name, owner):
     try:
         rootstate = os.stat(root, follow_symlinks=False)
         if not statmodule.S_ISDIR(rootstate.st_mode):
-            raise PermissionError('desktop tier is unavailable')
+            raise PermissionError('expanse tier is unavailable')
         owneruid, ownergid = int(owner[0]), int(owner[1])
         if rootstate.st_uid != owneruid or rootstate.st_gid != ownergid:
-            raise PermissionError('desktop tier ownership is unsafe')
+            raise PermissionError('expanse tier ownership is unsafe')
 
         directoryflags = (
             os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
@@ -1124,7 +1124,7 @@ def createdesktopentry(root, kind, name, owner):
             openedstate.st_ino != rootstate.st_ino or
             not statmodule.S_ISDIR(openedstate.st_mode)
         ):
-            raise PermissionError('desktop tier changed during creation')
+            raise PermissionError('expanse tier changed during creation')
 
         if kind == 'file':
             fileflags = (
@@ -1172,11 +1172,11 @@ def handledesktopcreate(request):
         '_peer_pid', '_peer_uid', '_peer_gid',
     }
     if set(request) - permittedfields:
-        return {'status': 'error', 'message': 'unexpected desktop field'}
+        return {'status': 'error', 'message': 'unexpected expanse field'}
     peer = request.get('_peer', {})
     try:
         if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
-            raise PermissionError('desktop session ownership unavailable')
+            raise PermissionError('expanse session ownership unavailable')
         username, _credentialhash = authbroker.read_credentials(MASTERFILE)
         username = authbroker.canonicalize_username(username)
         root = os.path.join('/master', username, 'expanse')
@@ -1204,12 +1204,12 @@ def desktoprelativeparts(value):
         len(relative.encode('utf-8')) > 4096 or
         any(character in relative for character in ('\x00', '\n', '\r'))
     ):
-        raise ValueError('invalid desktop item')
+        raise ValueError('invalid expanse item')
     parts = relative.split('/')
     if any(not part or part in ('.', '..') for part in parts):
-        raise ValueError('invalid desktop item')
+        raise ValueError('invalid expanse item')
     if any(len(part.encode('utf-8')) > 255 for part in parts):
-        raise ValueError('invalid desktop item')
+        raise ValueError('invalid expanse item')
     return parts
 
 
@@ -1219,7 +1219,7 @@ def renamedesktopentry(root, relative, name, owner):
     name = desktopitemname(name)
     root = os.path.abspath(str(root or ''))
     if not root.startswith('/'):
-        raise ValueError('invalid desktop tier')
+        raise ValueError('invalid expanse tier')
 
     owneruid, ownergid = int(owner[0]), int(owner[1])
     directoryflags = (
@@ -1233,7 +1233,7 @@ def renamedesktopentry(root, relative, name, owner):
             not statmodule.S_ISDIR(rootstate.st_mode) or
             rootstate.st_uid != owneruid or rootstate.st_gid != ownergid
         ):
-            raise PermissionError('desktop tier ownership is unsafe')
+            raise PermissionError('expanse tier ownership is unsafe')
         rootfd = os.open(root, directoryflags)
         descriptors.append(rootfd)
         openedstate = os.fstat(rootfd)
@@ -1241,7 +1241,7 @@ def renamedesktopentry(root, relative, name, owner):
             openedstate.st_dev != rootstate.st_dev or
             openedstate.st_ino != rootstate.st_ino
         ):
-            raise PermissionError('desktop tier changed during rename')
+            raise PermissionError('expanse tier changed during rename')
 
         parentfd = rootfd
         for component in parts[:-1]:
@@ -1252,7 +1252,7 @@ def renamedesktopentry(root, relative, name, owner):
                 not statmodule.S_ISDIR(parentstate.st_mode) or
                 parentstate.st_uid != owneruid or parentstate.st_gid != ownergid
             ):
-                raise PermissionError('desktop item ownership is unsafe')
+                raise PermissionError('expanse item ownership is unsafe')
 
         source = parts[-1]
         sourcestate = os.stat(source, dir_fd=parentfd, follow_symlinks=False)
@@ -1264,7 +1264,7 @@ def renamedesktopentry(root, relative, name, owner):
             ) or
             sourcestate.st_uid != owneruid or sourcestate.st_gid != ownergid
         ):
-            raise PermissionError('desktop item ownership is unsafe')
+            raise PermissionError('expanse item ownership is unsafe')
 
         if source != name:
             library = ctypes.CDLL(None, use_errno=True)
@@ -1289,7 +1289,7 @@ def renamedesktopentry(root, relative, name, owner):
         renamedparts = [*parts[:-1], name]
         return os.path.join(root, *renamedparts)
     except FileNotFoundError:
-        raise FileNotFoundError('desktop item no longer exists')
+        raise FileNotFoundError('expanse item no longer exists')
     finally:
         for descriptor in reversed(descriptors):
             os.close(descriptor)
@@ -1302,11 +1302,11 @@ def handledesktoprename(request):
         '_peer_pid', '_peer_uid', '_peer_gid',
     }
     if set(request) - permittedfields:
-        return {'status': 'error', 'message': 'unexpected desktop field'}
+        return {'status': 'error', 'message': 'unexpected expanse field'}
     peer = request.get('_peer', {})
     try:
         if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
-            raise PermissionError('desktop session ownership unavailable')
+            raise PermissionError('expanse session ownership unavailable')
         username, _credentialhash = authbroker.read_credentials(MASTERFILE)
         username = authbroker.canonicalize_username(username)
         root = os.path.join('/master', username, 'expanse')
@@ -1331,7 +1331,7 @@ def desktopactiontarget(root, value, *, rootallowed=False):
     except ValueError:
         contained = False
     if not contained or (not rootallowed and target == root):
-        raise PermissionError('desktop action escaped its tier')
+        raise PermissionError('expanse action escaped its tier')
     return target
 
 
@@ -1343,11 +1343,11 @@ def handledesktopaction(request):
         '_peer_gid',
     }
     if set(request) - permittedfields:
-        return {'status': 'error', 'message': 'unexpected desktop action field'}
+        return {'status': 'error', 'message': 'unexpected expanse action field'}
     peer = request.get('_peer', {})
     try:
         if peer.get('domain') != 'expanse' or not sessionidentityfor(peer.get('pid', 0)):
-            raise PermissionError('desktop session ownership unavailable')
+            raise PermissionError('expanse session ownership unavailable')
         username, _credentialhash = authbroker.read_credentials(MASTERFILE)
         username = authbroker.canonicalize_username(username)
         root = os.path.join('/master', username, 'expanse')
@@ -1356,14 +1356,14 @@ def handledesktopaction(request):
             not statmodule.S_ISDIR(rootstate.st_mode) or
             rootstate.st_uid != DESKTOPUID or rootstate.st_gid != DESKTOPGID
         ):
-            raise PermissionError('desktop tier ownership is unsafe')
+            raise PermissionError('expanse tier ownership is unsafe')
 
         operation = str(request.get('operation', '')).strip().lower()
         if operation not in {
             'create', 'paste', 'delete', 'destroy', 'link', 'compress',
             'extract', 'execute',
         }:
-            raise ValueError('unknown desktop action')
+            raise ValueError('unknown expanse action')
         target = desktopactiontarget(
             root, request.get('target'),
             rootallowed=operation in ('create', 'paste'),
@@ -1384,7 +1384,7 @@ def handledesktopaction(request):
                 not targetstate.st_mode & 0o111 or
                 targetstate.st_mode & (statmodule.S_IWGRP | statmodule.S_IWOTH)
             ):
-                raise PermissionError('desktop executable ownership or mode is unsafe')
+                raise PermissionError('expanse executable ownership or mode is unsafe')
             environment = applicationenvironment({}, {'environment': {}})
             environment['PYTHONDONTWRITEBYTECODE'] = '1'
             process = popenisolated(
@@ -1411,11 +1411,11 @@ def handledesktopaction(request):
             record = processrecord(process.pid)
             if record is None:
                 process.kill()
-                raise RuntimeError('desktop executable identity is unavailable')
+                raise RuntimeError('expanse executable identity is unavailable')
             info['_process_identity'] = str(record['identity'])
             if not recordstart(process.pid, process, info, []):
                 process.kill()
-                raise RuntimeError('desktop executable registration failed')
+                raise RuntimeError('expanse executable registration failed')
             return {
                 'status': 'ok', 'operation': operation,
                 'paths': [], 'pid': process.pid,
@@ -1424,17 +1424,17 @@ def handledesktopaction(request):
         if operation == 'create':
             kind = str(request.get('kind', '')).strip().lower()
             if kind not in ('file', 'tier'):
-                raise ValueError('invalid desktop item type')
+                raise ValueError('invalid expanse item type')
             workerrequest['kind'] = kind
             workerrequest['name'] = desktopitemname(request.get('name'))
         elif operation == 'paste':
             sources = request.get('sources')
             if not isinstance(sources, list) or not 0 < len(sources) <= 128:
-                raise ValueError('invalid clipboard files')
+                raise ValueError('invalid exchange files')
             workerrequest['sources'] = [userpath(source) for source in sources]
             mode = str(request.get('mode', 'copy')).strip().lower()
             if mode not in ('copy', 'cut'):
-                raise ValueError('invalid clipboard mode')
+                raise ValueError('invalid exchange mode')
             workerrequest['mode'] = mode
         elif operation == 'link':
             workerrequest['name'] = desktopitemname(request.get('name'))
@@ -1443,7 +1443,7 @@ def handledesktopaction(request):
             workerrequest, ensure_ascii=False, separators=(',', ':'),
         ).encode('utf-8')
         if len(encoded) > MAXIMUMREQUEST:
-            raise ValueError('desktop action is too large')
+            raise ValueError('expanse action is too large')
         environment = applicationenvironment({}, {'environment': {}})
         environment['PYTHONDONTWRITEBYTECODE'] = '1'
         process = popensecured(
@@ -1463,24 +1463,24 @@ def handledesktopaction(request):
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate()
-            raise TimeoutError('desktop action timed out')
+            raise TimeoutError('expanse action timed out')
         if len(output) > DESKTOPACTIONMAXIMUMOUTPUT:
-            raise RuntimeError('desktop action returned too much output')
+            raise RuntimeError('expanse action returned too much output')
         try:
             response = json.loads(output.decode('utf-8', errors='strict').strip())
         except (UnicodeError, ValueError, TypeError) as error:
             detail = errors.decode('utf-8', errors='replace').strip()[:512]
-            raise RuntimeError(detail or 'desktop action returned an invalid response') from error
+            raise RuntimeError(detail or 'expanse action returned an invalid response') from error
         if not isinstance(response, dict):
-            raise RuntimeError('desktop action returned an invalid response')
+            raise RuntimeError('expanse action returned an invalid response')
         if response.get('status') != 'ok':
             return {
                 'status': 'error',
-                'message': str(response.get('message') or 'desktop action failed')[:512],
+                'message': str(response.get('message') or 'expanse action failed')[:512],
             }
         paths = response.get('paths', [])
         if not isinstance(paths, list) or len(paths) > 128:
-            raise RuntimeError('desktop action returned invalid paths')
+            raise RuntimeError('expanse action returned invalid paths')
         cleanpaths = [
             desktopactiontarget(root, path)
             for path in paths
@@ -1491,11 +1491,11 @@ def handledesktopaction(request):
     except (OSError, TypeError, ValueError, PermissionError, TimeoutError) as error:
         return {
             'status': 'error',
-            'message': str(error).lower() or 'desktop action failed',
+            'message': str(error).lower() or 'expanse action failed',
         }
     except Exception as error:
         print(f'> operations server desktop action error {error}', file=sys.stderr)
-        return {'status': 'error', 'message': 'desktop action failed'}
+        return {'status': 'error', 'message': 'expanse action failed'}
 
 
 def spawnsandboxed(path, arguments, profile, environment, *, name, state='starting'):
@@ -2388,7 +2388,7 @@ def handlevmteststatus(request):
             'has_user': bool(username),
             'username': username,
             'session_active': sessionactive,
-            'exchange_ready': os.path.exists('/.ephemeral/exchange.sock'),
+            'exchange_ready': os.path.exists('/.ephemeral/exchange/control.sock'),
             'windowserver_ready': os.path.exists(
                 '/.ephemeral/windowserver/accept.sock'),
             'lock_screen_ready': lockscreenready,

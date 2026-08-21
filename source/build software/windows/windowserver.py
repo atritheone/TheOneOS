@@ -3789,7 +3789,7 @@ def takescreenshot():
 
             raise RuntimeError(response.get("error", "exchange rejected screenshot"))
 
-        # The Exchange clipboard points to the newest source. Keep a small
+        # Exchange points to the newest source. Keep a small
         # history so a copy already queued by Array cannot lose its input.
         captures = []
 
@@ -3808,7 +3808,7 @@ def takescreenshot():
             except OSError:
                 pass
 
-        log(f"screenshot copied to Exchange clipboard {path}")
+        log(f"screenshot copied to exchange {path}")
         return True
 
     except Exception as error:
@@ -3837,10 +3837,10 @@ def snapcapture(cid, req):
             or parentwin.get("cid") != cid
             or str(parentwin.get("role", "")) != "window"
         ):
-            raise PermissionError("Snap capture is restricted to its owning application window")
+            raise PermissionError("Snap capture is restricted to its owning software window")
 
         if parentwin.get("mapped"):
-            raise RuntimeError("Snap must hide its application window before capture")
+            raise RuntimeError("Snap must hide its software window before capture")
 
         if SESSIONLOCKED or any(
             win.get("mapped") and str(win.get("role", "")) in ("lockscreen", "startup")
@@ -9083,7 +9083,7 @@ def dialogclipboardsettext(value):
         clipboard["path"] = path
         return True
     except Exception as error:
-        log(f"dialog clipboard set error {error}")
+        log(f"dialog exchange set error {error}")
         return False
 
 
@@ -10360,7 +10360,7 @@ def setwindowfullscreen(cid, req):
         sendjson(cid, {
             "op": "ERROR",
             "code": "fullscreen_denied",
-            "detail": "only normal application windows can enter fullscreen",
+            "detail": "only normal software windows can enter fullscreen",
         })
         return
 
@@ -12334,7 +12334,7 @@ def graphicsmaterial3d(value):
             raise ValueError("controlled 3D texture path must name an existing absolute file")
 
         if not any(os.path.commonpath((root, path)) == root for root in roots):
-            raise ValueError("controlled 3D texture must be a T1OS resource or an ephemeral application surface")
+            raise ValueError("controlled 3D texture must be a T1OS resource or an ephemeral software surface")
 
         info = os.stat(path, follow_symlinks=False)
         if (
@@ -12595,7 +12595,7 @@ def graphicscommand(win, req, kind):
             raise ValueError("image path must name an existing absolute file")
 
         if not any(os.path.commonpath((root, path)) == root for root in imageroots):
-            raise ValueError("image must be a T1OS resource or an ephemeral application surface")
+            raise ValueError("image must be a T1OS resource or an ephemeral software surface")
 
         info = os.stat(path, follow_symlinks=False)
         if (
@@ -18416,7 +18416,7 @@ def clearclipboard():
             descriptor = os.open(path, flags)
             current = os.fstat(descriptor)
             if not stat.S_ISREG(current.st_mode) or current.st_uid != os.geteuid():
-                raise PermissionError("unsafe clipboard object")
+                raise PermissionError("unsafe exchange object")
 
             # Best-effort in-place overwrite before unlink. This is not a
             # promise against flash translation layers, but avoids retaining
@@ -18488,7 +18488,7 @@ def clipset(cid, req):
 
         if not clienthasclipboardaccess(cid):
             raise PermissionError(
-                "clipboard access requires focused physical user activation")
+                "exchange access requires focused physical user activation")
 
         # Clipboard bytes travel inline. WindowServer must never become a
         # privileged pathname reader for a less-trusted application domain.
@@ -18499,7 +18499,7 @@ def clipset(cid, req):
             return
         data = text.encode("utf-8", errors="strict")
         if len(data) > 1024 * 1024:
-            raise ValueError("clipboard text exceeds 1 MiB")
+            raise ValueError("exchange text exceeds 1 MiB")
 
         # define destination
         dst = os.path.join(CLIPBASE, "current.txt")
@@ -18516,7 +18516,7 @@ def clipset(cid, req):
             while view:
                 written = os.write(outputfd, view)
                 if written <= 0:
-                    raise OSError("clipboard write made no progress")
+                    raise OSError("exchange write made no progress")
                 view = view[written:]
             os.fsync(outputfd)
         finally:
@@ -18558,7 +18558,7 @@ def clipget(cid, req):
 
         if not clienthasclipboardaccess(cid):
             raise PermissionError(
-                "clipboard access requires focused physical user activation")
+                "exchange access requires focused physical user activation")
 
         # if clipboard empty
         if not clipboard["path"] or not os.path.exists(clipboard["path"]):
@@ -18571,7 +18571,7 @@ def clipget(cid, req):
         try:
             info = os.fstat(descriptor)
             if not stat.S_ISREG(info.st_mode) or info.st_size > 1024 * 1024:
-                raise PermissionError("unsafe clipboard object")
+                raise PermissionError("unsafe exchange object")
             data = b""
             while len(data) <= 1024 * 1024:
                 chunk = os.read(descriptor, min(65536, 1024 * 1024 + 1 - len(data)))
@@ -18582,7 +18582,7 @@ def clipget(cid, req):
             os.close(descriptor)
 
         if len(data) > 1024 * 1024:
-            raise PermissionError("clipboard object is too large")
+            raise PermissionError("exchange object is too large")
 
         text = data.decode("utf-8", errors="strict")
         sendjson(cid, {

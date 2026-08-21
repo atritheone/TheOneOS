@@ -7762,13 +7762,13 @@ def viewdecode(source):
     os.makedirs(viewparent, mode=0o711, exist_ok=True)
 
     if os.path.islink(viewparent):
-        raise ValueError('image surface parent directory cannot be a symbolic link')
+        raise ValueError('image surface parent tier cannot be a symbolic link')
 
     os.chmod(viewparent, 0o711)
     os.makedirs(VIEWROOT, mode=0o711, exist_ok=True)
 
     if os.path.islink(VIEWROOT):
-        raise ValueError('image surface directory cannot be a symbolic link')
+        raise ValueError('image surface tier cannot be a symbolic link')
 
     os.chmod(VIEWROOT, 0o711)
     VIEWNEXT += 1
@@ -13489,7 +13489,7 @@ def architectdir(args=None):
         colour=TEXTCOLOUR)
     return {
         'ok': True,
-        'authorization': 'trusted application',
+        'authorization': 'trusted software',
         'message': 'protected actions request one-time authorisation.',
     }
 
@@ -13683,7 +13683,7 @@ def create(args):
         except FileNotFoundError:
 
             # directory for new file doesn't exist
-            guiprint(f'> directory to create in not found', colour=ERRORCOLOUR)
+            guiprint(f'> tier to create in not found', colour=ERRORCOLOUR)
             return
 
         except PermissionError:
@@ -15632,7 +15632,7 @@ def destroytier(args):
         except NotADirectoryError:
 
             # not a tier error
-            guiprint(f'> {name} is not a directory', colour=ERRORCOLOUR)
+            guiprint(f'> {name} is not a tier', colour=ERRORCOLOUR)
 
         except Exception as e:
 
@@ -19781,7 +19781,7 @@ def checksystem(args=None):
         WINDOWSOCKPATH,
         '/.ephemeral/inputserver/accept.sock',
         '/.ephemeral/audio/accept.sock',
-        '/.ephemeral/exchange.sock',
+        '/.ephemeral/exchange/control.sock',
     ]
 
     for path in paths:
@@ -19952,7 +19952,7 @@ def pythonstatus(args=None):
         ['release', str(core.get('release') or 'unrecorded')],
         ['version', str(core.get('version') or 'unknown')],
         ['abi', str(core.get('abi') or 'unknown')],
-        ['authorization', str(data.get('authorization') or 'trusted application')],
+        ['authorization', str(data.get('authorization') or 'trusted software')],
         ['health', str(data.get('health') or 'unknown')],
         ['transaction', str(data.get('generation') or 'base')],
         ['system modules', str(data.get('system_modules', 0))],

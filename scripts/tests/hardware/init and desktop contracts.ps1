@@ -279,6 +279,7 @@ foreach ($requiredText in @(
     'chmod 0700',
     '$ephemeral/expanse',
     'chmod 0711',
+    '$ephemeral/exchange',
     "python_management='/mnt/the one/software/python/pip'",
     "legacy_python_management='/mnt/the one/software/python/.t1pip'",
     '"$busybox" mv -- "$legacy_python_management" "$python_management"',

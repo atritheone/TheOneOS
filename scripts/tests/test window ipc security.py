@@ -186,7 +186,7 @@ def main():
         "target = desktopactiontarget(",
         "root, request.get('target')",
         "[DESKTOPACTIONWORKER, 'desktop-executable-worker', target]",
-        "desktop executable ownership or mode is unsafe",
+        "expanse executable ownership or mode is unsafe",
     )
 
     volume_probe = function_source(

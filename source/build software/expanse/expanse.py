@@ -5301,7 +5301,7 @@ def launchsoftware(soft):
 
             except Exception:
 
-                name = "app"
+                name = "software"
 
         env = dict(os.environ)
 
@@ -5346,7 +5346,7 @@ def launchsoftware(soft):
             )
             pid = int((result or {}).get("pid", 0))
             if pid <= 1:
-                raise PermissionError("Operations broker rejected the application launch")
+                raise PermissionError("Operations broker rejected the software launch")
 
         except PermissionError:
 
@@ -8931,7 +8931,7 @@ def desktopactionthread(operation, target, options):
     except Exception as error:
         response = {
             "status": "error",
-            "message": str(error).strip().lower() or "desktop action failed",
+            "message": str(error).strip().lower() or "expanse action failed",
         }
     DESKTOPACTIONRESULTS.put({
         "operation": operation,
@@ -8944,7 +8944,7 @@ def desktopactionthread(operation, target, options):
 def desktopstartfileaction(sock, operation, target, **options):
 
     if DESKTOPACTIONBUSY:
-        desktopmessage(sock, "desktop", "another desktop file action is still running")
+        desktopmessage(sock, "expanse", "another expanse file action is still running")
         return False
     target = desktopsecurepath(target)
     if target is None:
@@ -8970,9 +8970,9 @@ def desktopactionpump(sock):
         globals()["DESKTOPACTIONBUSY"] = False
         response = result.get("response") or {}
         if response.get("status") != "ok":
-            message = str(response.get("message") or "desktop action failed")
+            message = str(response.get("message") or "expanse action failed")
             log(f"desktop {result.get('operation')} failed {message}")
-            desktopmessage(sock, str(result.get("operation") or "desktop"), message)
+            desktopmessage(sock, str(result.get("operation") or "expanse"), message)
             continue
         paths = response.get("paths") if isinstance(response.get("paths"), list) else []
         clean = [desktopsecurepath(path) for path in paths]
@@ -9008,7 +9008,7 @@ def desktopclipboard(action, target):
     }
     ok, response = exsetfiles(payload, source="expanse")
     if not ok:
-        log(f"desktop clipboard update failed {response}")
+        log(f"desktop exchange update failed {response}")
     return bool(ok)
 
 
@@ -9016,7 +9016,7 @@ def desktoppaste(sock, target):
 
     ok, state = exget()
     if not ok or str((state or {}).get("type", "")) != "files":
-        desktopmessage(sock, "paste", "the clipboard does not contain files")
+        desktopmessage(sock, "paste", "exchange does not contain files")
         return False
     try:
         payload = json.loads(str(state.get("data", "")))
@@ -9025,7 +9025,7 @@ def desktoppaste(sock, target):
         if mode not in ("copy", "cut") or not isinstance(sources, list) or not sources:
             raise ValueError
     except Exception:
-        desktopmessage(sock, "paste", "the clipboard file list is invalid")
+        desktopmessage(sock, "paste", "the exchange file list is invalid")
         return False
     return desktopstartfileaction(
         sock, "paste", target, sources=sources, mode=mode)
@@ -9167,7 +9167,7 @@ def desktoplaunchprogram(program, target, *, environment=None, sock=None):
         "env": dict(environment or {}),
     })
     if not launched:
-        desktopmessage(sock, "open", "the selected application could not be opened")
+        desktopmessage(sock, "open", "the selected software could not be opened")
     return bool(launched)
 
 
@@ -9235,7 +9235,7 @@ def desktopopenitem(sock, target):
         return False
     return desktoptextdialog(
         sock, "openwith", target, "open with",
-        "enter the application path", "",
+        "enter the software path", "",
     )
 
 
@@ -9294,7 +9294,7 @@ def handledesktopdialog(sock, msg):
     elif action == "openwith":
         program = os.path.abspath(value)
         if not os.path.isfile(program):
-            desktopmessage(sock, "open with", "the application is not available")
+            desktopmessage(sock, "open with", "the software is not available")
             return
         extension = os.path.splitext(target.lower())[1]
         if extension:
@@ -9366,11 +9366,11 @@ def rundesktopcontextaction(sock, context, action):
         )
     elif action in ("copy", "cut"):
         if not desktopclipboard(action, target):
-            desktopmessage(sock, action, "the clipboard service is unavailable")
+            desktopmessage(sock, action, "exchange is unavailable")
     elif action == "copypath":
         ok, _response = exset(target, source="expanse")
         if not ok:
-            desktopmessage(sock, "copy as path", "the clipboard service is unavailable")
+            desktopmessage(sock, "copy as path", "exchange is unavailable")
     elif action == "paste" and os.path.isdir(target):
         desktoppaste(sock, target)
     elif action in ("delete", "destroy"):
@@ -9380,7 +9380,7 @@ def rundesktopcontextaction(sock, context, action):
     elif action == "openwith" and os.path.isfile(target):
         desktoptextdialog(
             sock, "openwith", target, "open with",
-            "enter the application path", desktoparrayassociation(
+            "enter the software path", desktoparrayassociation(
                 os.path.splitext(target.lower())[1]) or "",
         )
     elif action == "extract" and os.path.isfile(target):
@@ -16691,7 +16691,7 @@ def desktopworkerwithin(root, value, *, rootallowed=False, existing=False):
     except ValueError:
         contained = False
     if not contained or (not rootallowed and target == root):
-        raise PermissionError("desktop path escaped its tier")
+        raise PermissionError("expanse path escaped its tier")
     return target
 
 
@@ -16726,13 +16726,13 @@ def desktopworkerrejectsymlinks(path):
 
     state = os.lstat(path)
     if stat.S_ISLNK(state.st_mode):
-        raise PermissionError("symbolic links are not desktop items")
+        raise PermissionError("symbolic links are not expanse items")
     if not stat.S_ISDIR(state.st_mode):
         return
     for directory, directories, files in os.walk(path, followlinks=False):
         for name in (*directories, *files):
             if stat.S_ISLNK(os.lstat(os.path.join(directory, name)).st_mode):
-                raise PermissionError("symbolic links are not desktop items")
+                raise PermissionError("symbolic links are not expanse items")
 
 
 def desktopworkerflush(path):
@@ -16792,10 +16792,10 @@ def desktopworkercopyormove(root, request):
         not isinstance(sources, list) or
         not 0 < len(sources) <= DESKTOPWORKERMAXIMUMSOURCES
     ):
-        raise ValueError("invalid clipboard files")
+        raise ValueError("invalid exchange files")
     mode = str(request.get("mode", "copy")).strip().lower()
     if mode not in ("copy", "cut"):
-        raise ValueError("invalid clipboard mode")
+        raise ValueError("invalid exchange mode")
     output = []
     for rawsource in sources:
         source = desktopworkernormalisepath(rawsource)
@@ -16829,7 +16829,7 @@ def desktopworkercopyormove(root, request):
                     pass
             raise
     if not output:
-        raise FileNotFoundError("the clipboard files are unavailable")
+        raise FileNotFoundError("the exchange files are unavailable")
     return output
 
 
@@ -16952,10 +16952,10 @@ def desktopworkerextract(root, request):
 def desktopworkerperform(request):
 
     if not isinstance(request, dict):
-        raise ValueError("invalid desktop action")
+        raise ValueError("invalid expanse action")
     root = desktopworkernormalisepath(request.get("root"))
     if not os.path.isdir(root):
-        raise FileNotFoundError("the desktop tier is unavailable")
+        raise FileNotFoundError("the expanse tier is unavailable")
     operation = str(request.get("operation", "")).strip().lower()
     handlers = {
         "create": desktopworkercreate,
@@ -16969,7 +16969,7 @@ def desktopworkerperform(request):
     }
     handler = handlers.get(operation)
     if handler is None:
-        raise ValueError("unknown desktop action")
+        raise ValueError("unknown expanse action")
     return {
         "status": "ok",
         "operation": operation,
@@ -17023,14 +17023,14 @@ def desktopworkermain():
 
     raw = sys.stdin.buffer.read(DESKTOPWORKERMAXIMUMREQUEST + 1)
     if len(raw) > DESKTOPWORKERMAXIMUMREQUEST:
-        response = {"status": "error", "message": "desktop action is too large"}
+        response = {"status": "error", "message": "expanse action is too large"}
     else:
         try:
             response = desktopworkerperform(json.loads(raw.decode("utf-8")))
         except Exception as error:
             response = {
                 "status": "error",
-                "message": str(error).strip().lower() or "desktop action failed",
+                "message": str(error).strip().lower() or "expanse action failed",
             }
     sys.stdout.write(
         json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -17048,7 +17048,7 @@ def desktopexecutablemain(path):
         state.st_nlink != 1 or not state.st_mode & 0o111 or
         state.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
     ):
-        raise PermissionError("desktop executable ownership or mode is unsafe")
+        raise PermissionError("expanse executable ownership or mode is unsafe")
     name = os.path.basename(target) or target
     os.execvpe(target, [name], dict(os.environ))
     return 126

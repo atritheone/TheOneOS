@@ -2,7 +2,7 @@
 
 **The One OS** (T1OS) is an experimental operating system built almost entirely in Python on top of a 64-bit Linux kernel.
 
-The One OS is designed as a self-contained operating system rather than a conventional Linux distribution. It provides its own filesystem, shell, graphics stack, windowing system, system services, applications, and APIs.
+The One OS is designed as a self-contained operating system rather than a conventional Linux distribution. It provides its own filesystem, shell, graphics stack, windowing system, system services, software, and APIs.
 
 ## Design
 
@@ -22,14 +22,14 @@ Some of the core The One OS components include:
 - **brick** — the command shell.
 - **graphics** — the operating system's graphics and rendering API.
 - **windowserver** — manages graphical windows, input, focus, and display composition.
-- **operations** — manages running processes and system operations.
+- **operations** — manages running operations and system activity.
 - **expanse** — graphical file management and system navigation.
 - **exchange** — inter-component data exchange.
 - **architect** — filesystem and system structure services.
 
 ## Filesystem
 
-The One OS uses its own filesystem layout and does not provide applications with access to conventional Linux directories such as `/usr`, `/lib`, `/proc`, `/sys`, or `/dev`.
+The One OS uses its own filesystem layout and does not provide software with access to conventional Linux paths such as `/usr`, `/lib`, `/proc`, `/sys`, or `/dev`.
 
 The Linux kernel provides the low-level foundation, while The One OS defines the environment presented to the operating system and its software.
 

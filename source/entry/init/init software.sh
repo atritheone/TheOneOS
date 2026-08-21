@@ -62,6 +62,9 @@ mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs "/mnt/.ephemeral" || exec /bin/bu
 /bin/busybox mkdir -m 0711 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
 /bin/busybox chown 1000:1000 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
 /bin/busybox chmod 0711 "/mnt/.ephemeral/expanse" || exec /bin/busybox sh
+/bin/busybox mkdir -m 02710 "/mnt/.ephemeral/exchange" || exec /bin/busybox sh
+/bin/busybox chown 0:1000 "/mnt/.ephemeral/exchange" || exec /bin/busybox sh
+/bin/busybox chmod 02710 "/mnt/.ephemeral/exchange" || exec /bin/busybox sh
 /bin/busybox mkdir -m 01733 "/mnt/.ephemeral/network" || exec /bin/busybox sh
 /bin/busybox chown 0:0 "/mnt/.ephemeral/network" || exec /bin/busybox sh
 /bin/busybox chmod 01733 "/mnt/.ephemeral/network" || exec /bin/busybox sh

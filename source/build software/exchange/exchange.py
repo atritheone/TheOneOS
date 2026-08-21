@@ -3,7 +3,7 @@
 """
 exchange.py
 
-exchange is the clipboard for The One OS.
+exchange is the transfer service for The One OS.
 """
 
 
@@ -17,6 +17,7 @@ import socket
 import select
 import signal
 import hashlib
+import stat
 
 sys.path.insert(0, '/the one/build')
 
@@ -31,14 +32,14 @@ DEBUGEXCHANGE = False
 RUNNING=True
 
 # paths
-EPHROOT="/.ephemeral"
-SOCKPATH="/.ephemeral/exchange.sock"
-PIDPATH="/.ephemeral/exchange.pid"
-KEYPATH="/.ephemeral/exchange.key"
-STATEPATH="/.ephemeral/exchange.json"
+RUNTIMEROOT="/.ephemeral/exchange"
+SOCKPATH=RUNTIMEROOT + "/control.sock"
+PIDPATH=RUNTIMEROOT + "/process.pid"
+KEYPATH=RUNTIMEROOT + "/shutdown.key"
+STATEPATH=RUNTIMEROOT + "/state.json"
 LOGPATH="/the one/logs/exchange.py.log"
 
-# clipboard
+# exchange state
 MAXBYTES=1048576
 MAXMSG=1048576
 POLL=0.2
@@ -61,28 +62,26 @@ SHUTKEY=""
 ## functions
 
 # setup functions
-def ensurepath(path):
+def validateruntime():
 
     try:
 
-        # create directory if missing
-        os.makedirs(path, exist_ok=True)
+        status = os.lstat(RUNTIMEROOT)
 
-    except PermissionError:
+    except OSError as e:
 
-        # permission denied error
-        logline(f'permission denied to create {path}')
+        return False, f'exchange runtime is unavailable {e}'
 
-        return False
+    if not stat.S_ISDIR(status.st_mode):
+        return False, 'exchange runtime is not a tier'
 
-    except Exception as e:
+    if status.st_uid != 0 or status.st_gid != 1000:
+        return False, 'exchange runtime ownership is invalid'
 
-        # other errors
-        logline(f'error creating {path} {e}')
+    if stat.S_IMODE(status.st_mode) != 0o2710:
+        return False, 'exchange runtime permissions are invalid'
 
-        return False
-
-    return True
+    return True, ''
 
 
 def removestale(path):
@@ -215,6 +214,16 @@ def logline(text):
         f.flush()
 
         os.fsync(f.fileno())
+
+
+def logfailure(text):
+
+    # Startup failures must reach GODDESS even when verbose Exchange logging is
+    # disabled. GODDESS captures service stderr in the boot log archive.
+    try:
+        print(formatlog('exchange', text), file=sys.stderr, flush=True)
+    except Exception:
+        pass
 
 
 def nowsec():
@@ -714,11 +723,9 @@ def serveropen():
         # bind and listen
         srv.bind(SOCKPATH)
 
-        # GODDESS deliberately starts services under umask 0077. Exchange is
-        # a session broker, so publish only its socket to the desktop group;
-        # its state, PID, and shutdown key remain root-private.
-        os.chown(SOCKPATH, 0, 1000)
-
+        # The setgid runtime tier supplies group 1000 without granting Exchange
+        # CAP_CHOWN. Publish only the socket; all other runtime state remains
+        # root-private under GODDESS's service umask.
         os.chmod(SOCKPATH, 0o660)
 
         srv.listen(64)
@@ -1217,9 +1224,10 @@ def daemonrun():
 
     global SHUTKEY
 
-    ok=ensurepath(EPHROOT)
+    ok, runtimeerror=validateruntime()
 
     if not ok:
+        logfailure(runtimeerror)
         return 1
 
     ok=removestale(SOCKPATH)
@@ -1251,6 +1259,8 @@ def daemonrun():
 
     srv=serveropen()
     if srv is None:
+
+        logfailure(f'exchange could not open {SOCKPATH}')
 
         clearpid()
 

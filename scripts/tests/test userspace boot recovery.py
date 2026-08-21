@@ -78,8 +78,22 @@ def main():
 
     hardware_init = source('source/entry/init/init hardware.sh')
     software_init = source('source/entry/init/init software.sh')
-    require(hardware_init, 'nodev,nosuid,mode=1777', 'mkdir -m 01733 "$ephemeral/network"')
-    require(software_init, 'mode=1777,nosuid,nodev', 'mkdir -m 01733 "/mnt/.ephemeral/network"')
+    require(
+        hardware_init,
+        'nodev,nosuid,mode=1777',
+        'mkdir -m 02710 "$ephemeral/exchange"',
+        'chown 0:1000 "$ephemeral/exchange"',
+        'chmod 02710 "$ephemeral/exchange"',
+        'mkdir -m 01733 "$ephemeral/network"',
+    )
+    require(
+        software_init,
+        'mode=1777,nosuid,nodev',
+        'mkdir -m 02710 "/mnt/.ephemeral/exchange"',
+        'chown 0:1000 "/mnt/.ephemeral/exchange"',
+        'chmod 02710 "/mnt/.ephemeral/exchange"',
+        'mkdir -m 01733 "/mnt/.ephemeral/network"',
+    )
 
     goddess = source('source/build software/GODDESS/GODDESS.py')
     early = function(goddess, 'main')
@@ -283,7 +297,7 @@ def main():
     require(
         function(array, 'setfileclipboard'),
         'ok, response = exsetfiles(payload, source="array")',
-        'the clipboard service is unavailable',
+        'exchange is unavailable',
         'if not CLIPBOARDHAS:',
     )
     require(
@@ -301,10 +315,22 @@ def main():
     )
     exchange = source('source/build software/exchange/exchange.py')
     require(
-        function(exchange, 'serveropen'),
-        'os.chown(SOCKPATH, 0, 1000)',
+        exchange,
+        'RUNTIMEROOT="/.ephemeral/exchange"',
+        'SOCKPATH=RUNTIMEROOT + "/control.sock"',
+    )
+    require(
+        function(exchange, 'validateruntime'),
+        'stat.S_ISDIR(status.st_mode)',
+        'status.st_uid != 0 or status.st_gid != 1000',
+        'stat.S_IMODE(status.st_mode) != 0o2710',
+    )
+    exchange_serveropen = function(exchange, 'serveropen')
+    require(
+        exchange_serveropen,
         'os.chmod(SOCKPATH, 0o660)',
     )
+    assert 'os.chown(' not in exchange_serveropen
     brick = source('source/build software/brick/brick.py')
     require(function(brick, 'main'), 'if startupfile is not None:', 'run([str(startupfile)])')
     require(

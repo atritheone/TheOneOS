@@ -1890,14 +1890,15 @@ static int t1os_sb_mount(const char *dev_name, const struct path *path,
 	}
 	/* VirtualBox shared folders are transient external volumes.  Keep both
 	 * source names and mount targets to one safe component, require the exact
-	 * ownership/mode contract used by Guest Additions, and never allow files
-	 * from a host share to execute or carry device/set-id authority. */
+	 * desktop-user ownership/mode contract used by Guest Additions, and never
+	 * allow files from a host share to execute or carry device/set-id
+	 * authority. */
 	if (t1os_domain_is(T1OS_DOMAIN_VIRTUALBOX) &&
 	    dev_name && type && data &&
 	    t1os_safe_mount_component(dev_name) &&
 	    t1os_external_volume_target(target) &&
 	    !strcmp(type, "vboxsf") &&
-	    !strcmp((const char *)data, "uid=0,gid=0,dmode=0770,fmode=0660") &&
+	    !strcmp((const char *)data, "uid=1000,gid=1000,dmode=0770,fmode=0660") &&
 	    (flags & (MS_NOSUID | MS_NODEV | MS_NOEXEC)) ==
 		(MS_NOSUID | MS_NODEV | MS_NOEXEC) &&
 	    !(flags & ~volume_flags)) {

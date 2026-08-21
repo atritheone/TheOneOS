@@ -2349,7 +2349,7 @@ def savemaster():
             message = (
                 'master name and password changed.'
                 if namechanged and passwordchanged else
-                'master name changed. reopen apps to refresh user paths.'
+                'master name changed. reopen software to refresh user paths.'
                 if namechanged else
                 'master password changed.')
         setstatus(message, section='master')

@@ -247,10 +247,10 @@ def validateoutput(source, output):
     parent = os.path.dirname(output)
 
     if not os.path.isdir(parent) or os.path.islink(parent):
-        raise ValueError('decoded image directory is unavailable')
+        raise ValueError('decoded image tier is unavailable')
 
     if not within(os.path.realpath(parent), os.path.realpath(EPHEMERAL)):
-        raise ValueError('decoded image directory is outside /.ephemeral')
+        raise ValueError('decoded image tier is outside /.ephemeral')
 
     if os.path.lexists(output) and os.path.islink(output):
         raise ValueError('decoded image output cannot be a symbolic link')
@@ -807,13 +807,13 @@ def makedir():
     os.makedirs(viewparent, mode=0o711, exist_ok=True)
 
     if os.path.islink(viewparent):
-        raise ValueError('image surface parent directory cannot be a symbolic link')
+        raise ValueError('image surface parent tier cannot be a symbolic link')
 
     os.chmod(viewparent, 0o711)
     os.makedirs(VIEWROOT, mode=0o711, exist_ok=True)
 
     if os.path.islink(VIEWROOT):
-        raise ValueError('image surface directory cannot be a symbolic link')
+        raise ValueError('image surface tier cannot be a symbolic link')
 
     # Permit the capability-reduced WindowServer to traverse to managed image
     # surfaces while keeping directory listing and mutation private.

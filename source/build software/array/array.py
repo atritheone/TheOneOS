@@ -976,14 +976,14 @@ def setfileclipboard(payload):
     ok, response = exsetfiles(payload, source="array")
 
     if not ok:
-        log(f"clipboard file update failed {response}")
-        setstatus("the clipboard service is unavailable", error=True)
+        log(f"exchange file update failed {response}")
+        setstatus("exchange is unavailable", error=True)
         return False
 
     refreshclipboard()
 
     if not CLIPBOARDHAS:
-        setstatus("the clipboard did not accept these files", error=True)
+        setstatus("exchange did not accept these files", error=True)
         return False
 
     return True
@@ -3233,7 +3233,7 @@ def setassociation(target, program):
 
     extension = os.path.splitext(str(target))[1].lower()
     if not extension or not os.path.isfile(program):
-        setstatus("application is not available", error=True)
+        setstatus("software is not available", error=True)
         return False
     associations = SETTINGS.get("associations")
     if not isinstance(associations, dict):
@@ -3257,7 +3257,7 @@ def launchassociation(target, program):
         )
         return True
     except Exception:
-        setstatus("could not open application", error=True)
+        setstatus("could not open software", error=True)
         return False
 
 
@@ -10009,7 +10009,7 @@ def opsrun(path, args, name, _log, user, mode, await_window=False, environment=N
     try:
 
         if resp.get("status") != "ok":
-            message = str(resp.get('message') or 'application launch was denied')
+            message = str(resp.get('message') or 'software launch was denied')
             setstatus(message, error=True)
             return None
 
@@ -15482,7 +15482,7 @@ def runaction(actionid):
         if target:
             extension = os.path.splitext(target)[1].lower()
             initial = str((SETTINGS.get("associations") or {}).get(extension, ""))
-            opentextdialog("open with", "enter the application path", initial, "openwith", target, maxlength=4096)
+            opentextdialog("open with", "enter the software path", initial, "openwith", target, maxlength=4096)
         return
 
     if actionid == "createlink":
@@ -16727,7 +16727,7 @@ def openitem(path):
 
         return
 
-    opentextdialog("open with", "enter the application path", "", "openwith", p, maxlength=4096)
+    opentextdialog("open with", "enter the software path", "", "openwith", p, maxlength=4096)
 
 
 def openitemheadlesssupported(path):
