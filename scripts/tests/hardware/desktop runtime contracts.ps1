@@ -938,6 +938,10 @@ foreach ($requiredText in @(
     'A previous boot is never',
     'explicit command-line framebuffer graphics recovery',
     "mountoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'",
+    'self.probevolumeaccess(target, writable=not readonly)',
+    'def probevolumeaccess(target, writable):',
+    'os.setuid(1000)',
+    'access_probe=passed',
     'module parameter verified {module}.{name}={actual}',
     'modprobe timed out after',
     "'RESET_GRAPHICS'",
@@ -1000,6 +1004,9 @@ foreach ($requiredText in @(
     if (-not $driverServerText.Contains($requiredText)) {
         throw "Driver Server is missing its authenticated graphics/NVIDIA contract: $requiredText"
     }
+}
+if ($driverServerText.Contains('attempts.append(baseflags | MS_RDONLY)')) {
+    throw 'A safely writable external volume may still silently fall back to read-only.'
 }
 foreach ($forbiddenText in @(
     "return ['nouveau', 'nvidia']",

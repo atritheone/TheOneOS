@@ -1469,7 +1469,7 @@ if [ "$secure_boot" = 1 ]; then
         root_identity="root=UUID=$root_uuid"
     fi
     cmdline="init=/init $root_identity rootwait rw rootfstype=ntfs3 t1os.rootwait=60 $roothealth_cmdline $recovery_identity t1os.graphics=$secure_graphics t1os.quiet=1 nvidia_drm.modeset=1 nvidia_drm.fbdev=1 nouveau.config=NvGspFw=0 vt.global_cursor_default=0 console=ttyS0,115200n8 quiet loglevel=0 logo.nologo"
-    recovery_cmdline="init=/init $root_identity rootwait ro rootfstype=ntfs3 t1os.rootwait=60 $roothealth_cmdline $recovery_identity t1os.graphics=framebuffer t1os.recovery=1 module_blacklist=amdgpu,radeon,nouveau,nvidia,nvidia_modeset,nvidia_drm,nvidia_uvm,nvidia_peermem,i915,xe,ast,mgag200,qxl,bochs_drm,vmwgfx,virtio_gpu console=tty0 console=ttyS0,115200n8 loglevel=7"
+    recovery_cmdline="init=/init $root_identity rootwait ro rootfstype=ntfs3 t1os.rootwait=60 $roothealth_cmdline $recovery_identity t1os.graphics=framebuffer t1os.recovery=1 module_blacklist=amdgpu,radeon,nouveau,nvidia,nvidia_modeset,nvidia_drm,nvidia_uvm,nvidia_peermem,i915,xe,ast,mgag200,qxl,bochs_drm,vmwgfx,virtio_gpu vt.global_cursor_default=0 console=ttyS0,115200n8 quiet loglevel=0 logo.nologo"
 
     ukify build \
         --linux="$kernel" \

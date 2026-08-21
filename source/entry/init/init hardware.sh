@@ -343,9 +343,12 @@ mount_pseudo_filesystems() {
         rescue 'I could not prepare ordinary-user ICMP echo support.'
     ping_group_values=$("$busybox" cat /proc/sys/net/ipv4/ping_group_range) ||
         rescue 'I could not verify ordinary-user ICMP echo support.'
+    # The kernel exposes this setting as exactly two whitespace-delimited IDs.
+    # shellcheck disable=SC2086
     set -- $ping_group_values
-    [ "$#" = 2 ] && [ "$1" = 1000 ] && [ "$2" = 1000 ] ||
+    if [ "$#" != 2 ] || [ "$1" != 1000 ] || [ "$2" != 1000 ]; then
         rescue 'The ordinary-user ICMP echo boundary did not remain active.'
+    fi
     unset ping_group_values
 
     # Populate early device nodes. Persistent module discovery is owned by the
@@ -1872,6 +1875,11 @@ boot_status 'I have started the initial system and am preparing the root drive.'
 if angel_mount_esp; then
     if angel_read_journal || angel_read_request; then
         recovery=1
+    else
+        # GRUB used this one-shot marker to skip its menu after a completed
+        # recovery. Consume it before normal userspace starts so later manual
+        # boots retain the ordinary boot menu.
+        angel_clear_normal_boot_request || true
     fi
     angel_read_shutdown_health_request || true
     if [ "$recovery" != 1 ] && [ -z "$angel_shutdown_health_action" ]; then
@@ -1981,6 +1989,9 @@ export PYTHONHASHSEED=0
 export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
 export PYTHONSAFEPATH=1
+# Hardware power transitions must restart through Angel so RootHealth can
+# inspect the unmounted NTFS root before completing poweroff or restart.
+export T1OS_POWER_HANDOFF=roothealth
 unset PYTHONHOME PYTHONPATH
 
 case "$graphics_mode" in

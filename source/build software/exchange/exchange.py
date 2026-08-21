@@ -714,6 +714,13 @@ def serveropen():
         # bind and listen
         srv.bind(SOCKPATH)
 
+        # GODDESS deliberately starts services under umask 0077. Exchange is
+        # a session broker, so publish only its socket to the desktop group;
+        # its state, PID, and shutdown key remain root-private.
+        os.chown(SOCKPATH, 0, 1000)
+
+        os.chmod(SOCKPATH, 0o660)
+
         srv.listen(64)
 
     except PermissionError:

@@ -190,6 +190,7 @@ def main():
     brick_path = root / "source/build software/brick/brick.py"
     windowserver_path = root / "source/build software/windows/windowserver.py"
     init_hardware_path = root / "source/entry/init/init hardware.sh"
+    init_software_path = root / "source/entry/init/init software.sh"
 
     sources = {
         "animation": animation_path.read_text(encoding="utf-8"),
@@ -199,6 +200,7 @@ def main():
         "brick": brick_path.read_text(encoding="utf-8"),
         "windowserver": windowserver_path.read_text(encoding="utf-8"),
         "init_hardware": init_hardware_path.read_text(encoding="utf-8"),
+        "init_software": init_software_path.read_text(encoding="utf-8"),
     }
     trees = {
         name: ast.parse(source, filename=str({
@@ -210,7 +212,7 @@ def main():
             "windowserver": windowserver_path,
         }[name]))
         for name, source in sources.items()
-        if name != "init_hardware"
+        if name not in ("init_hardware", "init_software")
     }
 
     testconsoleoutputrecovery(sources["goddess"], trees["goddess"])
@@ -226,6 +228,7 @@ def main():
                 "stopphase",
                 "stopstragglers",
                 "armshutdownhealthgate",
+                "powerhandoffaction",
                 "shutdownsequence",
                 "kernelpower",
                 "main",
@@ -287,6 +290,48 @@ def main():
     require(sources["brick"], "requestpower('restart')", "Brick restart")
     require(sources["brick"], "while RUNNING:", "Brick accepted-request hold")
 
+    start_click_node = function(trees["expanse"], "handlestartmenuclick")
+    start_click_module = ast.Module(body=[start_click_node], type_ignores=[])
+    ast.fix_missing_locations(start_click_module)
+    selected_power_actions = []
+    start_click_namespace = {
+        "STARTID": 41,
+        "POWERITEMRECT": [0, 0, 10, 10],
+        "POWERMENUOPEN": True,
+        "POWERMENUITEMS": [],
+        "logout": lambda: selected_power_actions.append("logout"),
+        "shutdown": lambda: selected_power_actions.append("poweroff"),
+        "restart": lambda: selected_power_actions.append("restart"),
+        "paintstartmenu": lambda sock: None,
+        "log": lambda message: None,
+    }
+    exec(
+        compile(start_click_module, "<start-power-menu-test>", "exec"),
+        start_click_namespace,
+    )
+    start_click = start_click_namespace["handlestartmenuclick"]
+    for index, (menu_action, expected) in enumerate((
+        ("logout", "logout"),
+        ("shutdown", "poweroff"),
+        ("restart", "restart"),
+    )):
+        start_click_namespace["POWERMENUOPEN"] = True
+        start_click_namespace["POWERMENUITEMS"] = [{
+            "action": menu_action,
+            "rect": [20, index * 20, 100, 20],
+        }]
+        start_click(None, {
+            "winid": 41,
+            "state": "up",
+            "x": 30,
+            "y": index * 20 + 10,
+        })
+        if selected_power_actions[-1:] != [expected]:
+            raise RuntimeError(
+                f"Start power menu did not route {menu_action} to {expected}"
+            )
+    assert selected_power_actions == ["logout", "poweroff", "restart"]
+
     goddess_main = function(trees["goddess"], "main")
     early_returns = [
         node.lineno
@@ -327,10 +372,10 @@ def main():
             "stopstragglers(",
             "stopphase('display'",
             "stopanimationprocess(animation)",
-            "armshutdownhealthgate(action)",
+            "powerhandoffaction(action)",
             "unmountpath(EPHEMERALTIER)",
             "remountrootreadonly()",
-            "kernelpower('restart')",
+            "kernelpower(handoffaction)",
         ),
     )
 
@@ -348,8 +393,46 @@ def main():
         "'state=pending\\n'",
         "os.replace(temporary, SHUTDOWNHEALTHREQUEST)",
         "I armed the unmounted RootHealth shutdown gate",
+        "POWERHANDOFFMODES = frozenset(('direct', 'roothealth'))",
+        "os.environ.get('T1OS_POWER_HANDOFF', 'roothealth')",
     ):
         require(sources["goddess"], text, "GODDESS shutdown coordinator")
+
+    require(
+        sources["init_software"],
+        "export T1OS_POWER_HANDOFF=direct",
+        "exec switch_root /mnt",
+    )
+    require(
+        sources["init_hardware"],
+        "export T1OS_POWER_HANDOFF=roothealth",
+        "roothealth-shutdown-request",
+    )
+
+    handoff_node = function(trees["goddess"], "powerhandoffaction")
+    handoff_module = ast.Module(body=[handoff_node], type_ignores=[])
+    ast.fix_missing_locations(handoff_module)
+    armed = []
+    handoff_namespace = {
+        "VALIDPOWERACTIONS": frozenset(("poweroff", "restart")),
+        "POWERHANDOFFMODES": frozenset(("direct", "roothealth")),
+        "POWERHANDOFF": "roothealth",
+        "armshutdownhealthgate": lambda action: armed.append(action),
+    }
+    exec(compile(handoff_module, "<power-handoff-test>", "exec"), handoff_namespace)
+    handoff = handoff_namespace["powerhandoffaction"]
+    assert handoff("poweroff", "direct") == "poweroff"
+    assert handoff("restart", "direct") == "restart"
+    assert handoff("poweroff", "roothealth") == "restart"
+    assert handoff("restart", "roothealth") == "restart"
+    assert armed == ["poweroff", "restart"]
+    for action, mode in (("sleep", "direct"), ("poweroff", "unknown")):
+        try:
+            handoff(action, mode)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("power handoff accepted an unsupported contract")
 
     restart_gate = sources["init_hardware"][
         sources["init_hardware"].index(

@@ -66,6 +66,9 @@ attachserialconsole()
 SYSTEMROOT = os.environ.get('T1OS_SYSTEM_ROOT', '/the one')
 POWERCONTROLSOCKET = '/.ephemeral/power/control.sock'
 VALIDPOWERACTIONS = frozenset(('poweroff', 'restart'))
+POWERHANDOFFMODES = frozenset(('direct', 'roothealth'))
+POWERHANDOFF = str(
+    os.environ.get('T1OS_POWER_HANDOFF', 'roothealth')).strip().lower()
 VALIDRECOVERYACTIONS = frozenset(('python', 'build', 'reset', 'reinstall'))
 DESTRUCTIVERECOVERYACTIONS = frozenset(('reset', 'reinstall'))
 RECOVERYBOOTMOUNT = '/.ephemeral/angel-boot'
@@ -1638,7 +1641,7 @@ def kernelcommandlineoption(option):
 
 def graphicsaccelerationrequired():
 
-    """Return true for every ordinary boot; CPU graphics must be explicit."""
+    """Return true when an ordinary boot must first try native acceleration."""
 
     requested = str(os.environ.get('T1OS_GRAPHICS', '')).strip().lower()
     return not (
@@ -6565,6 +6568,22 @@ def kernelpower(action):
     raise RuntimeError(f'kernel {action} returned unexpectedly')
 
 
+def powerhandoffaction(action, mode=None):
+
+    """Return the kernel action for this init environment's storage contract."""
+
+    action = str(action or '').strip().lower()
+    selected = POWERHANDOFF if mode is None else str(mode).strip().lower()
+    if action not in VALIDPOWERACTIONS:
+        raise ValueError('unsupported power action')
+    if selected not in POWERHANDOFFMODES:
+        raise ValueError('unsupported power handoff mode')
+    if selected == 'direct':
+        return action
+    armshutdownhealthgate(action)
+    return 'restart'
+
+
 def shutdownsequence(action, presentation=None):
 
     global SYSTEMSTATE
@@ -6635,19 +6654,25 @@ def shutdownsequence(action, presentation=None):
     except Exception as error:
         print(f'I could not complete the final storage synchronization. {error}', flush=True)
 
+    handoffaction = 'restart'
     try:
-        armshutdownhealthgate(action)
-        print(
-            f'I armed the unmounted RootHealth shutdown gate for {action}.',
-            flush=True,
-        )
+        handoffaction = powerhandoffaction(action)
+        if POWERHANDOFF == 'roothealth':
+            print(
+                f'I armed the unmounted RootHealth shutdown gate for {action}.',
+                flush=True,
+            )
+        else:
+            print(
+                f'I prepared the software runtime for a direct {action}.',
+                flush=True,
+            )
     except Exception as error:
         print(
-            'I could not arm the shutdown health gate. I will restart into '
-            f'normal boot admission instead of powering off unsafely. {error}',
+            'I could not prepare the requested power handoff. I will restart '
+            f'into normal boot admission instead of powering off unsafely. {error}',
             flush=True,
         )
-        action = 'restart'
 
     unmountpath(TERMINFOBASE)
     unmountpath(RECOVERYBOOTMOUNT)
@@ -6658,7 +6683,7 @@ def shutdownsequence(action, presentation=None):
     SYSTEMSTATE = 'kernel handoff'
 
     try:
-        kernelpower('restart')
+        kernelpower(handoffaction)
     except BaseException as error:
         SYSTEMSTATE = 'kernel handoff failed'
         print(
@@ -7235,14 +7260,15 @@ def main():
 
     # Reaching a protocol socket is not the boot barrier. Keep replacing the
     # display owner until a current accelerated WindowServer proves a
-    # lock-screen KMS presentation. CPU-rendered backends are diagnostics for
-    # an explicitly requested recovery boot, never an automatic login path.
+    # lock-screen KMS presentation or proves acceleration unavailable. A
+    # CPU-rendered KMS owner may then preserve the bound DRM scanout path;
+    # independent firmware framebuffer login remains an explicit recovery.
     while True:
 
-        # CPU-rendered backends may be selected only by an explicit boot
-        # option. Automatic recovery remains within the native GPU path and
-        # cannot carry a normal boot into login on software rendering.
-        if graphicsaccelerationrequired() and graphicsbackend != 'opengl':
+        # The independent firmware framebuffer backend may be selected only
+        # by an explicit boot option. KMS-framebuffer is a trusted same-boot
+        # fallback selected here only after the native GPU path was tried.
+        if graphicsaccelerationrequired() and graphicsbackend == 'framebuffer':
             recordgraphicsrecovery(
                 'opengl',
                 max(1, acceleratedattempts),

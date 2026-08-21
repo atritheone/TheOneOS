@@ -971,6 +971,24 @@ def refreshclipboard():
     CLIPBOARDHAS = True
 
 
+def setfileclipboard(payload):
+
+    ok, response = exsetfiles(payload, source="array")
+
+    if not ok:
+        log(f"clipboard file update failed {response}")
+        setstatus("the clipboard service is unavailable", error=True)
+        return False
+
+    refreshclipboard()
+
+    if not CLIPBOARDHAS:
+        setstatus("the clipboard did not accept these files", error=True)
+        return False
+
+    return True
+
+
 # persistent explorer settings and numeric-drive locations
 def defaultsettings():
 
@@ -1109,6 +1127,8 @@ def loadvolumemetadata():
             "label": str(entry.get("label") or "").strip(),
             "uuid": str(entry.get("uuid") or "").strip(),
             "filesystem": str(entry.get("filesystem") or "").strip(),
+            "source": str(entry.get("source") or "").strip(),
+            "device": str(entry.get("device") or "").strip(),
             "read_only": bool(entry.get("read_only", False)),
             "removable": bool(entry.get("removable", True)),
         }
@@ -1181,6 +1201,9 @@ def loaddrives(force=False):
                 "removable": bool(metadata.get(root, {}).get("removable", entry.get("removable", True))),
                 "read_only": bool(metadata.get(root, {}).get("read_only", False)),
                 "filesystem": str(metadata.get(root, {}).get("filesystem", "")),
+                "uuid": str(metadata.get(root, {}).get("uuid", "")),
+                "source": str(metadata.get(root, {}).get("source", "")),
+                "device": str(metadata.get(root, {}).get("device", "")),
             }
             usedroots.add(root)
 
@@ -1235,6 +1258,9 @@ def loaddrives(force=False):
             "removable": bool(metadata.get(mount, {}).get("removable", True)),
             "read_only": bool(metadata.get(mount, {}).get("read_only", False)),
             "filesystem": str(metadata.get(mount, {}).get("filesystem", "")),
+            "uuid": str(metadata.get(mount, {}).get("uuid", "")),
+            "source": str(metadata.get(mount, {}).get("source", "")),
+            "device": str(metadata.get(mount, {}).get("device", "")),
         }
         usedroots.add(mount)
         number += 1
@@ -1242,6 +1268,92 @@ def loaddrives(force=False):
     DRIVES = found
     DRIVELASTSCAN = now
     return old != DRIVES
+
+
+def drivemountinformation(root):
+
+    requested = _physicalnormalize(root)
+    try:
+        with open(
+            "/the one/drivers/processes/self/mounts",
+            "r",
+            encoding="utf-8",
+            errors="replace",
+        ) as stream:
+            for line in stream:
+                fields = line.split()
+                if len(fields) < 4:
+                    continue
+                target = _physicalnormalize(fields[1].replace("\\040", " "))
+                if target != requested:
+                    continue
+                return {
+                    "source": fields[0].replace("\\040", " "),
+                    "filesystem": fields[2],
+                    "read_only": "ro" in fields[3].split(","),
+                }
+    except OSError:
+        pass
+    return {}
+
+
+def drivespace(root):
+
+    try:
+        state = os.statvfs(root)
+        blocksize = int(state.f_frsize or state.f_bsize)
+        capacity = int(state.f_blocks) * blocksize
+        available = int(state.f_bavail) * blocksize
+        return capacity, available
+    except (OSError, TypeError, ValueError):
+        return None, None
+
+
+def drivepropertyrows(drive):
+
+    root = _physicalnormalize(drive.get("root", "/"))
+    mounted = drivemountinformation(root)
+    capacity, available = drivespace(root)
+    used = None
+    if capacity is not None and available is not None:
+        used = max(0, capacity - available)
+
+    def sizevalue(value):
+        return formatfilesize(value) if value is not None else "unavailable"
+
+    number = int(drive.get("number", 1))
+    return [
+        ("name", str(drive.get("label") or f"drive {number}")),
+        ("numeric drive", str(number)),
+        ("location", f"{number}/"),
+        ("capacity", sizevalue(capacity)),
+        ("used", sizevalue(used)),
+        ("available", sizevalue(available)),
+        (
+            "filesystem",
+            str(drive.get("filesystem") or mounted.get("filesystem") or "unknown"),
+        ),
+        (
+            "source",
+            str(drive.get("source") or mounted.get("source") or "managed by t1os"),
+        ),
+        ("device", str(drive.get("device") or "unavailable")),
+        ("uuid", str(drive.get("uuid") or "unavailable")),
+        ("online", "yes" if os.path.isdir(root) else "no"),
+        ("removable", "yes" if drive.get("removable") else "no"),
+        (
+            "read only",
+            "yes" if drive.get(
+                "read_only", mounted.get("read_only", False)) else "no",
+        ),
+    ]
+
+
+def selectedpropertiesdrive():
+
+    if SELECTED is not None or SIDEBARSELECTEDDRIVE is None:
+        return None
+    return DRIVES.get(int(SIDEBARSELECTEDDRIVE))
 
 
 def driveforpath(path):
@@ -11454,12 +11566,38 @@ def drawsidepane():
     drawline(x, y, x, y + h, COLOURMUTED)
 
     drawtextttf(x + PAD, y + PAD, "properties", COLOURTEXT, FONTSIZEROW, FONT)
+    SIDEPROPERTIESCONTROLS = {}
+
+    drive = selectedpropertiesdrive()
+    if drive is not None:
+        SIDEPROPERTIESPATH = None
+        SIDEPROPERTIESDROPDOWN = False
+        SIDEPROPERTIESDROPDOWNHOVER = None
+        liney = y + PAD + ROWH
+        maxw = PROPERTIESW - (PAD * 2)
+        bottom = y + h - PAD
+        for label, value in drivepropertyrows(drive):
+            text = f"{label}  {value}"
+            wrapped = wrapconfirmtext(text, maxw, FONTSIZESTATUS, FONT)
+            for line in wrapped:
+                if liney + FONTSIZESTATUS >= bottom:
+                    return
+                drawtextttf(
+                    x + PAD,
+                    liney,
+                    line,
+                    COLOURMUTED,
+                    FONTSIZESTATUS,
+                    FONT,
+                )
+                liney += FONTSIZESTATUS + 5
+        return
+
     item = None
     if SELECTED:
         item = next((entry for entry in TREE if entry.get("path") == SELECTED), None)
         if item is None and os.path.exists(SELECTED):
             item = enrichitem(os.path.basename(SELECTED), SELECTED)
-    SIDEPROPERTIESCONTROLS = {}
     if item is None:
         SIDEPROPERTIESPATH = None
         SIDEPROPERTIESDROPDOWN = False
@@ -15822,9 +15960,8 @@ def copyitem(path):
         "ts": nowms()
     }
 
-    exsetfiles(payload, source="array")
-
-    refreshclipboard()
+    if not setfileclipboard(payload):
+        return
 
     buildactions()
 
@@ -15847,9 +15984,8 @@ def cutitem(path):
         "ts": nowms()
     }
 
-    exsetfiles(payload, source="array")
-
-    refreshclipboard()
+    if not setfileclipboard(payload):
+        return
 
     buildactions()
 
@@ -16136,9 +16272,8 @@ def copyitems(paths):
         "ts": nowms()
     }
 
-    exsetfiles(payload, source="array")
-
-    refreshclipboard()
+    if not setfileclipboard(payload):
+        return
 
     buildactions()
 
@@ -16156,8 +16291,6 @@ def cutitems(paths):
 
     scrolltopath(paths[0])
 
-    CUTSET = set([normalisepath(p) for p in paths])
-
     payload = {
         "mode": "cut",
         "paths": [normalisepath(p) for p in paths],
@@ -16165,9 +16298,10 @@ def cutitems(paths):
         "ts": nowms()
     }
 
-    exsetfiles(payload, source="array")
+    if not setfileclipboard(payload):
+        return
 
-    refreshclipboard()
+    CUTSET = set([normalisepath(p) for p in paths])
 
     buildactions()
 
@@ -16722,6 +16856,47 @@ def graphicsdiagnostic():
                 or "/volumes" in DRIVESCANROOTS
             ):
                 raise RuntimeError("legacy public drive roots are still active")
+
+            savedselected = SELECTED
+            savedselecteddrive = SIDEBARSELECTEDDRIVE
+            try:
+                state["SELECTED"] = None
+                state["SIDEBARSELECTEDDRIVE"] = 2
+                if selectedpropertiesdrive() is not DRIVES[2]:
+                    raise RuntimeError(
+                        "drive selection did not reach the properties pane")
+                state["SELECTED"] = "/diagnostic/selected.txt"
+                if selectedpropertiesdrive() is not None:
+                    raise RuntimeError(
+                        "drive properties hid the selected file properties")
+            finally:
+                state["SELECTED"] = savedselected
+                state["SIDEBARSELECTEDDRIVE"] = savedselecteddrive
+
+            driveproperties = dict(drivepropertyrows({
+                **DRIVES[2],
+                "root": "/",
+                "filesystem": "diagnosticfs",
+                "source": "/the one/drivers/nodes/diagnostic",
+                "device": "diagnostic",
+                "uuid": "diagnostic-uuid",
+                "read_only": True,
+            }))
+            requiredproperties = {
+                "name", "numeric drive", "location", "capacity", "used",
+                "available", "filesystem", "source", "device", "uuid",
+                "online", "removable", "read only",
+            }
+            if (
+                not requiredproperties.issubset(driveproperties)
+                or driveproperties["capacity"] == "unavailable"
+                or driveproperties["available"] == "unavailable"
+                or driveproperties["filesystem"] != "diagnosticfs"
+                or driveproperties["read only"] != "yes"
+            ):
+                raise RuntimeError("drive properties are incomplete")
+            result["checks"]["drive_properties_pane"] = sorted(
+                requiredproperties)
             result["checks"]["virtualbox_shared_folder_drive_sidebar"] = {
                 "number": 2,
                 "location": "2/",

@@ -203,8 +203,8 @@ if ($backgroundBytes.Length -lt 8 -or
 }
 
 foreach ($template in @(
-    [pscustomobject]@{ Path = $grubScript; Default = 't1os-boot'; RootToken = '@T1OS_ROOT_UUID@' },
-    [pscustomobject]@{ Path = $encryptedGrubScript; Default = 't1os-encrypted-boot'; RootToken = '@T1OS_LUKS_UUID@' }
+    [pscustomobject]@{ Path = $grubScript; Default = 't1os-boot'; Recovery = 't1os-recovery'; RootToken = '@T1OS_ROOT_UUID@' },
+    [pscustomobject]@{ Path = $encryptedGrubScript; Default = 't1os-encrypted-boot'; Recovery = 't1os-encrypted-recovery'; RootToken = '@T1OS_LUKS_UUID@' }
 )) {
     $grubText = Get-Content -LiteralPath $template.Path -Raw
     $menuTitles = @(
@@ -218,6 +218,12 @@ foreach ($template in @(
         'set timeout_style=menu',
         'set timeout=5',
         "set default=$($template.Default)",
+        '/T1OS/recovery-request',
+        '/T1OS/recovery-state',
+        '/T1OS/recovery-complete',
+        "set default=$($template.Recovery)",
+        'set timeout_style=hidden',
+        'set timeout=0',
         'set gfxmode=auto',
         'set gfxpayload=keep',
         'insmod png',
@@ -270,6 +276,27 @@ foreach ($template in @(
         -not $safeMatch.Value.Contains('t1os.graphics=framebuffer') -or
         -not $safeMatch.Value.Contains('module_blacklist=amdgpu,radeon,nouveau')) {
         throw "Safe mode does not preserve an independent firmware framebuffer: $($template.Path)"
+    }
+    $recoveryMatch = [regex]::Match($grubText, '(?ms)^menuentry "recovery".*?^}')
+    if (-not $recoveryMatch.Success) {
+        throw "The hardware GRUB template has no recovery entry: $($template.Path)"
+    }
+    foreach ($requiredText in @(
+        't1os.graphics=cpu',
+        't1os.recovery=1',
+        'console=ttyS0,115200n8',
+        'quiet',
+        'loglevel=0',
+        'logo.nologo'
+    )) {
+        if (-not $recoveryMatch.Value.Contains($requiredText)) {
+            throw "The recovery entry does not isolate Angel from kernel output: $requiredText"
+        }
+    }
+    foreach ($forbiddenText in @('console=tty0', 'loglevel=7')) {
+        if ($recoveryMatch.Value.Contains($forbiddenText)) {
+            throw "The recovery entry mixes kernel output into Angel: $forbiddenText"
+        }
     }
     if ($grubText -match '(?im)^\s*set\s+gfxmode\s*=\s*(?!auto\s*$)\S+') {
         throw "The hardware GRUB template contains a fixed firmware graphics mode: $($template.Path)"

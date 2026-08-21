@@ -356,6 +356,11 @@ TASKMENUCONTEXT = None
 TASKMENUTASKBAR = False
 TASKMENUDESKTOP = None
 TASKMENUDESKTOPVIEW = False
+TASKMENUDESKTOPMAINX = 0
+TASKMENUDESKTOPMAINW = 0
+TASKMENUDESKTOPVIEWX = None
+TASKMENUDESKTOPVIEWW = 0
+TASKMENUDESKTOPHOVERORIGIN = None
 TASKMENUITEMRECTS = []
 TASKMENUPENDINGGROUP = None
 TASKMENUPENDINGANCHOR = None
@@ -7911,31 +7916,33 @@ def searchcontextmenuitems(result):
     return items
 
 
-def desktopcontextmenuitems(context):
+def desktopviewcontextmenuitems():
 
-    if TASKMENUDESKTOPVIEW:
-        return [
-            {
-                "label": "show expanse",
-                "action": "desktop-show",
-                "checked": bool(DESKTOPSHOW),
-            },
-            {
-                "label": "large",
-                "action": "desktop-size-large",
-                "checked": DESKTOPITEMSIZE == "large",
-            },
-            {
-                "label": "medium",
-                "action": "desktop-size-medium",
-                "checked": DESKTOPITEMSIZE == "medium",
-            },
-            {
-                "label": "small",
-                "action": "desktop-size-small",
-                "checked": DESKTOPITEMSIZE == "small",
-            },
-        ]
+    return [
+        {
+            "label": "show expanse content",
+            "action": "desktop-show",
+            "checked": bool(DESKTOPSHOW),
+        },
+        {
+            "label": "large",
+            "action": "desktop-size-large",
+            "checked": DESKTOPITEMSIZE == "large",
+        },
+        {
+            "label": "medium",
+            "action": "desktop-size-medium",
+            "checked": DESKTOPITEMSIZE == "medium",
+        },
+        {
+            "label": "small",
+            "action": "desktop-size-small",
+            "checked": DESKTOPITEMSIZE == "small",
+        },
+    ]
+
+
+def desktopmaincontextmenuitems(context):
 
     kind = str((context or {}).get("kind", "empty"))
     target = desktopsecurepath((context or {}).get("path", DESKTOPROOT))
@@ -7968,6 +7975,13 @@ def desktopcontextmenuitems(context):
             pass
     items.append({"label": "settings", "action": "desktop-settings"})
     return items
+
+
+def desktopcontextmenuitems(context):
+
+    if TASKMENUDESKTOPVIEW:
+        return desktopviewcontextmenuitems()
+    return desktopmaincontextmenuitems(context)
 
 
 def taskmenuitems():
@@ -8027,6 +8041,9 @@ def closetaskmenu(sock):
 
     global TASKMENUMAPPED, TASKMENURECT, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
     global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW
+    global TASKMENUDESKTOPMAINX, TASKMENUDESKTOPMAINW
+    global TASKMENUDESKTOPVIEWX, TASKMENUDESKTOPVIEWW
+    global TASKMENUDESKTOPHOVERORIGIN
     global TASKMENUITEMRECTS, TASKMENUHOVER
 
     try:
@@ -8046,6 +8063,16 @@ def closetaskmenu(sock):
             TASKMENUDESKTOP = None
 
             TASKMENUDESKTOPVIEW = False
+
+            TASKMENUDESKTOPMAINX = 0
+
+            TASKMENUDESKTOPMAINW = 0
+
+            TASKMENUDESKTOPVIEWX = None
+
+            TASKMENUDESKTOPVIEWW = 0
+
+            TASKMENUDESKTOPHOVERORIGIN = None
 
             TASKMENUITEMRECTS = []
 
@@ -8070,6 +8097,16 @@ def closetaskmenu(sock):
         TASKMENUDESKTOP = None
 
         TASKMENUDESKTOPVIEW = False
+
+        TASKMENUDESKTOPMAINX = 0
+
+        TASKMENUDESKTOPMAINW = 0
+
+        TASKMENUDESKTOPVIEWX = None
+
+        TASKMENUDESKTOPVIEWW = 0
+
+        TASKMENUDESKTOPHOVERORIGIN = None
 
         TASKMENUITEMRECTS = []
 
@@ -8110,6 +8147,63 @@ def findtaskmenuitemat(ax, ay):
     return None
 
 
+def updatetaskmenuhover(sock, ax, ay):
+
+    global TASKMENUHOVER, TASKMENUDESKTOPHOVERORIGIN
+
+    newhover = findtaskmenuitemat(ax, ay)
+    movedfromorigin = False
+    if TASKMENUDESKTOPHOVERORIGIN is not None:
+        originx, originy = TASKMENUDESKTOPHOVERORIGIN
+        if int(ax) == int(originx) and int(ay) == int(originy):
+            if newhover != TASKMENUHOVER:
+                TASKMENUHOVER = newhover
+                painttaskmenu(sock)
+            return newhover
+        TASKMENUDESKTOPHOVERORIGIN = None
+        movedfromorigin = True
+
+    if newhover == TASKMENUHOVER and not (
+        movedfromorigin and newhover == "desktop-view"
+    ):
+        return newhover
+
+    TASKMENUHOVER = newhover
+    if (
+        TASKMENUDESKTOP is not None
+        and not TASKMENUDESKTOPVIEW
+        and newhover == "desktop-view"
+    ):
+        showdesktopcontextmenu(
+            sock,
+            dict(TASKMENUDESKTOP),
+            TASKMENUANCHOR or [ax, ay, 1, 1],
+            view=True,
+        )
+        return newhover
+
+    if TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW:
+        viewactions = {
+            str(item.get("action", ""))
+            for item in desktopviewcontextmenuitems()
+        }
+        if newhover != "desktop-view" and newhover not in viewactions:
+            context = dict(TASKMENUDESKTOP)
+            showdesktopcontextmenu(
+                sock,
+                context,
+                TASKMENUANCHOR or [ax, ay, 1, 1],
+                view=False,
+            )
+            TASKMENUDESKTOPHOVERORIGIN = None
+            TASKMENUHOVER = newhover
+            painttaskmenu(sock)
+            return newhover
+
+    painttaskmenu(sock)
+    return newhover
+
+
 def painttaskmenu(sock):
 
     global TASKMENUITEMRECTS, TASKMENURECT, TASKMENUHOVER
@@ -8127,14 +8221,9 @@ def painttaskmenu(sock):
         ):
             return
 
-        items = taskmenuitems()
-        if not items:
-            return
-
         itemheight = taskmenuitemheight()
-        h = itemheight * len(items)
-
         w = TASKMENUW
+        h = itemheight
 
         if TASKMENURECT and len(TASKMENURECT) == 4:
 
@@ -8154,8 +8243,6 @@ def painttaskmenu(sock):
 
         TASKMENUITEMRECTS = []
 
-        y = 0
-
         compact = (
             TASKMENUCONTEXT is not None
             or TASKMENUTASKBAR
@@ -8170,80 +8257,107 @@ def painttaskmenu(sock):
 
         checkboxgap = s(8, 4)
 
-        for it in items:
+        if TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW:
+            panels = [
+                (
+                    desktopmaincontextmenuitems(TASKMENUDESKTOP),
+                    int(TASKMENUDESKTOPMAINX),
+                    int(TASKMENUDESKTOPMAINW),
+                    False,
+                ),
+                (
+                    desktopviewcontextmenuitems(),
+                    int(TASKMENUDESKTOPVIEWX or 0),
+                    int(TASKMENUDESKTOPVIEWW),
+                    True,
+                ),
+            ]
+        else:
+            items = taskmenuitems()
+            if not items:
+                return
+            panels = [(items, 0, w, False)]
 
-            if TASKMENUHOVER == it["action"]:
-                fillbufferfile(
-                    TASKMENUBUF,
-                    w,
-                    1,
-                    y,
-                    max(1, w - 2),
-                    itemheight,
-                    (36, 36, 36) if compact else (96, 96, 96),
-                )
+        for items, panelx, panelwidth, checkcolumn in panels:
+            if not items or panelwidth < 1:
+                continue
+            panelheight = itemheight * len(items)
+            y = 0
 
-            textx = pad
+            for it in items:
 
-            checkcolumn = bool(
-                TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW)
-
-            if checkcolumn:
-                textx += checkboxsize + checkboxgap
-
-            if "checked" in it:
-                if TASKMENUTASKBAR:
-                    checkboxx = (
-                        textx
-                        + measurettffile(str(it.get("label", "")), fsz)
-                        + checkboxgap
-                    )
-                else:
-                    checkboxx = pad
-                checkboxy = y + (itemheight - checkboxsize) // 2
-                fillbufferfile(
-                    TASKMENUBUF,
-                    w,
-                    checkboxx,
-                    checkboxy,
-                    checkboxsize,
-                    checkboxsize,
-                    (239, 239, 239) if it.get("checked") else (0, 0, 0),
-                )
-                drawrect(
-                    checkboxx, checkboxy, checkboxsize, checkboxsize,
-                    (58, 58, 58))
-
-                if it.get("checked"):
-                    inset = max(2, checkboxsize // 4)
+                if TASKMENUHOVER == it["action"]:
                     fillbufferfile(
                         TASKMENUBUF,
                         w,
-                        checkboxx + inset,
-                        checkboxy + inset,
-                        max(1, checkboxsize - inset * 2),
-                        max(1, checkboxsize - inset * 2),
-                        (0, 0, 0),
+                        panelx + 1,
+                        y,
+                        max(1, panelwidth - 2),
+                        itemheight,
+                        (36, 36, 36) if compact else (96, 96, 96),
                     )
 
-            drawtextttf(
-                textx,
-                y + (itemheight - fsz) // 2,
-                str(it["label"]),
-                0xEFEFEF,
-                fsz,
-                fontpath=FONTPATH
-            )
+                textx = panelx + pad
 
-            TASKMENUITEMRECTS.append([0, y, w, itemheight, it["action"]])
+                if checkcolumn:
+                    textx += checkboxsize + checkboxgap
 
-            if compact and y + itemheight < h:
-                fillbufferfile(TASKMENUBUF, w, 0, y + itemheight - 1, w, 1, (58, 58, 58))
+                if "checked" in it:
+                    if TASKMENUTASKBAR:
+                        checkboxx = (
+                            textx
+                            + measurettffile(str(it.get("label", "")), fsz)
+                            + checkboxgap
+                        )
+                    else:
+                        checkboxx = panelx + pad
+                    checkboxy = y + (itemheight - checkboxsize) // 2
+                    fillbufferfile(
+                        TASKMENUBUF,
+                        w,
+                        checkboxx,
+                        checkboxy,
+                        checkboxsize,
+                        checkboxsize,
+                        (239, 239, 239) if it.get("checked") else (0, 0, 0),
+                    )
+                    drawrect(
+                        checkboxx, checkboxy, checkboxsize, checkboxsize,
+                        (58, 58, 58))
 
-            y += itemheight
+                    if it.get("checked"):
+                        inset = max(2, checkboxsize // 4)
+                        fillbufferfile(
+                            TASKMENUBUF,
+                            w,
+                            checkboxx + inset,
+                            checkboxy + inset,
+                            max(1, checkboxsize - inset * 2),
+                            max(1, checkboxsize - inset * 2),
+                            (0, 0, 0),
+                        )
 
-        if compact:
-            drawrect(0, 0, w, h, (58, 58, 58))
+                drawtextttf(
+                    textx,
+                    y + (itemheight - fsz) // 2,
+                    str(it["label"]),
+                    0xEFEFEF,
+                    fsz,
+                    fontpath=FONTPATH
+                )
+
+                TASKMENUITEMRECTS.append([
+                    panelx, y, panelwidth, itemheight, it["action"]])
+
+                if compact and y + itemheight < panelheight:
+                    fillbufferfile(
+                        TASKMENUBUF, w, panelx, y + itemheight - 1,
+                        panelwidth, 1, (58, 58, 58))
+
+                y += itemheight
+
+            if compact:
+                drawrect(panelx, 0, panelwidth, panelheight, (58, 58, 58))
 
         present()
 
@@ -8539,11 +8653,26 @@ def showdesktopcontextmenu(sock, context, anchorrect, view=False):
 
     global TASKMENURECT, TASKMENUANCHOR, TASKMENUGROUP, TASKMENUCONTEXT, TASKMENUTASKBAR
     global TASKMENUDESKTOP, TASKMENUDESKTOPVIEW, TASKMENUPENDINGDESKTOP
+    global TASKMENUDESKTOPMAINX, TASKMENUDESKTOPMAINW
+    global TASKMENUDESKTOPVIEWX, TASKMENUDESKTOPVIEWW
+    global TASKMENUDESKTOPHOVERORIGIN
     global TASKMENUPENDINGGROUP, TASKMENUPENDINGANCHOR, TASKMENUPENDINGCONTEXT, TASKMENUPENDINGTASKBAR
 
     try:
         if context is None or anchorrect is None or len(anchorrect) != 4:
             return
+
+        previousmainx = None
+        previousy = None
+        if (
+            bool(view)
+            and TASKMENUDESKTOP is not None
+            and TASKMENURECT is not None
+            and len(TASKMENURECT) == 4
+        ):
+            previousmainx = int(TASKMENURECT[0]) + int(
+                TASKMENUDESKTOPMAINX)
+            previousy = int(TASKMENURECT[1])
 
         closeinstancelist(sock)
         TASKMENUGROUP = None
@@ -8551,13 +8680,17 @@ def showdesktopcontextmenu(sock, context, anchorrect, view=False):
         TASKMENUTASKBAR = False
         TASKMENUDESKTOP = dict(context)
         TASKMENUDESKTOPVIEW = bool(view)
+        if not view:
+            TASKMENUDESKTOPHOVERORIGIN = [
+                int(anchorrect[0]), int(anchorrect[1])]
         TASKMENUPENDINGGROUP = None
         TASKMENUPENDINGCONTEXT = None
         TASKMENUPENDINGTASKBAR = False
-        globals()["TASKMENUHOVER"] = None
+        globals()["TASKMENUHOVER"] = "desktop-view" if view else None
 
-        items = taskmenuitems()
-        if not items:
+        mainitems = desktopmaincontextmenuitems(TASKMENUDESKTOP)
+        viewitems = desktopviewcontextmenuitems() if view else []
+        if not mainitems:
             return
 
         pad = taskmenucompactpad()
@@ -8565,19 +8698,51 @@ def showdesktopcontextmenu(sock, context, anchorrect, view=False):
         itemheight = taskmenuitemheight()
         checkboxsize = max(s(12, 6), min(itemheight - s(6, 3), s(16, 8)))
         checkboxgap = s(8, 4)
-        checkcolumn = bool(TASKMENUDESKTOPVIEW)
-        w = max(
+
+        mainwidth = max(
             measurettffile(str(item.get("label", "")), size)
-            for item in items
+            for item in mainitems
         ) + (pad * 2)
-        if checkcolumn:
-            w += checkboxsize + checkboxgap
-        w = max(pad * 2 + 1, min(w, int(MENUMAXW)))
-        h = itemheight * len(items)
+        mainwidth = max(pad * 2 + 1, min(mainwidth, int(MENUMAXW)))
+        viewwidth = 0
+        if viewitems:
+            viewwidth = max(
+                measurettffile(str(item.get("label", "")), size)
+                for item in viewitems
+            ) + (pad * 2) + checkboxsize + checkboxgap
+            viewwidth = max(
+                pad * 2 + checkboxsize + checkboxgap + 1,
+                min(viewwidth, int(MENUMAXW)),
+            )
+
+        w = mainwidth + viewwidth
+        h = itemheight * max(len(mainitems), len(viewitems))
 
         ax, ay, _, _ = [int(value) for value in anchorrect]
-        x = max(0, min(ax, int(DESKTOPW) - w))
-        y = max(0, min(ay, int(DESKTOPH - TASKBARH) - h))
+        mainabsolute = (
+            previousmainx
+            if previousmainx is not None
+            else max(0, min(ax, int(DESKTOPW) - mainwidth))
+        )
+        if viewwidth and mainabsolute + mainwidth + viewwidth <= int(DESKTOPW):
+            x = mainabsolute
+            TASKMENUDESKTOPMAINX = 0
+            TASKMENUDESKTOPVIEWX = mainwidth
+        elif viewwidth and mainabsolute >= viewwidth:
+            x = mainabsolute - viewwidth
+            TASKMENUDESKTOPVIEWX = 0
+            TASKMENUDESKTOPMAINX = viewwidth
+        else:
+            x = max(0, min(mainabsolute, int(DESKTOPW) - w))
+            TASKMENUDESKTOPMAINX = 0
+            TASKMENUDESKTOPVIEWX = mainwidth if viewwidth else None
+        TASKMENUDESKTOPMAINW = mainwidth
+        TASKMENUDESKTOPVIEWW = viewwidth
+        y = (
+            previousy
+            if previousy is not None
+            else max(0, min(ay, int(DESKTOPH - TASKBARH) - h))
+        )
 
         if TASKMENUID is None:
             TASKMENUPENDINGANCHOR = list(anchorrect)
@@ -9615,6 +9780,12 @@ def handlepointermotion(sock, msg):
             settaskbarwindowhover(sock, None)
             if HOVERRECT is not None or TOOLTIPMAPPED or LISTMAPPED:
                 clearhovertooltip(sock)
+            if TASKMENUDESKTOP is not None and TASKMENUDESKTOPVIEW:
+                updatetaskmenuhover(
+                    sock,
+                    int(msg.get("absx", 0)),
+                    int(msg.get("absy", 0)),
+                )
             handledesktopmotion(sock, msg)
             return
 
@@ -9832,12 +10003,7 @@ def handlepointermotion(sock, msg):
 
             ay = int(msg.get("absy", 0))
 
-            newhover = findtaskmenuitemat(ax, ay)
-
-            if newhover != TASKMENUHOVER:
-                globals()["TASKMENUHOVER"] = newhover
-
-                painttaskmenu(sock)
+            updatetaskmenuhover(sock, ax, ay)
 
             return
 
@@ -15064,7 +15230,89 @@ def graphicsdiagnostic():
         if [str(item.get("action", "")) for item in desktopviewmenu] != expectedviewactions:
             raise RuntimeError("desktop view choices are missing or out of order")
         if not desktopviewmenu[0].get("checked") or not desktopviewmenu[2].get("checked"):
-            raise RuntimeError("desktop view choices did not mark show expanse and medium")
+            raise RuntimeError(
+                "desktop view choices did not mark show expanse content and medium")
+
+        originaltaskmenuid = TASKMENUID
+        originalsendline = globals().get("sendline")
+        originalpainttaskmenu = globals().get("painttaskmenu")
+        originalgraphicsupdategeometry = globals().get("graphicsupdategeometry")
+        originalcloseinstancelist = globals().get("closeinstancelist")
+        originalshowdesktopcontextmenu = globals().get("showdesktopcontextmenu")
+        menupaints = []
+        try:
+            globals()["TASKMENUID"] = 1
+            globals()["sendline"] = lambda *args, **kwargs: True
+            globals()["painttaskmenu"] = (
+                lambda *args, **kwargs: menupaints.append(True))
+            globals()["graphicsupdategeometry"] = lambda *args, **kwargs: True
+            globals()["closeinstancelist"] = lambda *args, **kwargs: True
+            context = {"kind": "empty", "path": desktopdiagnosticroot}
+            anchor = [100, 120, 1, 1]
+            showdesktopcontextmenu(None, context, anchor, view=False)
+            mainabsolute = int(TASKMENURECT[0]) + int(
+                TASKMENUDESKTOPMAINX)
+            showdesktopcontextmenu(None, context, anchor, view=True)
+            if (
+                not TASKMENUDESKTOPVIEW
+                or TASKMENUDESKTOPVIEWX is None
+                or TASKMENUDESKTOPMAINW < 1
+                or TASKMENUDESKTOPVIEWW < 1
+                or int(TASKMENURECT[2]) != (
+                    int(TASKMENUDESKTOPMAINW) + int(TASKMENUDESKTOPVIEWW))
+                or int(TASKMENURECT[0]) + int(TASKMENUDESKTOPMAINX)
+                != mainabsolute
+                or int(TASKMENUDESKTOPMAINX) == int(TASKMENUDESKTOPVIEWX)
+                or TASKMENUHOVER != "desktop-view"
+                or len(menupaints) != 2
+            ):
+                raise RuntimeError("desktop View menu did not pop beside its parent")
+
+            hoverevents = []
+            globals()["TASKMENUDESKTOPVIEW"] = False
+            globals()["TASKMENUHOVER"] = None
+            globals()["TASKMENURECT"] = [100, 120, 180, taskmenuitemheight() * 4]
+            globals()["TASKMENUITEMRECTS"] = [
+                [0, 0, 180, taskmenuitemheight(), "desktop-view"]]
+            globals()["showdesktopcontextmenu"] = (
+                lambda sock, selectedcontext, selectedanchor, view=False:
+                hoverevents.append(bool(view)))
+            globals()["TASKMENUDESKTOPHOVERORIGIN"] = [100, 120]
+            updatetaskmenuhover(None, 100, 120)
+            if hoverevents:
+                raise RuntimeError(
+                    "desktop View submenu opened on the stationary context click")
+            updatetaskmenuhover(None, 110, 125)
+            if hoverevents != [True]:
+                raise RuntimeError("desktop View submenu still requires a click")
+
+            globals()["TASKMENUDESKTOPVIEW"] = True
+            globals()["TASKMENUDESKTOPHOVERORIGIN"] = None
+            globals()["TASKMENUHOVER"] = "desktop-size-large"
+            globals()["TASKMENUITEMRECTS"] = [[
+                0,
+                taskmenuitemheight(),
+                180,
+                taskmenuitemheight(),
+                "newfile",
+            ]]
+            updatetaskmenuhover(
+                None,
+                110,
+                120 + taskmenuitemheight() + 2,
+            )
+            if hoverevents != [True, False]:
+                raise RuntimeError(
+                    "desktop View submenu did not retract over another option")
+        finally:
+            globals()["TASKMENUID"] = originaltaskmenuid
+            globals()["sendline"] = originalsendline
+            globals()["painttaskmenu"] = originalpainttaskmenu
+            globals()["graphicsupdategeometry"] = originalgraphicsupdategeometry
+            globals()["closeinstancelist"] = originalcloseinstancelist
+            globals()["showdesktopcontextmenu"] = originalshowdesktopcontextmenu
+
+        result["checks"]["desktop_view_hover_submenu"] = True
 
         globals()["TASKMENUDESKTOP"] = {"kind": "row", "path": testfile}
         globals()["TASKMENUDESKTOPVIEW"] = False

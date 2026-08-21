@@ -10,6 +10,7 @@ angel_root_mount=${ANGEL_ROOT_MOUNT:-/mnt}
 angel_manifest_relative='the one/settings/recovery/files.tsv'
 angel_request_relative='T1OS/recovery-request'
 angel_journal_relative='T1OS/recovery-state'
+angel_normal_boot_relative='T1OS/recovery-complete'
 angel_log_relative='T1OS/recovery.log'
 angel_shutdown_health_relative='T1OS/roothealth-shutdown-request'
 angel_recovery_ready=0
@@ -241,6 +242,30 @@ angel_journal_clear() {
 
 angel_request_clear() {
     "$busybox" rm -f "$angel_esp_mount/$angel_request_relative"
+    "$busybox" sync
+}
+
+angel_arm_normal_boot() {
+    completed_action=${1:-restart}
+    marker="$angel_esp_mount/$angel_normal_boot_relative"
+    temporary="$marker.new"
+    {
+        printf 'format=1\n'
+        printf 'state=complete\n'
+        printf 'action=%s\n' "$completed_action"
+    } >"$temporary" || return 1
+    "$busybox" chmod 0600 "$temporary" || return 1
+    "$busybox" mv -f "$temporary" "$marker" || return 1
+    "$busybox" sync
+}
+
+angel_clear_normal_boot_request() {
+    marker="$angel_esp_mount/$angel_normal_boot_relative"
+    temporary="$angel_esp_mount/$angel_normal_boot_relative.new"
+    [ -e "$marker" ] || [ -e "$temporary" ] || return 0
+    "$busybox" rm -f \
+        "$marker" \
+        "$temporary"
     "$busybox" sync
 }
 
@@ -962,9 +987,11 @@ angel_finish_action() {
             ;;
     esac
     angel_append_log "completed=$action"
-    angel_journal_clear
+    angel_journal_clear || return 1
+    angel_arm_normal_boot "$action" || return 1
     "$busybox" sync
     [ "$angel_root_mounted" = 0 ] || "$busybox" mount -o remount,ro "$angel_root_mount" || true
+    angel_unmount_esp || return 1
     angel_say 'I will restart The One OS now.'
     "$busybox" reboot -f
 }
@@ -1038,7 +1065,11 @@ angel_recovery_menu() {
                 if [ -s "$angel_esp_mount/$angel_journal_relative" ]; then
                     angel_say 'An interrupted recovery action must finish before I restart.'
                 else
-                    angel_request_clear
+                    angel_request_clear || true
+                    if ! angel_arm_normal_boot restart || ! angel_unmount_esp; then
+                        angel_say 'I could not prepare a direct normal boot, so I will remain in recovery.'
+                        continue
+                    fi
                     angel_say 'I will restart the Terminal.'
                     "$busybox" reboot -f
                 fi

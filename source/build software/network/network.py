@@ -43,6 +43,7 @@ WIRELESSCREDENTIALPATTERN = r'network\.wireless\.[0-9a-f]{24}'
 WIRELESSENGINE = '/the one/software/network/wireless-engine'
 NETWORKRUNTIME = '/.ephemeral/network'
 CONNECTIONSTATE = os.path.join(NETWORKRUNTIME, 'connection.json')
+INTERFACESTATE = os.path.join(NETWORKRUNTIME, 'interfaces.json')
 FIREWALLSTATE = os.path.join(NETWORKRUNTIME, 'firewall.json')
 INITIALSTATE = os.path.join(NETWORKRUNTIME, 'initial.json')
 INITIALSTATEFIELDS = frozenset(('format', 'connected', 'interface', 'completed'))
@@ -736,6 +737,19 @@ def linkinventory():
         item['index'],
         item['name'],
     ))
+
+    try:
+        atomicjson(INTERFACESTATE, {'interfaces': [
+            {
+                'name': link['name'],
+                'type': 'wi-fi' if link['wireless'] else connectiontype(link['name']),
+                'state': str(link.get('operstate') or '').lower() or 'offline',
+                'wireless': bool(link['wireless']),
+            }
+            for link in links
+        ]})
+    except Exception as error:
+        log(f'could not publish interface inventory err={error}')
 
     log(f"interface inventory {links}", debug=True)
     return links

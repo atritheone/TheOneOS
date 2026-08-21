@@ -92,14 +92,15 @@ varies. Varying evidence is treated as a storage, connection, power, or
 nondeterminism signal rather than proof that an operating-system component
 should be replaced.
 
-GODDESS also arms a one-shot `T1OS/roothealth-shutdown-request` after services
-and storage users have stopped. It then restarts into Angel so the root is
-truly unmounted. Angel accepts only a complete format-1 request with a pending
-state, a `poweroff` or `restart` action, and a canonical lowercase boot UUID.
-She runs the same admission gate, preserves its evidence, clears the request
-only after success, and either powers off or continues the requested restart.
-Failure enters recovery with the request intact and the precise RootHealth
-cause visible.
+On hardware, GODDESS arms a one-shot `T1OS/roothealth-shutdown-request` after
+services and storage users have stopped. It then restarts into Angel so the
+root is truly unmounted. Angel accepts only a complete format-1 request with a
+pending state, a `poweroff` or `restart` action, and a canonical lowercase boot
+UUID. She runs the same admission gate, preserves its evidence, clears the
+request only after success, and either powers off or continues the requested
+restart. Failure enters recovery with the request intact and the precise
+RootHealth cause visible. The software VM init has no hardware RootHealth
+shutdown stage, so GODDESS sends poweroff and restart directly to the kernel.
 
 The hardware initramfs implements this contract in its `log`, `angel_say`, and
 `angel_ask` functions. Runtime code that delegates recovery work to Angel uses

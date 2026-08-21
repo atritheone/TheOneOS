@@ -3244,41 +3244,120 @@ class DriverServer:
             ctypes.c_void_p,
         ]
 
-        attempts = [baseflags | (MS_RDONLY if readonly else 0)]
-        if not readonly:
-            attempts.append(baseflags | MS_RDONLY)
-        mountedreadonly = readonly
-        lasterror = errno.EIO
-        for flags in attempts:
-            result = libc.mount(
-                os.fsencode(source),
-                os.fsencode(target),
-                filesystem.encode('ascii'),
-                flags,
-                mountoptions,
-            )
-            if result == 0:
-                mountedreadonly = bool(flags & MS_RDONLY)
-                break
+        flags = baseflags | (MS_RDONLY if readonly else 0)
+        result = libc.mount(
+            os.fsencode(source),
+            os.fsencode(target),
+            filesystem.encode('ascii'),
+            flags,
+            mountoptions,
+        )
+        if result != 0:
             lasterror = ctypes.get_errno()
-        else:
             try:
                 target.rmdir()
             except OSError:
                 pass
             raise OSError(lasterror, os.strerror(lasterror), str(source))
 
+        # A clean, policy-writable volume must never be silently published as
+        # read-only. Verify the exact uid-1000 view consumed by Array and its
+        # file picker before advertising the mount.
+        try:
+            self.probevolumeaccess(target, writable=not readonly)
+        except OSError:
+            self.unmountvolume(target)
+            raise
+
         log(
             f'external volume mounted label={probe.get("label")!r} '
             f'filesystem={filesystem} source={source} target={target} '
-            f'read_only={mountedreadonly} '
+            f'read_only={readonly} access_probe=passed '
             f'policy_read_only={bool(self.volume_policy.get("read_only", False))} '
             f'safe_write={bool(probe.get("safe_write", False))} '
             f'os_install={bool(probe.get("os_install", False))} '
             f'volume_flags={int(probe.get("volume_flags", 0))} '
             f'write_guard_reason={probe.get("os_reason") or ("filesystem is dirty or not safely closed" if not probe.get("safe_write", False) else "none")!r}'
         )
-        return mountedreadonly
+        return readonly
+
+    @staticmethod
+    def probevolumeaccess(target, writable):
+        if not hasattr(os, 'fork'):
+            raise OSError(errno.ENOSYS, 'desktop volume access probe is unavailable')
+
+        resultread, resultwrite = os.pipe()
+        try:
+            pid = os.fork()
+        except OSError:
+            os.close(resultread)
+            os.close(resultwrite)
+            raise
+
+        if pid == 0:
+            os.close(resultread)
+            directorydescriptor = -1
+            probedescriptor = -1
+            probename = f'.t1os-write-probe-{os.getpid()}'
+            try:
+                os.setgroups([])
+                os.setgid(1000)
+                os.setuid(1000)
+                directorydescriptor = os.open(
+                    target,
+                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+                    getattr(os, 'O_CLOEXEC', 0),
+                )
+                os.listdir(directorydescriptor)
+                if writable:
+                    probedescriptor = os.open(
+                        probename,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                        getattr(os, 'O_CLOEXEC', 0) |
+                        getattr(os, 'O_NOFOLLOW', 0),
+                        0o600,
+                        dir_fd=directorydescriptor,
+                    )
+                    if os.write(probedescriptor, b'1') != 1:
+                        raise OSError(errno.EIO, 'short desktop volume probe write')
+                    os.fsync(probedescriptor)
+                    os.close(probedescriptor)
+                    probedescriptor = -1
+                    os.unlink(probename, dir_fd=directorydescriptor)
+                os._exit(0)
+            except BaseException as error:
+                try:
+                    message = f'{type(error).__name__}: {error}'.encode(
+                        'utf-8', errors='replace'
+                    )[:2048]
+                    os.write(resultwrite, message)
+                except BaseException:
+                    pass
+                if probedescriptor >= 0:
+                    try:
+                        os.close(probedescriptor)
+                    except OSError:
+                        pass
+                if directorydescriptor >= 0:
+                    try:
+                        os.unlink(probename, dir_fd=directorydescriptor)
+                    except OSError:
+                        pass
+                    try:
+                        os.close(directorydescriptor)
+                    except OSError:
+                        pass
+                os._exit(1)
+
+        os.close(resultwrite)
+        try:
+            message = os.read(resultread, 2048).decode('utf-8', errors='replace')
+        finally:
+            os.close(resultread)
+        _, waitstatus = os.waitpid(pid, 0)
+        if not os.WIFEXITED(waitstatus) or os.WEXITSTATUS(waitstatus) != 0:
+            detail = message or 'desktop user could not access the mounted volume'
+            raise OSError(errno.EACCES, detail, str(target))
 
     def targetforvolume(self, probe, mounted):
         label = str(probe.get('label') or '').strip()

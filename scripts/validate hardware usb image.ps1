@@ -740,6 +740,11 @@ grep -Fq "t1os.recovery.bytes=$expected_recovery_bytes" "$work/esp/boot/grub/gru
 grep -Fq 'rootfstype=ntfs3' "$work/esp/boot/grub/grub.cfg"
 grep -Fqx 'set timeout_style=menu' "$work/esp/boot/grub/grub.cfg"
 grep -Fqx 'set timeout=5' "$work/esp/boot/grub/grub.cfg"
+grep -Fq '/T1OS/recovery-request' "$work/esp/boot/grub/grub.cfg"
+grep -Fq '/T1OS/recovery-state' "$work/esp/boot/grub/grub.cfg"
+grep -Fq '/T1OS/recovery-complete' "$work/esp/boot/grub/grub.cfg"
+grep -Fqx '    set timeout_style=hidden' "$work/esp/boot/grub/grub.cfg"
+grep -Fqx '    set timeout=0' "$work/esp/boot/grub/grub.cfg"
 grep -Fq 'title-text: "The One OS"' "$work/esp/boot/grub/t1os-theme.txt"
 grep -Fq 'desktop-image: "t1os-black.png"' "$work/esp/boot/grub/t1os-theme.txt"
 grep -Fq 'desktop-color: "#000000"' "$work/esp/boot/grub/t1os-theme.txt"
@@ -765,6 +770,13 @@ safe_entry=$(sed -n '/^menuentry "safe mode"/,/^}/p' "$work/esp/boot/grub/grub.c
 printf '%s\n' "$safe_entry" | grep -Fq 't1os.graphics=framebuffer'
 printf '%s\n' "$safe_entry" | grep -Fq 'module_blacklist=amdgpu,radeon,nouveau'
 printf '%s\n' "$safe_entry" | grep -Fq 'nvidia,nvidia_modeset,nvidia_drm'
+recovery_entry=$(sed -n '/^menuentry "recovery"/,/^}/p' "$work/esp/boot/grub/grub.cfg")
+printf '%s\n' "$recovery_entry" | grep -Fq 't1os.recovery=1'
+printf '%s\n' "$recovery_entry" | grep -Fq 'console=ttyS0,115200n8 quiet loglevel=0 logo.nologo'
+if printf '%s\n' "$recovery_entry" | grep -Fq 'console=tty0'; then
+    echo 'Recovery unexpectedly mixes kernel output into the Angel console.' >&2
+    exit 1
+fi
 grub-script-check "$work/esp/boot/grub/grub.cfg"
 
 if [ "$encrypted" = True ]; then

@@ -18,8 +18,12 @@ if __name__ == "__main__":
 
 import ast
 import datetime
+import hashlib
+import os
 from pathlib import Path
 import re
+import stat
+import tempfile
 import zoneinfo
 
 
@@ -42,6 +46,19 @@ def function(text, name):
 def require(text, *needles):
     for needle in needles:
         assert needle in text, f'missing recovery contract: {needle}'
+
+
+def selectedfunctions(text, names, namespace):
+    tree = ast.parse(text)
+    selected = [
+        node for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name in names
+    ]
+    assert {node.name for node in selected} == set(names)
+    module = ast.Module(body=selected, type_ignores=[])
+    ast.fix_missing_locations(module)
+    exec(compile(module, '<selected-functions>', 'exec'), namespace)
 
 
 def main():
@@ -174,6 +191,63 @@ def main():
         'zoneinfo.ZoneInfo.from_file(stream, key=name)',
         "if kind == 'brick':",
         "return ['--run-file', target, *trailing]",
+        "MASTERIMAGEEXTERNALROOT = '/.ephemeral/volumes'",
+        'def openmasterimagesource(',
+        'def importmasterimage(',
+        "getattr(os, 'O_NOFOLLOW', 0)",
+        'hashlib.sha256()',
+        'sourceroot=MASTERIMAGEEXTERNALROOT',
+    )
+    operationhelpers = {
+        'os': os,
+        'statmodule': stat,
+        'hashlib': hashlib,
+        're': re,
+        'MASTERSETTINGSDIRECTORYMODE': 0o711,
+        'MASTERSETTINGSFILEMODE': 0o644,
+        'MASTERIMAGEIMPORTMAXBYTES': 64 * 1024 * 1024,
+        'MASTERIMAGEIMPORTROOT': '/the one/settings/master/images',
+    }
+    selectedfunctions(
+        operations,
+        {'openmasterimagesource', 'importmasterimage', 'cleanupmasterimageimports'},
+        operationhelpers,
+    )
+    with tempfile.TemporaryDirectory() as temporary:
+        externalroot = os.path.join(temporary, 'external volume')
+        os.makedirs(externalroot)
+        sourcepath = os.path.join(externalroot, 'external master.png')
+        importroot = os.path.join(temporary, 'protected images')
+        payload = b'\x89PNG\r\n\x1a\nexternal-image'
+        with open(sourcepath, 'wb') as stream:
+            stream.write(payload)
+        imported = operationhelpers['importmasterimage'](
+            sourcepath,
+            directory=importroot,
+            sourceroot=externalroot if os.name != 'nt' else None,
+        )
+        assert os.path.dirname(imported) == importroot
+        assert os.path.basename(imported) == hashlib.sha256(payload).hexdigest() + '.png'
+        assert Path(imported).read_bytes() == payload
+        if os.name != 'nt':
+            assert stat.S_IMODE(os.stat(imported).st_mode) == 0o644
+        stale = os.path.join(importroot, ('f' * 64) + '.jpg')
+        Path(stale).write_bytes(b'stale')
+        operationhelpers['cleanupmasterimageimports'](
+            imported, directory=importroot)
+        assert os.path.isfile(imported) and not os.path.exists(stale)
+
+    recovery = source('source/entry/init/angel recovery.sh')
+    require(
+        recovery,
+        "angel_normal_boot_relative='T1OS/recovery-complete'",
+        'angel_arm_normal_boot() {',
+        'angel_arm_normal_boot "$action"',
+        'angel_unmount_esp || return 1',
+    )
+    require(
+        hardware_init,
+        'angel_clear_normal_boot_request || true',
     )
 
     zonepath = ROOT / 'source/software/chromium/resources/zoneinfo/Australia/Sydney'
@@ -203,6 +277,12 @@ def main():
         'ACTIONVIS["destroy"] = True',
     )
     require(
+        function(array, 'setfileclipboard'),
+        'ok, response = exsetfiles(payload, source="array")',
+        'the clipboard service is unavailable',
+        'if not CLIPBOARDHAS:',
+    )
+    require(
         function(array, 'runaction'),
         'if actionid == "destroy":',
         'openconfirm("destroy", selectedpaths())',
@@ -214,6 +294,12 @@ def main():
         function(array, 'runitem'),
         'prog = BRICKPROG if ispython else target',
         "arguments = ['--run-file', target] if ispython else []",
+    )
+    exchange = source('source/build software/exchange/exchange.py')
+    require(
+        function(exchange, 'serveropen'),
+        'os.chown(SOCKPATH, 0, 1000)',
+        'os.chmod(SOCKPATH, 0o660)',
     )
     brick = source('source/build software/brick/brick.py')
     require(function(brick, 'main'), 'if startupfile is not None:', 'run([str(startupfile)])')

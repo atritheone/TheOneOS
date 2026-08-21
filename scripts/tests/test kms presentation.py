@@ -5172,6 +5172,7 @@ def main():
         "'continuing directly to lock screen'",
         "'gpu-required-retry'",
         "def graphicsaccelerationrequired():",
+        "graphicsaccelerationrequired() and graphicsbackend == 'framebuffer'",
         "def discardlegacyfirmwaregraphicsrecovery():",
         "persistent next-boot framebuffer recovery is disabled",
         "all driver reinitialization attempts",

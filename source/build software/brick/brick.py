@@ -110,7 +110,8 @@ BRICKWIRELESSREQUEST = os.environ.get(
     'T1OS_WIRELESS_SCAN_REQUEST', '/.ephemeral/network/scan.request')
 BRICKNETWORKREQUEST = os.environ.get(
     'T1OS_NETWORK_RECONFIGURE', '/.ephemeral/network/reconfigure.request')
-BRICKNETSTATE = os.environ.get('T1OS_NET_STATE', '/sys/class/net')
+BRICKNETSTATE = os.environ.get(
+    'T1OS_NET_STATE', '/.ephemeral/network/interfaces.json')
 BRICKDRIVERSTATE = os.environ.get(
     'T1OS_DRIVER_STATUS', '/.ephemeral/drivers/status.json')
 BRICKDRIVEMODULESTATE = os.environ.get(
@@ -18020,34 +18021,30 @@ def networkinterfacesdata():
     configured = str(networkreadconfig().get('interface') or '').strip()
     runtime = networkreadjson(BRICKNETWORKSTATE)
     active = str(runtime.get('interface') or '').strip()
-    names = set()
-
-    try:
-        names.update(
-            name for name in os.listdir(BRICKNETSTATE)
-            if name != 'lo' and os.path.isdir(os.path.join(BRICKNETSTATE, name)))
-    except OSError:
-        pass
+    inventory = networkreadjson(BRICKNETSTATE).get('interfaces', [])
+    indexed = {}
+    if isinstance(inventory, list):
+        for item in inventory:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get('name') or '').strip()
+            if not name or name == 'lo' or '/' in name or '\\' in name:
+                continue
+            indexed[name] = item
 
     for name in (configured, active):
         if name:
-            names.add(name)
+            indexed.setdefault(name, {})
 
     records = []
-    for name in sorted(names, key=str.casefold):
-        lowered = name.casefold()
-        wireless = (
-            os.path.isdir(os.path.join(BRICKNETSTATE, name, 'wireless')) or
-            lowered.startswith(('wl', 'wifi')))
-        state = ''
-        try:
-            with open(os.path.join(BRICKNETSTATE, name, 'operstate'), 'r', encoding='ascii', errors='replace') as stream:
-                state = stream.read().strip().lower()
-        except OSError:
-            pass
+    for name in sorted(indexed, key=str.casefold):
+        item = indexed[name]
+        kind = str(item.get('type') or '').strip().lower()
+        wireless = bool(item.get('wireless')) or kind == 'wi-fi'
+        state = str(item.get('state') or '').strip().lower()
         records.append({
             'name': name,
-            'type': 'wi-fi' if wireless else 'ethernet',
+            'type': 'wi-fi' if wireless else (kind or 'ethernet'),
             'state': 'connected' if name == active and bool(runtime.get('connected')) else (state or 'offline'),
             'preferred': name == configured,
             'active': name == active,
@@ -21812,11 +21809,9 @@ def diagnosticnetwork():
     try:
         settings = os.path.join(root, 'settings', 'network')
         runtime = os.path.join(root, 'runtime', 'network')
-        netstate = os.path.join(root, 'net')
+        netstate = os.path.join(runtime, 'interfaces.json')
         os.makedirs(settings, mode=0o755, exist_ok=False)
         os.makedirs(runtime, mode=0o755, exist_ok=False)
-        os.makedirs(os.path.join(netstate, 'eth0'), mode=0o755, exist_ok=False)
-        os.makedirs(os.path.join(netstate, 'wlan0', 'wireless'), mode=0o755, exist_ok=False)
 
         BRICKNETWORKDIR = settings
         BRICKNETWORKFILE = os.path.join(settings, 'network.txt')
@@ -21830,8 +21825,10 @@ def diagnosticnetwork():
 
         networkatomictext(BRICKNETWORKFILE, 'interface=\ndns=automatic\nfirewall=protected\ndhcp=true\n')
         networkatomictext(BRICKDNSFILE, 'nameserver 10.0.2.3\n')
-        networkatomictext(os.path.join(netstate, 'eth0', 'operstate'), 'up\n')
-        networkatomictext(os.path.join(netstate, 'wlan0', 'operstate'), 'down\n')
+        networkatomictext(netstate, json.dumps({'interfaces': [
+            {'name': 'eth0', 'type': 'ethernet', 'state': 'up', 'wireless': False},
+            {'name': 'wlan0', 'type': 'wi-fi', 'state': 'down', 'wireless': True},
+        ]}, sort_keys=True) + '\n')
 
         for path, value in (
             (BRICKNETWORKSTATE, {

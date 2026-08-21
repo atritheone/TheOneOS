@@ -31,6 +31,7 @@ import datetime
 import zoneinfo
 import fcntl
 import errno
+import hashlib
 
 sys.path.insert(0, '/the one/build')
 from GODDESS.GODDESS import (
@@ -96,6 +97,9 @@ MASTERFILE = '/the one/master/master.txt'
 MASTERSETTINGSFILE = '/the one/settings/master/settings.json'
 MASTERSETTINGSDIRECTORYMODE = 0o711
 MASTERSETTINGSFILEMODE = 0o644
+MASTERIMAGEIMPORTROOT = '/the one/settings/master/images'
+MASTERIMAGEEXTERNALROOT = '/.ephemeral/volumes'
+MASTERIMAGEIMPORTMAXBYTES = 64 * 1024 * 1024
 RTCSETTIME = 0x4024700A
 RTCREADTIME = 0x80247009
 TIMEZONEFILE = '/the one/settings/time/timezone.txt'
@@ -2379,6 +2383,190 @@ def handlesessionauth(request):
         return {'status': 'error', 'message': 'authentication failed'}
 
 
+def externalmasterimagepath(path):
+
+    try:
+        return os.path.commonpath((MASTERIMAGEEXTERNALROOT, path)) == \
+            MASTERIMAGEEXTERNALROOT and path != MASTERIMAGEEXTERNALROOT
+    except ValueError:
+        return False
+
+
+def openmasterimagesource(source, root=None):
+
+    sourceflags = (
+        os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) |
+        getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0)
+    )
+    if root is None:
+        return os.open(source, sourceflags)
+
+    source = os.path.abspath(source)
+    root = os.path.abspath(root)
+    try:
+        relative = os.path.relpath(source, root)
+        if (
+            os.path.commonpath((root, source)) != root or
+            relative in ('', '.', '..') or relative.startswith('../')
+        ):
+            raise ValueError('master image source escaped its external volume')
+    except ValueError:
+        raise ValueError('master image source escaped its external volume') from None
+
+    components = relative.split(os.sep)
+    if any(component in ('', '.', '..') for component in components):
+        raise ValueError('master image source path is unsafe')
+    directoryflags = (
+        os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+        getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    )
+    rootdescriptor = os.open(root, directoryflags)
+    currentdescriptor = rootdescriptor
+    try:
+        for component in components[:-1]:
+            nextdescriptor = os.open(
+                component,
+                directoryflags,
+                dir_fd=currentdescriptor,
+            )
+            if currentdescriptor != rootdescriptor:
+                os.close(currentdescriptor)
+            currentdescriptor = nextdescriptor
+        return os.open(
+            components[-1],
+            sourceflags,
+            dir_fd=currentdescriptor,
+        )
+    finally:
+        if currentdescriptor != rootdescriptor:
+            os.close(currentdescriptor)
+        os.close(rootdescriptor)
+
+
+def importmasterimage(
+    source,
+    directory=MASTERIMAGEIMPORTROOT,
+    sourceroot=None,
+):
+
+    extension = os.path.splitext(source)[1].lower()
+    sourcedescriptor = openmasterimagesource(source, root=sourceroot)
+    temporary = ''
+    try:
+        sourcestate = os.fstat(sourcedescriptor)
+        if (
+            not statmodule.S_ISREG(sourcestate.st_mode) or
+            sourcestate.st_size < 1 or
+            sourcestate.st_size > MASTERIMAGEIMPORTMAXBYTES
+        ):
+            raise ValueError('master image file is not safe to import')
+
+        os.makedirs(directory, mode=MASTERSETTINGSDIRECTORYMODE, exist_ok=True)
+        directorystate = os.stat(directory, follow_symlinks=False)
+        if (
+            not statmodule.S_ISDIR(directorystate.st_mode) or
+            statmodule.S_ISLNK(directorystate.st_mode)
+        ):
+            raise OSError('master image import directory is unsafe')
+        os.chmod(directory, MASTERSETTINGSDIRECTORYMODE)
+
+        temporary = os.path.join(
+            directory,
+            f'.import.{os.getpid()}.{os.urandom(12).hex()}.new',
+        )
+        outputflags = (
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0) |
+            getattr(os, 'O_BINARY', 0)
+        )
+        outputdescriptor = os.open(temporary, outputflags, 0o600)
+        digest = hashlib.sha256()
+        copied = 0
+        try:
+            while True:
+                block = os.read(sourcedescriptor, 1024 * 1024)
+                if not block:
+                    break
+                copied += len(block)
+                if copied > MASTERIMAGEIMPORTMAXBYTES:
+                    raise ValueError('master image is too large to import')
+                digest.update(block)
+                offset = 0
+                while offset < len(block):
+                    written = os.write(outputdescriptor, block[offset:])
+                    if written <= 0:
+                        raise OSError('short write while importing master image')
+                    offset += written
+            if copied != sourcestate.st_size:
+                raise OSError('master image changed while it was imported')
+            os.fchmod(outputdescriptor, MASTERSETTINGSFILEMODE)
+            os.fsync(outputdescriptor)
+        finally:
+            os.close(outputdescriptor)
+
+        target = os.path.join(directory, digest.hexdigest() + extension)
+        os.replace(temporary, target)
+        temporary = ''
+        directoryflag = getattr(os, 'O_DIRECTORY', 0)
+        if directoryflag:
+            directorydescriptor = os.open(
+                directory,
+                os.O_RDONLY | directoryflag,
+            )
+            try:
+                os.fsync(directorydescriptor)
+            finally:
+                os.close(directorydescriptor)
+        return target
+    finally:
+        os.close(sourcedescriptor)
+        if temporary:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def cleanupmasterimageimports(active, directory=MASTERIMAGEIMPORTROOT):
+
+    active = os.path.normpath(str(active or ''))
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        candidate = os.path.join(directory, name)
+        if candidate == active or not re.fullmatch(
+            r'[0-9a-f]{64}\.(?:png|jpg|jpeg|webp|bmp|gif)', name
+        ):
+            continue
+        try:
+            state = os.stat(candidate, follow_symlinks=False)
+            if statmodule.S_ISREG(state.st_mode):
+                os.unlink(candidate)
+        except OSError:
+            pass
+
+
+def validmasterimageimport(path):
+
+    if os.path.dirname(path) != MASTERIMAGEIMPORTROOT or not re.fullmatch(
+        r'[0-9a-f]{64}\.(?:png|jpg|jpeg|webp|bmp|gif)',
+        os.path.basename(path),
+    ):
+        return False
+    try:
+        state = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return False
+    return (
+        statmodule.S_ISREG(state.st_mode) and
+        state.st_uid == 0 and state.st_gid == 0 and
+        statmodule.S_IMODE(state.st_mode) == MASTERSETTINGSFILEMODE and
+        0 < state.st_size <= MASTERIMAGEIMPORTMAXBYTES
+    )
+
+
 def settingsimagepath(value, oldhome, newhome):
 
     value = str(value or '').strip()
@@ -2392,9 +2580,16 @@ def settingsimagepath(value, oldhome, newhome):
         raise ValueError('master image type denied')
     if oldhome and absolute.startswith(oldhome + '/'):
         return os.path.join(newhome, os.path.relpath(absolute, oldhome))
-    if not absolute.startswith('/master/'):
-        raise ValueError('master image path denied')
-    return absolute
+    if absolute.startswith('/master/'):
+        return absolute
+    if validmasterimageimport(absolute):
+        return absolute
+    if externalmasterimagepath(absolute):
+        return importmasterimage(
+            absolute,
+            sourceroot=MASTERIMAGEEXTERNALROOT,
+        )
+    raise ValueError('master image path denied')
 
 
 def atomicjsonfile(path, value, mode=0o600, directorymode=0o700):
@@ -2527,6 +2722,7 @@ def handlesettingsmasterupdate(request):
             except Exception:
                 pass
             raise
+        cleanupmasterimageimports(imagepath)
         return {
             'status': 'ok',
             'username': requested,
@@ -2946,7 +3142,7 @@ def handlesessionlockstart(request):
 
 # Boot-scoped state helpers. Operations Server is the sole writer. The
 # checkpoint is not the live registry; it only lets a restarted server recover
-# descriptive metadata for processes that still have the same /proc identity.
+# descriptive metadata for processes that still have the same kernel identity.
 def savestate():
 
     temporary = f'{OPERATIONSSTATE}.tmp.{os.getpid()}.{threading.get_ident()}'

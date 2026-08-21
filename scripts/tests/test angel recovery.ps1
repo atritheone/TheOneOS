@@ -149,6 +149,17 @@ test "$angel_shutdown_health_action" = restart
 angel_clear_shutdown_health_request
 test ! -e "$shutdown_request"
 
+# Recovery completion leaves a one-shot GRUB marker. Normal init consumes it
+# after GRUB has selected the ordinary OS entry without showing a menu.
+angel_arm_normal_boot reset
+normal_boot_request="$esp/T1OS/recovery-complete"
+grep -Fxq 'format=1' "$normal_boot_request"
+grep -Fxq 'state=complete' "$normal_boot_request"
+grep -Fxq 'action=reset' "$normal_boot_request"
+test "$(stat -c '%a' "$normal_boot_request")" = 600
+angel_clear_normal_boot_request
+test ! -e "$normal_boot_request"
+
 # The recovery reader must honor its chosen interactive console and normalize
 # the short answer without requiring Python or a general shell.
 answer_file="$work/answer"

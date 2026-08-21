@@ -57,6 +57,11 @@ GOOGLEAPICREDENTIALENVIRONMENT = {
     "google_default_client_id": "GOOGLE_DEFAULT_CLIENT_ID",
     "google_default_client_secret": "GOOGLE_DEFAULT_CLIENT_SECRET",
 }
+# Chromium shows its missing-Google-API-key infobar only while the API key is
+# its compiled-in unset token. T1OS does not ship third-party credentials, so
+# use an explicit non-secret sentinel when no architect-provisioned key exists.
+# A real protected credential document still replaces this value below.
+GOOGLEAPIKEYSUPPRESSIONVALUE = "no"
 INSTANCELOCK = SETTINGROOT + "/instance.lock"
 INSTANCESOCKET = SETTINGROOT + "/instance.sock"
 DISPLAYSETTINGFILE = "/the one/settings/display/settings.json"
@@ -1860,6 +1865,9 @@ def applygoogleapicredentials(environment, credentials):
 
     updated = dict(environment)
     if credentials is None:
+        updated[GOOGLEAPICREDENTIALENVIRONMENT["google_api_key"]] = (
+            GOOGLEAPIKEYSUPPRESSIONVALUE
+        )
         return updated
     validated = validategoogleapicredentials(credentials)
     for name, value in validated.items():
@@ -6781,6 +6789,10 @@ def diagnostic():
     checks["google_api_credentials"] = (
         GOOGLEAPICREDENTIALFILE
         == "/the one/build/chromium/google api credentials.json"
+        and GOOGLEAPIKEYSUPPRESSIONVALUE == "no"
+        and applygoogleapicredentials(
+            {"UNCHANGED": "1"}, None,
+        ).get("GOOGLE_API_KEY") == GOOGLEAPIKEYSUPPRESSIONVALUE
         and set(sample_google_credentials)
         == {"format", *GOOGLEAPICREDENTIALENVIRONMENT}
         and applygoogleapicredentials(

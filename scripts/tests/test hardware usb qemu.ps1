@@ -174,7 +174,8 @@ fatal_seen=0
 
 roothealth_ready() {
     grep -Fq '~ I verified and completed every qualified NTFS repair before mounting The One OS. ~' "$serial_log" 2>/dev/null ||
-        grep -Fq '~ RootHealth verified the boot-critical NTFS metadata without a complete filesystem scan. ~' "$serial_log" 2>/dev/null
+        grep -Fq '~ RootHealth verified the boot-critical NTFS metadata without a complete filesystem scan. ~' "$serial_log" 2>/dev/null ||
+        grep -Fq '~ RootHealth admitted the root. ~' "$serial_log" 2>/dev/null
 }
 
 while kill -0 "$qemu_pid" 2>/dev/null; do

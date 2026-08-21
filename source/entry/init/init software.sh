@@ -120,6 +120,10 @@ export TERMINFO="/the one/settings/terminfo"
 export PYTHONHASHSEED=0
 export PYTHONNOUSERSITE=1
 export PYTHONDONTWRITEBYTECODE=1
+# The VM root does not use the hardware initramfs RootHealth shutdown gate.
+# After GODDESS quiesces and protects storage, hand the selected action directly
+# to the virtual firmware so poweroff stops the VM and restart reboots it.
+export T1OS_POWER_HANDOFF=direct
 # Normal VM boots keep GODDESS dialogue on the serial and persistent log
 # streams.  She can still force the local console mirror for fatal recovery.
 export T1OS_QUIET=1
