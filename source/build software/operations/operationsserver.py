@@ -1368,12 +1368,12 @@ def handlelaunchcatalogue(request):
             raise ValueError('catalogue metadata denied')
         arguments = cataloguearguments(policy['arguments'], request.get('args', []))
         environment = applicationenvironment(request.get('environment', {}), policy)
-        process, info = spawnsandboxed(
-            path, arguments, policy['profile'], environment,
-            name=policy['name'])
         session = sessionidentityfor(request['_peer']['pid'])
         if not session:
             raise PermissionError('session ownership unavailable')
+        process, info = spawnsandboxed(
+            path, arguments, policy['profile'], environment,
+            name=policy['name'])
         info['_owner_pid'] = int(request['_peer']['pid'])
         info['_owner_started'] = int(request['_peer']['started'])
         info['_session_identity'] = session

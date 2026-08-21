@@ -420,7 +420,6 @@ SNAPPREVIEW = None
 PENDINGKILLS = {}
 
 # launcher
-ARRAYPID = None
 ARRAYLAST = 0.0
 ARRAYCOOLDOWN = 0.35
 BRICKPID = None
@@ -3727,7 +3726,7 @@ def operationskill(pid):
 
 def openarray():
 
-    global ARRAYPID, ARRAYLAST
+    global ARRAYLAST
 
     try:
 
@@ -3743,38 +3742,10 @@ def openarray():
 
     ARRAYLAST = now
 
-    try:
-
-        # launch array via trusted python
-        arraypath = "/the one/build/array/array.py"
-        arraylog = softwarelogpath(arraypath)
-        p = popenisolated(
-            [arraypath],
-            softwarepath=arraypath,
-            logpath=arraylog,
-            security_profile="desktop",
-            preexec_fn=dropdesktopidentity,
-        )
-
-        ARRAYPID = int(p.pid)
-
-    except Exception as e:
-
-        log(f"openarray launch error {e}")
-        return
-
-    user = "session"
-
-    # register with operations server if available (non-fatal)
-    operationsregisterpid(
-        ARRAYPID,
-        "array",
-        arraypath,
-        arraylog,
-        user,
-        "front",
-        "starting",
-    )
+    # WindowServer owns the global shortcut, but it is not the authenticated
+    # desktop session.  Ask the measured Expanse controller to launch Array so
+    # Operations can bind the child to that session before it executes.
+    broadcasttaskbarevent({"op": "SESSION_OPEN_ARRAY"})
 
 
 def takescreenshot():
@@ -4922,7 +4893,7 @@ def handleinputevent(msg):
 
                 return
 
-            # win+e -> open array (global, windowserver launched)
+            # win+e -> ask the authenticated desktop session to open Array
             if WINSTATE.get("held") and st == "down" and key == "E":
 
                 WINSTATE["suppresstext"].append("e")

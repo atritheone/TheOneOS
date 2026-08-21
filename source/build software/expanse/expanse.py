@@ -14670,6 +14670,9 @@ def main():
                         elif op == "TASKBAR_VOLUME_HOTKEY":
                             handlevolumehotkey(s, m)
 
+                        elif op == "SESSION_OPEN_ARRAY":
+                            launchstartsoftware("array")
+
                         elif op == "STARTMENU_TOGGLE":
                             handlestartmenutoggle(s, m)
 

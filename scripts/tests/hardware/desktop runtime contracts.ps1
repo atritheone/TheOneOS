@@ -940,7 +940,10 @@ foreach ($requiredText in @(
     "mountoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'",
     'self.probevolumeaccess(target, writable=not readonly)',
     'def probevolumeaccess(target, writable):',
-    'os.setuid(1000)',
+    'rootstate.st_uid != 1000',
+    'rootstate.st_gid != 1000',
+    'probestate.st_uid != 1000',
+    'probestate.st_gid != 1000',
     'access_probe=passed',
     'module parameter verified {module}.{name}={actual}',
     'modprobe timed out after',
@@ -1007,6 +1010,30 @@ foreach ($requiredText in @(
 }
 if ($driverServerText.Contains('attempts.append(baseflags | MS_RDONLY)')) {
     throw 'A safely writable external volume may still silently fall back to read-only.'
+}
+$volumeProbeStart = $driverServerText.IndexOf(
+    '    def probevolumeaccess(target, writable):'
+)
+$volumeProbeEnd = $driverServerText.IndexOf(
+    '    def targetforvolume(self, probe, mounted):',
+    $volumeProbeStart
+)
+if ($volumeProbeStart -lt 0 -or $volumeProbeEnd -le $volumeProbeStart) {
+    throw 'Driver Server external-volume access probe could not be bounded.'
+}
+$volumeProbeText = $driverServerText.Substring(
+    $volumeProbeStart,
+    $volumeProbeEnd - $volumeProbeStart
+)
+foreach ($forbiddenTransition in @(
+    'os.fork(', 'os.setuid(', 'os.setgid(', 'os.setgroups('
+)) {
+    if ($volumeProbeText.Contains($forbiddenTransition)) {
+        throw (
+            'Driver Server external-volume publication still performs the ' +
+            "LSM-blocked credential transition: $forbiddenTransition"
+        )
+    }
 }
 foreach ($forbiddenText in @(
     "return ['nouveau', 'nvidia']",

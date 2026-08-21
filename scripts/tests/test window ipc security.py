@@ -28,6 +28,10 @@ from pathlib import Path
 FILES = {
     "input": Path("source/build software/input/inputserver.py"),
     "window": Path("source/build software/windows/windowserver.py"),
+    "expanse": Path("source/build software/expanse/expanse.py"),
+    "operations": Path("source/build software/operations/operationsserver.py"),
+    "driver": Path("source/build software/drivers/driverserver.py"),
+    "write": Path("source/build software/write/write.py"),
     "settings": Path("source/build software/settings/settings.py"),
     "chromium": Path("source/build software/chromium/chromium.py"),
 }
@@ -99,6 +103,60 @@ def main():
         "waitforprocessidentity",
     )
     assert "def trustedscript(" not in window_source
+
+    openarray = function_source(trees["window"], window_source, "openarray")
+    require(openarray, 'broadcasttaskbarevent({"op": "SESSION_OPEN_ARRAY"})')
+    for forbidden_launch in ("popenisolated(", "operationsregisterpid("):
+        assert forbidden_launch not in openarray, (
+            f"Win+E still bypasses session-owned catalogue launch: {forbidden_launch}")
+
+    input_dispatch = function_source(
+        trees["window"], window_source, "handleinputevent")
+    require(
+        input_dispatch,
+        'WINSTATE.get("held") and st == "down" and key == "E"',
+        "openarray()",
+    )
+
+    expanse_main = function_source(
+        trees["expanse"], sources["expanse"], "main")
+    require(
+        expanse_main,
+        'elif op == "SESSION_OPEN_ARRAY":',
+        'launchstartsoftware("array")',
+    )
+
+    catalogue_launch = function_source(
+        trees["operations"], sources["operations"], "handlelaunchcatalogue")
+    session_check = catalogue_launch.index(
+        "session = sessionidentityfor(request['_peer']['pid'])")
+    spawn = catalogue_launch.index("process, info = spawnsandboxed(")
+    assert session_check < spawn, (
+        "Operations spawns catalogue software before session ownership is proven")
+
+    volume_probe = function_source(
+        trees["driver"], sources["driver"], "probevolumeaccess")
+    require(
+        volume_probe,
+        "rootstate.st_uid != 1000",
+        "rootstate.st_gid != 1000",
+        "probestate.st_uid != 1000",
+        "os.write(probedescriptor, b'1')",
+    )
+    for forbidden_transition in (
+        "os.fork(", "os.setuid(", "os.setgid(", "os.setgroups(",
+    ):
+        assert forbidden_transition not in volume_probe, (
+            "DriverServer volume publication still performs an LSM-blocked "
+            f"credential transition: {forbidden_transition}")
+
+    user_read_path = function_source(
+        trees["write"], sources["write"], "userreadpath")
+    user_save_path = function_source(
+        trees["write"], sources["write"], "usersavepath")
+    require(user_read_path, "'/the one/logs'")
+    assert "'/the one/logs'" not in user_save_path, (
+        "Write made the system log tier writable while admitting it for reading")
 
     calls = [
         node for node in ast.walk(trees["window"])

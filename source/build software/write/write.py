@@ -8734,6 +8734,7 @@ def userreadpath(raw):
         os.path.normpath(f'/master/{getusername()}'),
         '/.ephemeral/volumes',
         '/software',
+        '/the one/logs',
     )
     contained = False
 

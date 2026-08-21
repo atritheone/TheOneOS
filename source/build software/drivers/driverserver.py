@@ -3283,81 +3283,75 @@ class DriverServer:
 
     @staticmethod
     def probevolumeaccess(target, writable):
-        if not hasattr(os, 'fork'):
-            raise OSError(errno.ENOSYS, 'desktop volume access probe is unavailable')
-
-        resultread, resultwrite = os.pipe()
+        directorydescriptor = -1
+        probedescriptor = -1
+        probename = f'.t1os-write-probe-{os.getpid()}-{time.monotonic_ns()}'
         try:
-            pid = os.fork()
-        except OSError:
-            os.close(resultread)
-            os.close(resultwrite)
-            raise
-
-        if pid == 0:
-            os.close(resultread)
-            directorydescriptor = -1
-            probedescriptor = -1
-            probename = f'.t1os-write-probe-{os.getpid()}'
-            try:
-                os.setgroups([])
-                os.setgid(1000)
-                os.setuid(1000)
-                directorydescriptor = os.open(
-                    target,
-                    os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
-                    getattr(os, 'O_CLOEXEC', 0),
+            rootstate = os.stat(target, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(rootstate.st_mode) or
+                rootstate.st_uid != 1000 or rootstate.st_gid != 1000 or
+                stat.S_IMODE(rootstate.st_mode) & 0o077
+            ):
+                raise OSError(
+                    errno.EACCES,
+                    'mounted volume does not expose the private desktop identity',
+                    str(target),
                 )
-                os.listdir(directorydescriptor)
-                if writable:
-                    probedescriptor = os.open(
-                        probename,
-                        os.O_WRONLY | os.O_CREAT | os.O_EXCL |
-                        getattr(os, 'O_CLOEXEC', 0) |
-                        getattr(os, 'O_NOFOLLOW', 0),
-                        0o600,
-                        dir_fd=directorydescriptor,
-                    )
-                    if os.write(probedescriptor, b'1') != 1:
-                        raise OSError(errno.EIO, 'short desktop volume probe write')
-                    os.fsync(probedescriptor)
-                    os.close(probedescriptor)
-                    probedescriptor = -1
-                    os.unlink(probename, dir_fd=directorydescriptor)
-                os._exit(0)
-            except BaseException as error:
-                try:
-                    message = f'{type(error).__name__}: {error}'.encode(
-                        'utf-8', errors='replace'
-                    )[:2048]
-                    os.write(resultwrite, message)
-                except BaseException:
-                    pass
-                if probedescriptor >= 0:
-                    try:
-                        os.close(probedescriptor)
-                    except OSError:
-                        pass
-                if directorydescriptor >= 0:
-                    try:
-                        os.unlink(probename, dir_fd=directorydescriptor)
-                    except OSError:
-                        pass
-                    try:
-                        os.close(directorydescriptor)
-                    except OSError:
-                        pass
-                os._exit(1)
+            directorydescriptor = os.open(
+                target,
+                os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+                getattr(os, 'O_CLOEXEC', 0) |
+                getattr(os, 'O_NOFOLLOW', 0),
+            )
+            openedstate = os.fstat(directorydescriptor)
+            if (
+                openedstate.st_dev != rootstate.st_dev or
+                openedstate.st_ino != rootstate.st_ino or
+                not stat.S_ISDIR(openedstate.st_mode)
+            ):
+                raise OSError(
+                    errno.EACCES, 'mounted volume changed during access probe',
+                    str(target),
+                )
+            os.listdir(directorydescriptor)
 
-        os.close(resultwrite)
-        try:
-            message = os.read(resultread, 2048).decode('utf-8', errors='replace')
+            if writable:
+                probedescriptor = os.open(
+                    probename,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                    getattr(os, 'O_CLOEXEC', 0) |
+                    getattr(os, 'O_NOFOLLOW', 0),
+                    0o600,
+                    dir_fd=directorydescriptor,
+                )
+                probestate = os.fstat(probedescriptor)
+                if (
+                    not stat.S_ISREG(probestate.st_mode) or
+                    probestate.st_uid != 1000 or probestate.st_gid != 1000 or
+                    stat.S_IMODE(probestate.st_mode) & 0o077 or
+                    probestate.st_nlink != 1
+                ):
+                    raise OSError(
+                        errno.EACCES,
+                        'mounted volume did not apply the desktop file identity',
+                        str(target),
+                    )
+                if os.write(probedescriptor, b'1') != 1:
+                    raise OSError(errno.EIO, 'short mounted volume probe write')
+                os.fsync(probedescriptor)
+                os.close(probedescriptor)
+                probedescriptor = -1
+                os.unlink(probename, dir_fd=directorydescriptor)
         finally:
-            os.close(resultread)
-        _, waitstatus = os.waitpid(pid, 0)
-        if not os.WIFEXITED(waitstatus) or os.WEXITSTATUS(waitstatus) != 0:
-            detail = message or 'desktop user could not access the mounted volume'
-            raise OSError(errno.EACCES, detail, str(target))
+            if probedescriptor >= 0:
+                os.close(probedescriptor)
+            if directorydescriptor >= 0:
+                try:
+                    os.unlink(probename, dir_fd=directorydescriptor)
+                except FileNotFoundError:
+                    pass
+                os.close(directorydescriptor)
 
     def targetforvolume(self, probe, mounted):
         label = str(probe.get('label') or '').strip()
