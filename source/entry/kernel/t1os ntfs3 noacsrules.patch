@@ -1,0 +1,84 @@
+diff --git a/fs/ntfs3/inode.c b/fs/ntfs3/inode.c
+index 7837aac90628..2fbf14abcb29 100644
+--- a/fs/ntfs3/inode.c
++++ b/fs/ntfs3/inode.c
+@@ -378,7 +378,9 @@ static struct inode *ntfs_read_mft(struct inode *inode,
+ 			 * ntfs_get_wsl_perm updates inode->i_uid, inode->i_gid, inode->i_mode
+ 			 */
+-			inode->i_mode = mode;
+-			ntfs_get_wsl_perm(inode);
+-			mode = inode->i_mode;
++			if (!sbi->options->noacsrules) {
++				inode->i_mode = mode;
++				ntfs_get_wsl_perm(inode);
++				mode = inode->i_mode;
++			}
+ 		}
+ 		goto next_attr;
+@@ -418,7 +420,14 @@ end_enum:
+ 		goto out;
+ 	}
+ 
+-	if (std5->fa & FILE_ATTRIBUTE_READONLY)
++	/*
++	 * Windows uses READONLY on directories for folder customisation; it is
++	 * not a directory write-access rule.  A synthetic noacsrules mount must
++	 * therefore not turn such a directory (including a volume root) into
++	 * 0555 and strand an otherwise writable removable volume.
++	 */
++	if ((std5->fa & FILE_ATTRIBUTE_READONLY) &&
++	    (!S_ISDIR(mode) || !sbi->options->noacsrules))
+ 		mode &= ~0222;
+ 
+ 	if (!names) {
+diff --git a/fs/ntfs3/ntfs_fs.h b/fs/ntfs3/ntfs_fs.h
+index 068b09ef3ae9..d48f7363e194 100644
+--- a/fs/ntfs3/ntfs_fs.h
++++ b/fs/ntfs3/ntfs_fs.h
+@@ -109,6 +109,7 @@ struct ntfs_mount_options {
+ 	unsigned force : 1; /* RW mount dirty volume. */
+ 	unsigned prealloc : 1; /* Preallocate space when file is growing. */
+ 	unsigned nocase : 1; /* case insensitive. */
++	unsigned noacsrules : 1; /* Ignore stored WSL uid/gid/mode EAs. */
+ 	unsigned delalloc : 1; /* delay allocation. */
+ };
+ 
+diff --git a/fs/ntfs3/super.c b/fs/ntfs3/super.c
+index 6f843ccba175..db00db9012ac 100644
+--- a/fs/ntfs3/super.c
++++ b/fs/ntfs3/super.c
+@@ -269,6 +269,7 @@ enum Opt {
+ 	Opt_prealloc,
+ 	Opt_prealloc_bool,
+ 	Opt_nocase,
++	Opt_noacsrules,
+ 	Opt_delalloc,
+ 	Opt_delalloc_bool,
+ 	Opt_err,
+@@ -294,6 +295,7 @@ static const struct fs_parameter_spec ntfs_fs_parameters[] = {
+ 	fsparam_flag("prealloc",	Opt_prealloc),
+ 	fsparam_bool("prealloc",	Opt_prealloc_bool),
+ 	fsparam_flag("nocase",		Opt_nocase),
++	fsparam_flag("noacsrules",	Opt_noacsrules),
+ 	fsparam_flag("delalloc",	Opt_delalloc),
+ 	fsparam_bool("delalloc",	Opt_delalloc_bool),
+ 	{}
+@@ -407,6 +409,9 @@ static int ntfs_fs_parse_param(struct fs_context *fc,
+ 	case Opt_nocase:
+ 		opts->nocase = 1;
+ 		break;
++	case Opt_noacsrules:
++		opts->noacsrules = 1;
++		break;
+ 	case Opt_delalloc:
+ 		opts->delalloc = 1;
+ 		break;
+@@ -788,6 +793,8 @@ static int ntfs_show_options(struct seq_file *m, struct dentry *root)
+ 		seq_puts(m, ",prealloc");
+ 	if (opts->nocase)
+ 		seq_puts(m, ",nocase");
++	if (opts->noacsrules)
++		seq_puts(m, ",noacsrules");
+ 	if (opts->delalloc)
+ 		seq_puts(m, ",delalloc");
+ 

@@ -20,7 +20,7 @@ import hashlib
 import select
 import stat
 import zlib
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
 sys.path.insert(0, '/the one/build')
 
@@ -15680,7 +15680,13 @@ def measuretext(text, size, fontpath=None):
 
         fontkey = ttffontkey(fontpath)
 
-        for ch in text:
+        # FreeType measurement here is the sum of independent glyph advances;
+        # kerning is deliberately not applied.  Counting repeated characters
+        # in C first produces the identical width without a Python iteration
+        # for every byte in large logs.  Write's lazy all-line width index was
+        # otherwise able to keep a 40,000-line hardware inventory busy for
+        # most of the session even though only the visible rows were drawn.
+        for ch, count in Counter(text).items():
 
             cachekey = (fontkey, int(size), ch)
             advance = TTFADVANCES.get(cachekey)
@@ -15696,7 +15702,7 @@ def measuretext(text, size, fontpath=None):
                     TTFADVANCES.clear()
                     TTFADVANCES[cachekey] = advance
 
-            width += int(advance)
+            width += int(advance) * int(count)
 
         return width
 

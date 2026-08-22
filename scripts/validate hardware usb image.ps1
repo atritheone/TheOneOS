@@ -1043,14 +1043,15 @@ PY
     find "$work/root" -mindepth 1 -maxdepth 1 -printf '%f\n' |
         LC_ALL=C sort > "$work/root-entries.actual"
     cmp "$work/root-entries.expected" "$work/root-entries.actual"
-    test -s "$work/root/the one/resources/t1os-drive.ico"
+    test -s "$work/root/the one/resources/system/drive logo.ico"
+    test ! -e "$work/root/the one/resources/t1os-drive.ico"
     test ! -e "$work/root/.recover"
     cmp -s \
         "$work/root/the one/settings/recovery/files.tsv" \
         "$work/recovery/the one/settings/recovery/files.tsv"
     tr -d '\r' < "$work/root/autorun.inf" > "$work/autorun-normalized"
     grep -Fqx '[Autorun]' "$work/autorun-normalized"
-    grep -Fqx 'Icon="the one\resources\t1os-drive.ico"' "$work/autorun-normalized"
+    grep -Fqx 'Icon="the one\resources\system\drive logo.ico"' "$work/autorun-normalized"
     grep -Fqx "Label=$expected_root_label" "$work/autorun-normalized"
     for forbidden in bin dev etc home lib lib64 mnt opt proc root run sbin srv sys tmp usr var; do
         if [ -e "$work/root/$forbidden" ]; then

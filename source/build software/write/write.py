@@ -26,6 +26,7 @@ import subprocess
 import re
 import secrets
 import stat
+import hashlib
 from collections import OrderedDict
 
 sys.path.insert(0, '/the one/build')
@@ -66,6 +67,7 @@ PROMPT_BUFFER = ''
 
 # window
 WINDOW_ID = None
+WINDOW_MAPPED = False
 POINTER_CURSOR_MODE = 'arrow'
 BASE_WIN_W = 800
 BASE_WIN_H = 600
@@ -295,6 +297,22 @@ def logmsg(text):
 
     except Exception:
 
+        pass
+
+
+def debugstage(name, started=None, **details):
+
+    try:
+        fields = []
+
+        if started is not None:
+            fields.append(f'elapsed_ms={(time.monotonic_ns() - int(started)) / 1000000.0:.3f}')
+
+        fields.extend(f'{key}={value}' for key, value in details.items())
+        suffix = f" {' '.join(fields)}" if fields else ''
+        logmsg(f'debug {str(name).strip().lower()}{suffix}')
+
+    except Exception:
         pass
 
 
@@ -3285,6 +3303,17 @@ def sendmsg(msg):
         # send payload
         ws_sock.sendall(payload)
 
+        operation = str(msg.get('op', ''))
+
+        if operation in ('GRAPHICS_SCENE', 'GRAPHICS_CLEAR'):
+            debugstage(
+                'graphics request sent',
+                operation=operation,
+                bytes=len(payload),
+                commands=len(msg.get('commands', [])) if isinstance(msg.get('commands'), list) else 0,
+                pending=bool(GRAPHICSSTATE.get('pending')),
+            )
+
     except BrokenPipeError:
 
         # connection closed by server
@@ -3793,6 +3822,7 @@ def createwindow():
 def mapwindow():
 
     global WINDOW_ID
+    global WINDOW_MAPPED
 
     if not WINDOW_ID:
 
@@ -3817,8 +3847,19 @@ def mapwindow():
         logmsg(f'error building map request {e}')
         return
 
+    started = time.monotonic_ns()
+    debugstage(
+        'map window begin',
+        window=WINDOW_ID,
+        managed_available=bool(GRAPHICSSTATE.get('available')),
+        managed_pending=bool(GRAPHICSSTATE.get('pending')),
+    )
+
     # send map request
-    sendmsg(msg)
+    if not sendmsg(msg):
+        debugstage('map window failed', started, window=WINDOW_ID)
+        return
+    WINDOW_MAPPED = True
 
     try:
 
@@ -3859,6 +3900,13 @@ def mapwindow():
 
         # send focus set request
         sendmsg(focus_msg)
+
+    debugstage(
+        'map window complete',
+        started,
+        window=WINDOW_ID,
+        managed_pending=bool(GRAPHICSSTATE.get('pending')),
+    )
 
     return
 
@@ -4011,6 +4059,15 @@ def dispatchmessage(msg):
 
     if op == 'GRAPHICS_COMMITTED':
 
+        if int(GRAPHICSSTATE.get('frames', 0)) == 0:
+            debugstage(
+                'first graphics commit received',
+                window=msg.get('winid'),
+                generation=msg.get('generation'),
+                presented=msg.get('presented'),
+                accelerated=msg.get('accelerated'),
+                managed_only=msg.get('managed_only'),
+            )
         graphicscommitted(msg)
         return
 
@@ -4041,6 +4098,13 @@ def dispatchmessage(msg):
         code = str(msg.get('code', ''))
 
         if code.startswith('graphics_'):
+
+            debugstage(
+                'graphics error received',
+                code=code,
+                detail=str(msg.get('detail', '')),
+                window=msg.get('winid'),
+            )
 
             managedresponse(GRAPHICSSTATE, msg)
             graphicsscheduleretry()
@@ -4376,6 +4440,9 @@ def graphicsdamage():
 
     try:
 
+        if GRAPHICSSTATE.get('strict_gpu') and not GRAPHICSCPUOVERRIDE:
+            return False
+
         if ws_sock is not None and WINDOW_ID:
             return sendmsg({
                 'op': 'DAMAGE',
@@ -4430,7 +4497,13 @@ def graphicsretry():
     global GRAPHICS_RETRY_AT
     global GRAPHICS_RETRY_COUNT
 
-    if GRAPHICSSTATE.get('available') or GRAPHICSCPUOVERRIDE:
+    retryingstrictgpu = bool(
+        GRAPHICSSTATE.get('strict_gpu')
+        and GRAPHICSSTATE.get('failure')
+        and GRAPHICS_RETRY_AT
+    )
+
+    if (GRAPHICSSTATE.get('available') and not retryingstrictgpu) or GRAPHICSCPUOVERRIDE:
         return False
 
     if GRAPHICS_RETRY_COUNT >= GRAPHICS_RETRY_LIMIT:
@@ -4473,6 +4546,11 @@ def graphicsrestorecpu():
 
         if WIN_W <= 0 or WIN_H <= 0:
             return False
+
+        if GRAPHICSSTATE.get('strict_gpu') and not GRAPHICSCPUOVERRIDE:
+            graphicsrequestscenerebuild()
+            graphicsscheduleretry()
+            return True
 
         redrawfull()
         return True
@@ -4592,6 +4670,46 @@ def graphicsclip(rect, outer=None):
         return None
 
 
+def graphicsnodekey(value):
+
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(',', ':'),
+        ).encode('utf-8')
+    except Exception:
+        encoded = repr(value).encode('utf-8', errors='replace')
+
+    return hashlib.sha256(encoded).hexdigest()[:24]
+
+
+def graphicsnodecategory(value):
+
+    source = value[0] if isinstance(value, (list, tuple)) and value else value
+    category = re.sub(r'[^A-Za-z0-9_.:-]+', '-', str(source)).strip('-')
+    return category[:32] or 'node'
+
+
+def graphicsvalidatenodeids(commands):
+
+    nodeids = set()
+
+    for command in commands:
+        nodeid = str(command.get('id', ''))
+
+        if not re.fullmatch(r'[A-Za-z0-9_.:-]{1,128}', nodeid):
+            raise ValueError(f'invalid managed graphics node id {nodeid!r}')
+
+        if nodeid in nodeids:
+            raise ValueError(f'duplicate managed graphics node id {nodeid!r}')
+
+        nodeids.add(nodeid)
+
+    return True
+
+
 def graphicsrect(commands, x, y, width, height, colour, clip, nodeid=None):
 
     try:
@@ -4611,7 +4729,7 @@ def graphicsrect(commands, x, y, width, height, colour, clip, nodeid=None):
 
         if nodeid is None:
 
-            colourkey = str(colour).replace(' ', '')
+            colourkey = graphicsnodekey(colour)
             baseid = f'write:rect:{clipped[0]}:{clipped[1]}:{clipped[2]}:{clipped[3]}:{colourkey}'
             duplicate = sum(1 for value in commands if str(value.get('id', '')).startswith(baseid + ':'))
             nodeid = f'{baseid}:{duplicate}'
@@ -4728,7 +4846,10 @@ def graphicstext(commands, x, y, text, colour, fontpath, clip, rowkey=None):
             if chunk and chunkx < int(WIN_W):
 
                 commands.append({
-                    'id': f'write:text:{str(key)}:{offset}',
+                    'id': (
+                        f'write:text:{graphicsnodecategory(key)}:'
+                        f'{graphicsnodekey(key)}:{offset}'
+                    ),
                     'kind': 'text',
                     'x': max(0, int(chunkx)),
                     'y': graphicstexty(y, fontpath),
@@ -5092,6 +5213,8 @@ def graphicsbuildscene():
     graphicsbuildscrollbars(commands, clip, horizontal=True)
     graphicsbuildscrollbars(commands, clip)
 
+    graphicsvalidatenodeids(commands)
+
     return commands
 
 
@@ -5121,7 +5244,11 @@ def graphicspump():
         return bool(GRAPHICSSTATE.get('active'))
 
     graphicspreparescenerebuild()
-    commands = graphicsbuildscene()
+
+    try:
+        commands = graphicsbuildscene()
+    except Exception as e:
+        return graphicsdisable(f'managed scene build failed {e}')
 
     if not commands or commands[0].get('kind') != 'rectangle' or commands[0].get('rect') != [0, 0, int(WIN_W), int(WIN_H)]:
         return graphicsdisable('managed scene does not contain a complete background')
@@ -5162,7 +5289,12 @@ def graphicspresent(dirty=None):
 
 def graphicsmanagedredraw(rect):
 
-    if not GRAPHICSSTATE.get('active') or not GRAPHICSSTATE.get('managed_only'):
+    strictgpu = bool(GRAPHICSSTATE.get('strict_gpu') and not GRAPHICSCPUOVERRIDE)
+
+    if not strictgpu and (
+        not GRAPHICSSTATE.get('active') or
+        not GRAPHICSSTATE.get('managed_only')
+    ):
         return False
 
     try:
@@ -5174,7 +5306,7 @@ def graphicsmanagedredraw(rect):
 
         graphicspump()
 
-        if not GRAPHICSSTATE.get('active'):
+        if not GRAPHICSSTATE.get('active') and not strictgpu:
             return False
 
     except Exception:
@@ -5209,6 +5341,18 @@ def presentchanges():
         # fall back to full window
         x, y, w, h = 0, 0, WIN_W, WIN_H
 
+    strictgpu = bool(GRAPHICSSTATE.get('strict_gpu') and not GRAPHICSCPUOVERRIDE)
+
+    if strictgpu:
+
+        try:
+            graphicspresent([x, y, w, h])
+        except Exception as e:
+            logmsg(f"> error submitting managed graphics scene {e}")
+
+        resetdirty()
+        return
+
     try:
 
         # present only the dirty region
@@ -5230,7 +5374,7 @@ def presentchanges():
 
         logmsg(f"> error submitting managed graphics scene {e}")
 
-    if not managed:
+    if not managed and not strictgpu:
 
         try:
 
@@ -6056,6 +6200,18 @@ def redrawfull():
         return
 
     clampxscroll()
+
+    # The retained scene is valid before MAP. WindowServer holds its physical
+    # presentation receipt until the window becomes drawable, which gives
+    # Write a complete GPU-rendered first frame without ever publishing a CPU
+    # backing surface in an accelerated session.
+    if GRAPHICSSTATE.get('strict_gpu') and not GRAPHICSCPUOVERRIDE:
+        graphicspresent([0, 0, int(WIN_W), int(WIN_H)])
+        LASTDRAWNROW = CUR_ROW
+        LASTDRAWNCOL = CUR_COL
+        LAST_PRESENTED_FIRST_ROW = int(FIRST_VISIBLE_ROW)
+        LAST_PRESENTED_VIEWPORT = tuple(viewportgeometry())
+        return
 
     if graphicsmanagedredraw([0, 0, int(WIN_W), int(WIN_H)]):
         LASTDRAWNROW = CUR_ROW
@@ -6886,9 +7042,19 @@ def docwidthindexstep(budget_ms=2.0):
     oldmaximum = int(DOC_MAXW)
     deadline = time.monotonic() + max(0.00025, float(budget_ms) / 1000.0)
 
+    processed = 0
+
     while DOC_WIDTH_INDEX_ROW < len(DOC_LINES) and time.monotonic() < deadline:
         docwidthindexline(DOC_WIDTH_INDEX_ROW)
         DOC_WIDTH_INDEX_ROW += 1
+        processed += 1
+
+        # Re-check the window socket between bounded batches even on machines
+        # whose monotonic clock has a coarse tick.  This is an upper bound as
+        # well as the time budget, so a large log can never monopolise one
+        # editor-loop turn while its horizontal extent is discovered.
+        if processed >= 128:
+            break
 
     completed = DOC_WIDTH_INDEX_ROW >= len(DOC_LINES)
 
@@ -8559,6 +8725,9 @@ def filelineending(value):
 
 def readfilepayload(path):
 
+    started = time.monotonic_ns()
+    requestedpath = str(path)
+    debugstage('file read begin', path=requestedpath)
     path = userreadpath(path)
     descriptor = os.open(
         path,
@@ -8630,6 +8799,14 @@ def readfilepayload(path):
 
     values = lines or ['']
     count = len(values)
+    debugstage(
+        'file read complete',
+        started,
+        path=path,
+        bytes=len(payload),
+        lines=count,
+        encoding=encoding,
+    )
     return {
         'kind': 'load',
         'ok': True,
@@ -9079,6 +9256,9 @@ def loaddocumentfromfile(path):
 
     try:
 
+        started = time.monotonic_ns()
+        debugstage('document load begin', path=str(path), running=bool(APP_RUNNING))
+
         # reset pointer state on load
         resetpointerstate()
 
@@ -9092,11 +9272,13 @@ def loaddocumentfromfile(path):
 
         if APP_RUNNING:
             startfileio('load', p)
+            debugstage('document load queued', started, path=p)
             return
 
         payload = readfilepayload(p)
         loaddocumentfromlines(
             payload.get('lines', ['']),
+            lazy_widths=True,
             take_ownership=True,
             metadata=payload.get('metadata'),
         )
@@ -9211,6 +9393,14 @@ def savedocumenttofile(path):
         # saved document is clean
         SAVED_REVISION = CURRENT_REVISION
         IS_DIRTY = False
+
+        debugstage(
+            'document load complete',
+            started,
+            path=p,
+            lines=len(DOC_LINES),
+            width_index_pending=bool(DOC_WIDTH_INDEX_ACTIVE),
+        )
 
         # success status
         setstatus('saved')
@@ -11501,12 +11691,16 @@ def initapp():
     global APP_RUNNING
     global FILE_PATH
 
+    started = time.monotonic_ns()
+    debugstage('initialisation begin')
     loadsettings()
+    debugstage('settings loaded', started)
 
     try:
 
         # parse command line arguments
         parseargs()
+        debugstage('arguments parsed', started, file=FILE_PATH or '')
 
     except Exception as e:
 
@@ -11525,6 +11719,13 @@ def initapp():
 
             initialisedocument()
 
+        debugstage(
+            'document ready',
+            started,
+            lines=len(DOC_LINES),
+            width_index_pending=bool(DOC_WIDTH_INDEX_ACTIVE),
+        )
+
     except Exception as e:
 
         # document init error
@@ -11535,6 +11736,7 @@ def initapp():
 
         # connect to window server
         connectwindowserver()
+        debugstage('window server connected', started)
 
     except SystemExit:
 
@@ -11551,6 +11753,7 @@ def initapp():
 
         # perform hello handshake
         sendhello()
+        debugstage('window server hello complete', started)
 
     except Exception as e:
 
@@ -11562,6 +11765,7 @@ def initapp():
 
         # create application window
         createwindow()
+        debugstage('window created', started, window=WINDOW_ID, width=WIN_W, height=WIN_H)
 
     except Exception as e:
 
@@ -11579,6 +11783,12 @@ def initapp():
 
         # initialise graphics for window
         initgraphics()
+        debugstage(
+            'graphics initialised',
+            started,
+            managed_available=bool(GRAPHICSSTATE.get('available')),
+            strict_gpu=bool(GRAPHICSSTATE.get('strict_gpu')),
+        )
 
     except Exception as e:
 
@@ -11601,6 +11811,7 @@ def initapp():
 
         # draw first frame
         redrawfull()
+        debugstage('first frame prepared', started)
 
     except Exception as e:
 
@@ -11612,6 +11823,7 @@ def initapp():
 
         # map and focus window
         mapwindow()
+        debugstage('window mapped', started, mapped=bool(WINDOW_MAPPED))
 
     except Exception as e:
 
@@ -11621,6 +11833,7 @@ def initapp():
 
     # application is now running
     APP_RUNNING = True
+    debugstage('initialisation complete', started, window=WINDOW_ID)
 
     return
 
@@ -11632,6 +11845,8 @@ def mainloop():
     # only enter loop if app is running
     if not APP_RUNNING:
         return
+
+    debugstage('main loop entered', window=WINDOW_ID)
 
     try:
 
@@ -12340,28 +12555,52 @@ def writeperformancediagnostic():
         if DOC_LINEW != expectedwidths or int(DOC_MAXW) != max(expectedwidths, default=0):
             raise RuntimeError('lazy width index differs from the complete width index')
 
+        # Match the latest USB failure shape: hardware_inventory.log is about
+        # 1.9 MB across 43,782 mostly short lines, with a small number of long
+        # inventory records.  Width discovery is allowed to continue between
+        # event polls, but no individual turn may become an observable UI
+        # freeze and the whole index must converge promptly.
+        inventorylines = [
+            f'{index:05d} pci module firmware inventory sha256 entry'
+            for index in range(43781)
+        ]
+        inventorylines.insert(4096, 'inventory-long-record ' + ('abcdef0123456789 ' * 482))
+        loaddocumentfromlines(inventorylines, lazy_widths=True, take_ownership=True)
+        inventorysteps = []
+        inventorystarted = time.monotonic_ns()
+
+        while DOC_WIDTH_INDEX_ACTIVE:
+            stepstarted = time.monotonic_ns()
+            docwidthindexstep(budget_ms=2.0)
+            inventorysteps.append((time.monotonic_ns() - stepstarted) / 1000000.0)
+
+        inventoryindexms = (time.monotonic_ns() - inventorystarted) / 1000000.0
+        inventorymaxstep = max(inventorysteps, default=0.0)
+
+        if inventorymaxstep > 20.0:
+            raise RuntimeError(f'hardware-inventory width turn blocked for {inventorymaxstep:.3f} ms')
+
+        if inventoryindexms > 5000.0:
+            raise RuntimeError(f'hardware-inventory width index took {inventoryindexms:.3f} ms')
+
+        loaddocumentfromtext(original)
+
         iopath = os.path.join(WRITELOGBASE, f'write-io-{os.getpid()}.txt')
 
         try:
-            filesaveworker(
+            # Exercise the bounded streaming codec directly.  The diagnostic
+            # log tier is deliberately outside a desktop user's save root and
+            # the diagnostic process runs as root, so routing this fixture
+            # through the production uid-1000 save-authority checks would test
+            # a nonexistent session rather than Write's streaming I/O.
+            writefilesnapshot(
                 iopath,
                 tuple(DOC_LINES),
-                CURRENT_REVISION,
                 FILE_ENCODING,
                 FILE_BOM,
                 FILE_NEWLINE,
             )
-
-            with FILE_IO_LOCK:
-                saveresult = dict(FILE_IO_RESULT or {})
-
-            if not saveresult.get('ok'):
-                raise RuntimeError(f'streaming save failed {saveresult}')
-
-            fileloadworker(iopath)
-
-            with FILE_IO_LOCK:
-                loadresult = dict(FILE_IO_RESULT or {})
+            loadresult = readfilepayload(iopath)
 
             if not loadresult.get('ok') or '\n'.join(loadresult.get('lines', [])) != original:
                 raise RuntimeError('streaming load/save round trip differs from the document')
@@ -12689,6 +12928,7 @@ def writeperformancediagnostic():
             'horizontal_visible_characters': len(visibletext),
             'incremental_wrap_lines': measurededit,
             'lazy_width_index': True,
+            'hardware_inventory_responsive': True,
             'bounded_advance_cache': True,
             'bounded_wrap_cache': True,
             'streaming_io': True,
@@ -12711,6 +12951,12 @@ def writeperformancediagnostic():
                 'cold_index_ms': round(longlinecoldms, 3),
                 'edit_average_ms': round(sum(longlineedits) / max(1, len(longlineedits)), 3),
                 'edit_maximum_ms': round(longlinemaximum, 3),
+            },
+            'hardware_inventory': {
+                'lines': len(inventorylines),
+                'index_ms': round(inventoryindexms, 3),
+                'maximum_turn_ms': round(inventorymaxstep, 3),
+                'turns': len(inventorysteps),
             },
             'cpu': {
                 name: {
@@ -12738,6 +12984,8 @@ def writegraphicsdiagnostic():
     global CONTEXT_MENU_OPEN, CONTEXT_MENU_X, CONTEXT_MENU_Y, CONTEXT_MENU_PANEL
     global CONTEXT_MENU_HOVER_ACTION, MENU_HOVER_ACTION
     global CONTEXT_PASTE_AVAILABLE
+    global WINDOW_ID, WINDOW_MAPPED, sendmsg, ws_sock
+    global GRAPHICS_RETRY_AT, GRAPHICS_RETRY_COUNT
 
     result = {
         'format': 1,
@@ -12803,6 +13051,47 @@ def writegraphicsdiagnostic():
 
         if not graphicsconfigure(capabilities):
             raise RuntimeError('managed capability negotiation failed')
+
+        # Exercise the real first-frame route while the window is still
+        # unmapped. No shared-buffer DAMAGE request may escape strict GPU mode.
+        originalsender = sendmsg
+        originalwindow = WINDOW_ID
+        originalmapped = WINDOW_MAPPED
+        originalsocket = ws_sock
+        premappedrequests = []
+
+        try:
+            WINDOW_ID = 99
+            WINDOW_MAPPED = False
+            ws_sock = object()
+            sendmsg = lambda request: premappedrequests.append(dict(request)) or True
+            graphicsrequestscenerebuild()
+            redrawfull()
+
+            if (
+                len(premappedrequests) != 1 or
+                premappedrequests[0].get('op') != 'GRAPHICS_SCENE' or
+                not GRAPHICSSTATE.get('pending') or
+                any(request.get('op') == 'DAMAGE' for request in premappedrequests)
+            ):
+                raise RuntimeError(
+                    'strict GPU first frame did not submit one pre-map retained scene '
+                    f'requests={premappedrequests} '
+                    f'available={GRAPHICSSTATE.get("available")} '
+                    f'strict={GRAPHICSSTATE.get("strict_gpu")} '
+                    f'pending={GRAPHICSSTATE.get("pending")} '
+                    f'need_submit={GRAPHICSSTATE.get("need_submit")} '
+                    f'render_batch_depth={RENDER_BATCH_DEPTH}'
+                )
+
+        finally:
+            sendmsg = originalsender
+            WINDOW_ID = originalwindow
+            WINDOW_MAPPED = originalmapped
+            ws_sock = originalsocket
+
+        if not graphicsconfigure(capabilities):
+            raise RuntimeError('managed capability renegotiation failed')
 
         graphicsbuildscene()
         started = time.monotonic_ns()
@@ -12872,8 +13161,8 @@ def writegraphicsdiagnostic():
         documenttext = [
             command for command in textcommands
             if str(command.get('id', '')).startswith((
-                "write:text:('document',",
-                "write:text:('selection-",
+                'write:text:document:',
+                'write:text:selection-',
             ))
         ]
 
@@ -13015,7 +13304,7 @@ def writegraphicsdiagnostic():
         contexttext = [
             command for command in contextscene
             if command.get('kind') == 'text'
-            and str(command.get('id', '')).startswith("write:text:('context',")
+            and str(command.get('id', '')).startswith('write:text:context:')
         ]
         contextlabels = {str(command.get('text', '')) for command in contexttext}
         expectedcontextlabels = {'undo', 'redo', 'cut', 'copy', 'paste', 'delete', 'select all'}
@@ -13199,12 +13488,17 @@ def writegraphicsdiagnostic():
         if requests[2].get('damage') != [[0, 0, WIN_W, WIN_H]]:
             raise RuntimeError('multiline paste scene did not request a complete repaint')
 
+        visiblepasterows = range(FIRST_VISIBLE_ROW, FIRST_VISIBLE_ROW + VISIBLE_LINES)
+        documentprefixes = {
+            f"write:text:document:{graphicsnodekey(('document', row, 0))}:"
+            for row in visiblepasterows
+            if 0 <= row < len(DOC_LINES) and str(DOC_LINES[row])
+        }
         pastedocument = [
             command for command in requests[2].get('commands', [])
             if command.get('kind') == 'text'
-            and str(command.get('id', '')).startswith("write:text:('document',")
+            and any(str(command.get('id', '')).startswith(prefix) for prefix in documentprefixes)
         ]
-        visiblepasterows = range(FIRST_VISIBLE_ROW, FIRST_VISIBLE_ROW + VISIBLE_LINES)
         expectedpasterows = sum(
             1 for row in visiblepasterows
             if 0 <= row < len(DOC_LINES) and str(DOC_LINES[row])
@@ -13227,6 +13521,30 @@ def writegraphicsdiagnostic():
             'accelerated': True,
             'managed_only': True,
         })
+
+        # A rejected strict-GPU scene must retain GPU ownership and retry on a
+        # timer. Immediate resubmission from the error handler creates a
+        # socket/error storm that starves input and makes Write appear frozen.
+        originalsender = sendmsg
+        retryrequests = []
+
+        try:
+            sendmsg = lambda request: retryrequests.append(dict(request)) or True
+            GRAPHICS_RETRY_AT = 0.0
+            GRAPHICS_RETRY_COUNT = 0
+            managedresponse(GRAPHICSSTATE, {
+                'op': 'ERROR',
+                'code': 'graphics_scene_failed',
+                'detail': 'diagnostic rejection',
+            })
+            graphicsrestorecpu()
+        finally:
+            sendmsg = originalsender
+
+        if retryrequests or GRAPHICS_RETRY_AT <= time.monotonic():
+            raise RuntimeError(
+                'strict GPU rejection retried synchronously instead of using bounded backoff'
+            )
 
         cpustate = managedstate(cpu=True)
 
@@ -13260,6 +13578,9 @@ def writegraphicsdiagnostic():
 
         result['checks'] = {
             'capability_negotiation': True,
+            'strict_gpu_first_frame': True,
+            'server_compatible_node_ids': True,
+            'bounded_error_retry': True,
             'cpu_fallback': True,
             'error_gpu_retention': True,
             'timeout_gpu_retention': True,

@@ -52,6 +52,7 @@ $grubTheme = Join-Path $projectRoot 'source\entry\grub\t1os hardware theme.txt'
 $grubBackground = Join-Path $projectRoot 'source\entry\grub\t1os black background.png.base64'
 $kernelConfig = Join-Path $projectRoot 'source\entry\kernel\T10Skernel hardware 0.19 settings.txt'
 $kernelPolicy = Join-Path $projectRoot 'source\entry\kernel\t1os_lsm.c'
+$ntfsNoAccessRulesPatch = Join-Path $projectRoot 'source\entry\kernel\t1os ntfs3 noacsrules.patch'
 $goddessScript = Join-Path $projectRoot 'source\build software\GODDESS\GODDESS.py'
 $expanseScript = Join-Path $projectRoot 'source\build software\expanse\expanse.py'
 $authenticationBroker = Join-Path $projectRoot 'source\build software\broker\broker.py'
@@ -128,6 +129,7 @@ $chromiumSubprocess = Join-Path $projectRoot 'source\software\chromium\tools\t1o
 $chromiumSubprocessSource = Join-Path $projectRoot 'source\entry\chromium\t1os_chrome_subprocess.c'
 $runtimePathContract = Join-Path $projectRoot 'source\settings\runtime paths.json'
 $kernelPolicyText = Get-Content -LiteralPath $kernelPolicy -Raw
+$ntfsNoAccessRulesPatchText = Get-Content -LiteralPath $ntfsNoAccessRulesPatch -Raw
 $rootPushText = Get-Content -LiteralPath $rootPushScript -Raw
 $hardwareKernelPushText = Get-Content -LiteralPath $hardwareKernelPushScript -Raw
 $globalDevicesCheck = $kernelPolicyText.IndexOf('if (!strcmp(relative, "devices"))')
@@ -149,12 +151,22 @@ foreach ($transactionNeedle in @(
     }
 }
 foreach ($externalMountPolicy in @(
-    'static bool t1os_external_volume_options(const void *data)',
+    'static bool t1os_external_volume_options(const char *type, const void *data)',
+    '"uid=1000,gid=1000,dmask=0077,fmask=0177,noacsrules"',
     '"uid=1000,gid=1000,dmask=0077,fmask=0177"',
-    't1os_external_volume_options(data)'
+    't1os_external_volume_options(type, data)'
 )) {
     if (-not $kernelPolicyText.Contains($externalMountPolicy)) {
         throw "T1OS LSM is missing the private uid-1000 removable-volume mount contract: $externalMountPolicy"
+    }
+}
+foreach ($ntfsSyntheticAccessRule in @(
+    'if (!sbi->options->noacsrules)',
+    '(!S_ISDIR(mode) || !sbi->options->noacsrules)',
+    'Windows uses READONLY on directories for folder customisation'
+)) {
+    if (-not $ntfsNoAccessRulesPatchText.Contains($ntfsSyntheticAccessRule)) {
+        throw "The NTFS3 synthetic access patch does not preserve writable read-only-attributed directories: $ntfsSyntheticAccessRule"
     }
 }
 foreach ($requiredText in @(

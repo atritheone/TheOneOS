@@ -15,10 +15,12 @@ $kernelRoot = Join-Path $projectRoot 'source\entry\kernel'
 $configSource = Join-Path $kernelRoot 'T10Skernel hardware 0.19 settings.txt'
 $policySource = Join-Path $kernelRoot 't1os_lsm.c'
 $quotedShebangPatch = Join-Path $kernelRoot 't1os quoted shebang.patch'
+$ntfsNoAccessRulesPatch = Join-Path $kernelRoot 't1os ntfs3 noacsrules.patch'
 $settingsTarget = Join-Path $kernelRoot 'T10Skernel hardware 0.19 settings.txt'
 $kernelTarget = Join-Path $kernelRoot 'current build\t1osbzimage-hardware-0.19'
 $hardwareRoot = Join-Path $projectRoot 'environment\hardware'
 $bootTarget = Join-Path $hardwareRoot 'boot\vmlinuz-hardware'
+$provenanceTarget = Join-Path $hardwareRoot 'boot\kernel-build-inputs.json'
 $modulesTarget = Join-Path $hardwareRoot 'modules.tar.zst'
 $developmentRoot = Join-Path $projectRoot 'development\hardware kernel'
 $stageRoot = Join-Path $developmentRoot 'stage'
@@ -35,14 +37,27 @@ $nvidiaVersion = '610.43.03'
 $nvidiaSha256 = '45e2d4c134a23c35e50f253a4aa63e7e5e8d17e3d185d4a07c8a58e9612ed392'
 $nvidiaRunfile = Join-Path $cacheRoot "NVIDIA-Linux-x86_64-$nvidiaVersion.run"
 $nvidiaUrl = "https://us.download.nvidia.com/XFree86/Linux-x86_64/$nvidiaVersion/NVIDIA-Linux-x86_64-$nvidiaVersion.run"
+$protectedSigningRoot = '/root/.config/t1os/module-signing'
+$repositorySigningKey = Join-Path $kernelRoot 'module signing key.pem'
+$repositorySigningCertificate = Join-Path $kernelRoot 'module signing certificate.pem'
 $moduleSigningKey = if ([string]::IsNullOrWhiteSpace($ModuleSigningKeyPath)) {
-    Join-Path $kernelRoot 'module signing key.pem'
+    if (Test-Path -LiteralPath $repositorySigningKey -PathType Leaf) {
+        $repositorySigningKey
+    }
+    else {
+        "$protectedSigningRoot/module-signing-key.pem"
+    }
 }
 else {
     $ModuleSigningKeyPath.Trim()
 }
 $moduleSigningCertificate = if ([string]::IsNullOrWhiteSpace($ModuleSigningCertificatePath)) {
-    Join-Path $kernelRoot 'module signing certificate.pem'
+    if (Test-Path -LiteralPath $repositorySigningCertificate -PathType Leaf) {
+        $repositorySigningCertificate
+    }
+    else {
+        "$protectedSigningRoot/module-signing-certificate.pem"
+    }
 }
 else {
     $ModuleSigningCertificatePath.Trim()
@@ -61,7 +76,8 @@ function ConvertTo-WslPath {
 foreach ($requiredFile in @(
     $configSource,
     $policySource,
-    $quotedShebangPatch
+    $quotedShebangPatch,
+    $ntfsNoAccessRulesPatch
 )) {
     if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
         throw "Required kernel input not found: $requiredFile"
@@ -142,6 +158,7 @@ $wslArchive = ConvertTo-WslPath -WindowsPath $archive
 $wslConfig = ConvertTo-WslPath -WindowsPath $configSource
 $wslPolicy = ConvertTo-WslPath -WindowsPath $policySource
 $wslQuotedShebangPatch = ConvertTo-WslPath -WindowsPath $quotedShebangPatch
+$wslNtfsNoAccessRulesPatch = ConvertTo-WslPath -WindowsPath $ntfsNoAccessRulesPatch
 $wslStageKernel = ConvertTo-WslPath -WindowsPath $stageKernel
 $wslStageSettings = ConvertTo-WslPath -WindowsPath $stageSettings
 $wslStageModules = ConvertTo-WslPath -WindowsPath $stageModules
@@ -172,6 +189,7 @@ nvidia_sha256=${13}
 module_signing_key=${14}
 module_signing_certificate=${15}
 quoted_shebang_patch=${16}
+ntfs_noacsrules_patch=${17}
 work=/var/tmp/t1os-hardware-kernel
 source="$work/linux-$kernel_version"
 modules_work="$work/modules-stage"
@@ -458,6 +476,35 @@ fi
 grep -Fq 'bool quoted_name = false;' "$source/fs/binfmt_script.c"
 grep -Fq "i_sep = strnchr(i_name, i_end - i_name, '\"');" "$source/fs/binfmt_script.c"
 
+if ! grep -Fq 'unsigned noacsrules : 1;' "$source/fs/ntfs3/ntfs_fs.h"; then
+    patch --batch --forward --fuzz=0 -d "$source" -p1 < "$ntfs_noacsrules_patch"
+fi
+if ! grep -Fq '(!S_ISDIR(mode) || !sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"; then
+    python3 - "$source/fs/ntfs3/inode.c" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "\tif (std5->fa & FILE_ATTRIBUTE_READONLY)\n\t\tmode &= ~0222;"
+new = """\t/*
+\t * Windows uses READONLY on directories for folder customisation; it is
+\t * not a directory write-access rule.  A synthetic noacsrules mount must
+\t * therefore not turn such a directory (including a volume root) into
+\t * 0555 and strand an otherwise writable removable volume.
+\t */
+\tif ((std5->fa & FILE_ATTRIBUTE_READONLY) &&
+\t    (!S_ISDIR(mode) || !sbi->options->noacsrules))
+\t\tmode &= ~0222;"""
+if text.count(old) != 1:
+    raise SystemExit('NTFS3 read-only mode rule did not match the pinned source exactly')
+path.write_text(text.replace(old, new))
+PY
+fi
+grep -Fq 'fsparam_flag("noacsrules",' "$source/fs/ntfs3/super.c"
+grep -Fq 'if (!sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"
+grep -Fq '(!S_ISDIR(mode) || !sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"
+
 for required in \
     SECURITY_T1OS MODULE_SIG MODULE_SIG_FORCE MODULE_SIG_ALL \
     SECURITY_LOCKDOWN_LSM LOCK_DOWN_KERNEL_FORCE_INTEGRITY \
@@ -698,7 +745,7 @@ $buildScriptPath = Join-Path $stageRoot 'build-hardware-kernel.sh'
 $wslBuildScript = ConvertTo-WslPath -WindowsPath $buildScriptPath
 $buildExitCode = 1
 try {
-    & wsl.exe -d Ubuntu -u root --exec bash $wslBuildScript $wslArchive $wslConfig $wslPolicy $wslStageKernel $wslStageSettings $wslStageModules $wslStageRelease $kernelVersion $kernelSha256 $resumeValue $wslNvidiaRunfile $nvidiaVersion $nvidiaSha256 $wslModuleSigningKey $wslModuleSigningCertificate $wslQuotedShebangPatch
+    & wsl.exe -d Ubuntu -u root --exec bash $wslBuildScript $wslArchive $wslConfig $wslPolicy $wslStageKernel $wslStageSettings $wslStageModules $wslStageRelease $kernelVersion $kernelSha256 $resumeValue $wslNvidiaRunfile $nvidiaVersion $nvidiaSha256 $wslModuleSigningKey $wslModuleSigningCertificate $wslQuotedShebangPatch $wslNtfsNoAccessRulesPatch
     $buildExitCode = $LASTEXITCODE
 }
 finally {
@@ -734,8 +781,44 @@ if ($resourceHash -ne $bootHash) {
     throw 'The resource and hardware-stage kernel images do not match.'
 }
 
+function Get-T1OSArtifactRecord {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $relativePath = [IO.Path]::GetRelativePath($projectRoot, $fullPath).Replace('\', '/')
+    return [ordered]@{
+        path = $relativePath
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash.ToLowerInvariant()
+    }
+}
+
+$kernelProvenance = [ordered]@{
+    format = 1
+    component = 't1os-hardware-kernel'
+    kernel_version = $kernelVersion
+    nvidia_version = $nvidiaVersion
+    inputs = @(
+        Get-T1OSArtifactRecord -Path $PSCommandPath
+        Get-T1OSArtifactRecord -Path $configSource
+        Get-T1OSArtifactRecord -Path $policySource
+        Get-T1OSArtifactRecord -Path $quotedShebangPatch
+        Get-T1OSArtifactRecord -Path $ntfsNoAccessRulesPatch
+    )
+    outputs = @(
+        Get-T1OSArtifactRecord -Path $bootTarget
+        Get-T1OSArtifactRecord -Path $modulesTarget
+        Get-T1OSArtifactRecord -Path (Join-Path $hardwareRoot 'kernel-release.txt')
+    )
+}
+[IO.File]::WriteAllText(
+    $provenanceTarget,
+    (($kernelProvenance | ConvertTo-Json -Depth 6) + "`n"),
+    [Text.UTF8Encoding]::new($false)
+)
+
 $release = (Get-Content -LiteralPath $stageRelease -Raw).Trim()
 Write-Host "T1OS hardware kernel completed: $resourceHash"
 Write-Host "Kernel release: $release"
 Write-Host "Kernel: $bootTarget"
 Write-Host "Modules: $modulesTarget"
+Write-Host "Provenance: $provenanceTarget"

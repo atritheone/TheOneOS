@@ -1819,10 +1819,20 @@ static bool t1os_external_volume_source(const char *source)
 	       t1os_safe_mount_component(source + sizeof(prefix) - 1);
 }
 
-static bool t1os_external_volume_options(const void *data)
+static bool t1os_external_volume_options(const char *type, const void *data)
 {
-	return data && !strcmp((const char *)data,
-		"uid=1000,gid=1000,dmask=0077,fmask=0177");
+	if (!type || !data)
+		return false;
+	/* NTFS3 may otherwise expose stored Windows security metadata and ignore
+	 * the synthetic uid/masks expected by the desktop.  Its noacsrules view is
+	 * confined by the root:1000 0750 volume tier and by noexec/nodev/nosuid. */
+	if (!strcmp(type, "ntfs3"))
+		return !strcmp((const char *)data,
+			"uid=1000,gid=1000,dmask=0077,fmask=0177,noacsrules");
+	if (!strcmp(type, "exfat") || !strcmp(type, "vfat"))
+		return !strcmp((const char *)data,
+			"uid=1000,gid=1000,dmask=0077,fmask=0177");
+	return false;
 }
 
 static int t1os_mount_path(const struct path *path, char *buffer,
@@ -1877,7 +1887,7 @@ static int t1os_sb_mount(const char *dev_name, const struct path *path,
 	 * mount.  Bind/overlay/remount/move are excluded, the source and target
 	 * each have one safe component, and the mount is always nosuid/nodev/noexec. */
 	if (t1os_is_driverserver_process() && dev_name && type &&
-	    t1os_external_volume_options(data) &&
+	    t1os_external_volume_options(type, data) &&
 	    t1os_external_volume_source(dev_name) &&
 	    t1os_external_volume_target(target) &&
 	    (!strcmp(type, "ntfs3") || !strcmp(type, "exfat") ||

@@ -52,7 +52,7 @@ function Get-T1OSPythonUsbTarget {
         'D:\autorun.inf',
         'D:\boot',
         'D:\the one\build',
-        'D:\the one\resources\t1os-drive.ico',
+        'D:\the one\resources\system\drive logo.ico',
         'D:\the one\settings\runtime paths.json'
     )
     $missingPaths = @(
@@ -79,7 +79,7 @@ function Get-T1OSPythonUsbTarget {
         $efi.Count -ne 1 -or
         $missingPaths.Count -ne 0 -or
         $autorun -notmatch '(?im)^\s*Label=T1OS(?:\s|$)' -or
-        $autorun -notmatch '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+        $autorun -notmatch '(?im)^\s*Icon="the one\\resources\\system\\drive logo\.ico"\s*$'
     ) {
         throw 'D: is not the exact healthy T1OS GPT USB target.'
     }

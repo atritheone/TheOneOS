@@ -87,6 +87,7 @@ DOTFRAMETIME = 0.24
 DOTMINIMUMTIME = 0.72
 BRANDHOLDTIME = 4.0
 BRANDFADETIME = 0.32
+BRANDGAPSECONDS = 0.0
 ANIMATIONREFRESHHZ = 60.0
 ANIMATIONFRAMETIME = 1.0 / ANIMATIONREFRESHHZ
 
@@ -207,6 +208,8 @@ def controlprepare():
 
 def controlrequest():
 
+    global BRANDGAPSECONDS
+
     try:
 
         with open(CONTROLREQUEST, "r", encoding="utf-8") as stream:
@@ -227,12 +230,17 @@ def controlrequest():
             return None
 
         action = str(request.get("action", "")).strip().lower()
+        requestedgap = float(request.get("gap_seconds", 0.0))
 
     except Exception:
 
         return None
 
     if action in ("brand", "lockscreen", "stop"):
+        BRANDGAPSECONDS = (
+            max(0.0, min(5.0, requestedgap))
+            if action == "brand" else 0.0
+        )
         return action
 
     return None
@@ -1558,6 +1566,27 @@ def brandsequence():
     graphicswaitinitial()
 
 
+def brandgap():
+
+    global BOOTPHASE, BOOTINTENSITY, BOOTDOTS
+
+    duration = max(0.0, float(BRANDGAPSECONDS))
+    if duration <= 0.0:
+        return
+
+    # End the dots with one complete black GPU scene. Start the requested gap
+    # only after that scene has committed, then keep pumping WindowServer while
+    # it remains visible.
+    BOOTPHASE = "black"
+    BOOTINTENSITY = 0
+    BOOTDOTS = []
+    resetdirty()
+    clear(0x000000)
+    present()
+    graphicswaitinitial()
+    bootwait(duration)
+
+
 def earlydots():
 
     global SCREENW, SCREENH
@@ -2089,6 +2118,7 @@ def main(mode="brand"):
 
             if action == "brand":
                 controlstate("branding")
+                brandgap()
                 brandsequence()
             else:
                 controlstate("handoff")

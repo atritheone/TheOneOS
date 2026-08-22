@@ -1332,6 +1332,12 @@ prepare_terminfo_runtime() {
         rescue 'I could not assign the private Exchange service runtime.'
     "$busybox" chmod 02710 "$ephemeral/exchange" || \
         rescue 'I could not protect the private Exchange service runtime.'
+    "$busybox" mkdir -m 0750 "$ephemeral/volumes" || \
+        rescue 'I could not prepare the private external-volume runtime.'
+    "$busybox" chown 0:1000 "$ephemeral/volumes" || \
+        rescue 'I could not assign the private external-volume runtime.'
+    "$busybox" chmod 0750 "$ephemeral/volumes" || \
+        rescue 'I could not protect the private external-volume runtime.'
     "$busybox" mkdir -m 01733 "$ephemeral/network" || \
         rescue 'I could not prepare the network exchange runtime.'
     "$busybox" chown 0:0 "$ephemeral/network" || \

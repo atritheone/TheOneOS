@@ -63,6 +63,7 @@ def main():
         (animation_tree, "main"),
         (animation_tree, "progressloop"),
         (animation_tree, "brandsequence"),
+        (animation_tree, "brandgap"),
         (animation_tree, "animationtimeline"),
         (animation_tree, "fadein"),
         (animation_tree, "fadeout"),
@@ -97,12 +98,14 @@ def main():
         'CONTROLBASE = "/.ephemeral/boot animation"',
         'DOTMINIMUMTIME = 0.72',
         'BRANDFADETIME = 0.32',
+        'BRANDGAPSECONDS = 0.0',
         'ANIMATIONREFRESHHZ = 60.0',
         'controlstate("dots")',
         'action = progressloop(firstshown, firstdotframe)',
         'if action == "brand":',
         'controlstate("branding")',
         'controlstate("done")',
+        'brandgap()',
         'drawdotframe(dotframes()[0])',
         "gr.init('/the one/drivers/nodes/fb0', backend='framebuffer')",
         'if mode == "early-dots":',
@@ -374,6 +377,23 @@ def main():
         startup, function(startup_tree, "bootanimationhandoff")
     ) or ""
 
+    for text in (
+        "FIRST_RUN_BRAND_GAP = 2.0",
+        'request["gap_seconds"] = float(FIRST_RUN_BRAND_GAP)',
+        "time.sleep(float(FIRST_RUN_BRAND_GAP))",
+    ):
+        require(startup, text, "Startup first-run branding gap")
+
+    animation_brand_gap = ast.get_source_segment(
+        animation, function(animation_tree, "brandgap")
+    ) or ""
+    for text in (
+        'BOOTPHASE = "black"',
+        "graphicswaitinitial()",
+        "bootwait(duration)",
+    ):
+        require(animation_brand_gap, text, "boot-animation first-run branding gap")
+
     for source, command, profile, label in (
         (
             goddess_boot_launcher,
@@ -467,7 +487,7 @@ def main():
 
     for text in (
         'bootanimationhandoff("lockscreen", 3.0)',
-        'bootanimationhandoff("brand", 8.0)',
+        'bootanimationhandoff("brand", 10.0)',
         "def runlockscreenwithhandoff(timeout=20.0):",
         'if state == "ready":',
         "process = popenisolated(",
@@ -668,7 +688,7 @@ def main():
     ):
         raise RuntimeError("existing-account lock screen does not precede login")
 
-    if startup_main_source.index('bootanimationhandoff("brand", 8.0)') >= startup_main_source.index(
+    if startup_main_source.index('bootanimationhandoff("brand", 10.0)') >= startup_main_source.index(
         "setupuser()"
     ):
         raise RuntimeError("first-run branding is not completed before account setup")

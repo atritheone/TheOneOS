@@ -578,7 +578,7 @@ function Invoke-GraphicsBaseline {
             throw 'the compositor diagnostic did not verify damage-aware cursor movement and removal.'
         }
 
-        if (-not $actual.checks.transition_final_frame -or -not $actual.checks.startmenu_final_map -or -not $actual.checks.window_final_map -or $null -eq $actual.checks.window_chrome_first_frame -or $null -eq $actual.checks.window_button_first_frame) {
+        if (-not $actual.checks.transition_final_frame -or -not $actual.checks.startmenu_final_map -or -not $actual.checks.window_final_map -or -not $actual.checks.server_chrome_button_centering -or $null -eq $actual.checks.window_chrome_first_frame -or $null -eq $actual.checks.window_button_first_frame) {
             throw 'the compositor diagnostic did not verify final mapping frames for shell surfaces and window chrome.'
         }
 
@@ -741,7 +741,7 @@ function Invoke-GraphicsBaseline {
 
     if ($Mode -eq 'write') {
 
-        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.cpu_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
+        if (-not $actual.checks.capability_negotiation -or -not $actual.checks.strict_gpu_first_frame -or -not $actual.checks.server_compatible_node_ids -or -not $actual.checks.bounded_error_retry -or -not $actual.checks.cpu_fallback -or -not $actual.checks.error_gpu_retention -or -not $actual.checks.timeout_gpu_retention) {
             throw 'the Write diagnostic did not exercise managed negotiation and strict GPU recovery.'
         }
 
@@ -801,7 +801,7 @@ function Invoke-GraphicsBaseline {
             throw 'the Write performance diagnostic did not preserve editing, width-cache, and history correctness.'
         }
 
-        if ([int]$actual.checks.incremental_wrap_lines -gt 1 -or -not $actual.checks.lazy_width_index -or -not $actual.checks.bounded_advance_cache -or -not $actual.checks.bounded_wrap_cache -or -not $actual.checks.streaming_io -or -not $actual.checks.compact_long_line_index -or [int]$actual.checks.mixed_edit_model -lt 96) {
+        if ([int]$actual.checks.incremental_wrap_lines -gt 1 -or -not $actual.checks.lazy_width_index -or -not $actual.checks.hardware_inventory_responsive -or -not $actual.checks.bounded_advance_cache -or -not $actual.checks.bounded_wrap_cache -or -not $actual.checks.streaming_io -or -not $actual.checks.compact_long_line_index -or [int]$actual.checks.mixed_edit_model -lt 96) {
             throw 'the Write performance diagnostic did not preserve incremental wrapping, lazy widths, bounded caches, streaming I/O, compact long-line indexing, and mixed-edit correctness.'
         }
 

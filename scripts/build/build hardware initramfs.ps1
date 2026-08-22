@@ -38,6 +38,7 @@ $ntfsCheckerSource = Join-Path $projectRoot 'environment\hardware\tools\rootheal
 $firmwareArchive = Join-Path $projectRoot 'environment\hardware\firmware.tar.zst'
 $outputDirectory = Join-Path $projectRoot 'environment\hardware\boot'
 $outputPath = Join-Path $outputDirectory 'initramfs-hardware'
+$provenancePath = Join-Path $outputDirectory 'initramfs-build-inputs.json'
 $stageRoot = Join-Path $projectRoot 'development\hardware initramfs stage'
 
 function ConvertTo-WslPath {
@@ -731,5 +732,46 @@ if ($buildExitCode -ne 0) {
 }
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $outputPath).Hash.ToLowerInvariant()
+
+function Get-T1OSArtifactRecord {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $relativePath = [IO.Path]::GetRelativePath($projectRoot, $fullPath).Replace('\', '/')
+    return [ordered]@{
+        path = $relativePath
+        sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash.ToLowerInvariant()
+    }
+}
+
+$initramfsProvenance = [ordered]@{
+    format = 1
+    component = 't1os-hardware-initramfs'
+    inputs = @(
+        Get-T1OSArtifactRecord -Path $PSCommandPath
+        Get-T1OSArtifactRecord -Path $busyBoxSource
+        Get-T1OSArtifactRecord -Path $initSource
+        Get-T1OSArtifactRecord -Path $recoverySource
+        Get-T1OSArtifactRecord -Path $recoveryAuthSource
+        Get-T1OSArtifactRecord -Path $pythonManifest
+        Get-T1OSArtifactRecord -Path $pythonReleaseLock
+        Get-T1OSArtifactRecord -Path $pythonRuntimeConfig
+        Get-T1OSArtifactRecord -Path $bootPolicyBuilder
+        Get-T1OSArtifactRecord -Path $bootPolicyManifest
+        Get-T1OSArtifactRecord -Path $ntfsCheckerBuilder
+        Get-T1OSArtifactRecord -Path $ntfsCheckerSource
+        Get-T1OSArtifactRecord -Path $firmwareArchive
+    )
+    outputs = @(
+        Get-T1OSArtifactRecord -Path $outputPath
+    )
+}
+[IO.File]::WriteAllText(
+    $provenancePath,
+    (($initramfsProvenance | ConvertTo-Json -Depth 6) + "`n"),
+    [Text.UTF8Encoding]::new($false)
+)
+
 Write-Host "Hardware initramfs completed: $hash"
 Write-Host "Output: $outputPath"
+Write-Host "Provenance: $provenancePath"

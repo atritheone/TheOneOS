@@ -278,7 +278,8 @@ for size_gib in "$@"; do
 
     mount.ntfs-3g -o ro "$root_device" "$root_mount"
     mounted=1
-    test -s "$root_mount/the one/resources/t1os-drive.ico"
+    test -s "$root_mount/the one/resources/system/drive logo.ico"
+    test ! -e "$root_mount/the one/resources/t1os-drive.ico"
     test -f "$root_mount/the one/software/python/bin/python"
     test -f "$root_mount/the one/software/python/bin/python3.14"
     test -d "$root_mount/the one/software/python/lib/python3.14"
@@ -297,7 +298,7 @@ assert manifest['python_abi'] == 'cp314'
 PY
     tr -d '\r' < "$root_mount/autorun.inf" > "$work/autorun-normalized"
     grep -Fqx '[Autorun]' "$work/autorun-normalized"
-    grep -Fqx 'Icon="the one\resources\t1os-drive.ico"' "$work/autorun-normalized"
+    grep -Fqx 'Icon="the one\resources\system\drive logo.ico"' "$work/autorun-normalized"
     grep -Fqx "Label=$expected_label" "$work/autorun-normalized"
     printf '%s\n' \
         .ephemeral .remainder autorun.inf boot software 'the one' \

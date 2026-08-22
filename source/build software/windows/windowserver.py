@@ -2944,7 +2944,10 @@ def windowbuttonrects(win):
     fx = gx - FRAMEW
     fy = gy - (TITLEH + FRAMEW)
     fw = gw + FRAMEW * 2
-    return buttonrects(fx, fy, fw)
+    # buttonrects() expects the top of the title content.  The outer server
+    # frame begins FRAMEW pixels above it, so include that inset to keep each
+    # icon centered in the title-height hover square.
+    return buttonrects(fx, fy + FRAMEW, fw)
 
 
 def windowbuttonhoverrects(win):
@@ -13248,6 +13251,15 @@ def graphicsscene(cid, req):
 
         win["_telemetry_scene_commits"] = int(win.get("_telemetry_scene_commits", 0)) + 1
         win["_telemetry_batch_commits"] = int(win.get("_telemetry_batch_commits", 0)) + 1
+
+        identity = clients.get(cid, {}).get("identity", {})
+        if str(identity.get("script", "")).endswith("/write/write.py"):
+            graphicslog(
+                f"> write managed scene accepted cid={int(cid)} "
+                f"winid={int(wid)} commands={len(commands)} "
+                f"managed_only={bool(win.get('_managed_only', False))}"
+            )
+
         graphicspresentationresponse(cid, win, {
             "op": "GRAPHICS_COMMITTED",
             "winid": wid,
@@ -13265,6 +13277,12 @@ def graphicsscene(cid, req):
     except Exception as e:
         sendjson(cid, {"op": "ERROR", "code": "graphics_scene_failed", "detail": str(e)})
         log(f"graphics_scene_failed wid={req.get('winid')} err={e}")
+        identity = clients.get(cid, {}).get("identity", {})
+        if str(identity.get("script", "")).endswith("/write/write.py"):
+            graphicslog(
+                f"> write managed scene rejected cid={int(cid)} "
+                f"winid={req.get('winid')} error={e}"
+            )
 
 
 def graphicscommit(cid, req):
@@ -14544,7 +14562,7 @@ def gpuframegeometry(win, x, y, width, height, opacity, clip=None):
         (fx + fw - frame, fy, frame, fh, bordercolor, opacity),
     ], clip=clip)
     closex = fx + fw - frame - gap - button
-    buttony = fy + max(0, (title - button) // 2)
+    buttony = fy + frame + max(0, (title - button) // 2)
     button_gap = max(gap, title - button)
     maxx = closex - button_gap - button
     minx = maxx - button_gap - button
@@ -20569,7 +20587,7 @@ def windowcompositordiagnostic():
         gap = max(2, int(BTNGAP))
         frame = max(1, int(FRAMEW))
         closex = clientx + int(windows[chromewid]["w"]) - gap - button
-        buttony = clienty - int(TITLEH) - frame + max(0, (int(TITLEH) - button) // 2)
+        buttony = clienty - int(TITLEH) + max(0, (int(TITLEH) - button) // 2)
         pad = max(1, int(round(scalesize(4))))
         near("window_button_first_frame", gpureadpixel(closex + pad, buttony + pad), [239, 239, 239, 255])
         setwindoweffects(1, {
@@ -20581,6 +20599,21 @@ def windowcompositordiagnostic():
         paint([gpuvisualrect(windows[chromewid])])
         near("window_theme_title", gpureadpixel(clientx + 20, clienty - max(1, TITLEH // 2)), [24, 27, 32, 255], tolerance=3)
         near("window_theme_button", gpureadpixel(closex + pad, buttony + pad), [255, 112, 112, 255], tolerance=3)
+        serverbuttons = windowbuttonrects(windows[chromewid])
+        serverhovers = windowbuttonhoverrects(windows[chromewid])
+
+        for index, area in enumerate(("close", "max", "min")):
+            iconx = int(serverbuttons[index * 2])
+            icony = int(serverbuttons[index * 2 + 1])
+            hoverx, hovery, hoverw, hoverh = serverhovers[area]
+
+            if (
+                iconx * 2 + int(BTNWH) != int(hoverx) * 2 + int(hoverw)
+                or icony * 2 + int(BTNWH) != int(hovery) * 2 + int(hoverh)
+            ):
+                raise RuntimeError(f"server chrome {area} icon is not centered in its hover square")
+
+        result["checks"]["server_chrome_button_centering"] = True
         beforeblur = int(gpumetrics().get("blur_copies", 0))
         setwindoweffects(1, {"winid": chromewid, "opacity": 0.75, "blur": True})
         paint([gpuvisualrect(windows[chromewid])])

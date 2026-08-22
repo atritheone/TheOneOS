@@ -129,6 +129,7 @@ ANIMATIONREFRESHHZ = 60.0
 ANIMATIONFRAMETIME = 1.0 / ANIMATIONREFRESHHZ
 TITLECHARACTERTIME = 0.12
 LABELFADETIME = 0.30
+FIRST_RUN_BRAND_GAP = 2.0
 ANIMATIONCOMMITACKS = 0
 
 # text
@@ -955,11 +956,15 @@ def bootanimationwrite(pid, action):
 
         with open(temporary, "w", encoding="utf-8") as stream:
 
-            json.dump({
+            request = {
                 "format": 1,
                 "pid": int(pid),
                 "action": str(action),
-            }, stream, sort_keys=True, separators=(",", ":"))
+            }
+            if str(action).strip().lower() == "brand":
+                request["gap_seconds"] = float(FIRST_RUN_BRAND_GAP)
+
+            json.dump(request, stream, sort_keys=True, separators=(",", ":"))
             stream.flush()
             os.fsync(stream.fileno())
 
@@ -1035,6 +1040,11 @@ def bootanimationhandoff(action, timeout):
     if action == "brand":
 
         try:
+
+            # With no retained dots process, the WindowServer background is
+            # already black. Preserve the same first-run gap before launching
+            # the standalone branding animation.
+            time.sleep(float(FIRST_RUN_BRAND_GAP))
 
             process = popenisolated(
                 [BOOTANIMATIONSCRIPT, "brand"],
@@ -5061,7 +5071,7 @@ def main():
 
         # Reuse the already-visible animation window: replace the dots with the
         # first-run The One fade, then release the display to account setup.
-        bootanimationhandoff("brand", 8.0)
+        bootanimationhandoff("brand", 10.0)
 
         # set up new master
         created = setupuser()

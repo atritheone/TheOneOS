@@ -73,8 +73,8 @@ function Get-T1OSUsbDriveTarget {
                 if (
                     $autorun -notmatch '(?im)^\s*Label=T1OS(?:\s|$)' -or
                     $autorun -notmatch (
-                        '(?im)^\s*Icon="the one\\resources\\' +
-                        't1os-drive\.ico"\s*$'
+                        '(?im)^\s*Icon="the one\\resources\\system\\' +
+                        'drive logo\.ico"\s*$'
                     )
                 ) {
                     return

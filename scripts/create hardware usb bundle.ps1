@@ -592,7 +592,7 @@ try {
         partition_table = 'gpt'
         windows_native_root = $true
         windows_autorun = 'autorun.inf'
-        windows_drive_icon = 'the one\resources\t1os-drive.ico'
+        windows_drive_icon = 'the one\resources\system\drive logo.ico'
         minimum_target_bytes = $minimumTargetBytes
         source_image = [string]$imageManifest.image
         source_image_bytes = [long]$imageManifest.bytes

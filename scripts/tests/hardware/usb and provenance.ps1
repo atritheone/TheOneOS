@@ -147,6 +147,35 @@ foreach ($forbiddenDeploymentTest in @(
 if (-not $usbUpdateText.Contains('& $targetValidator -UsbDrive')) {
     throw 'The USB update workflow no longer delegates userspace synchronization to the managed push engine.'
 }
+foreach ($usbIdentityMigrationContract in @(
+    "Join-Path `$root 'the one\resources\t1os-drive.ico'",
+    "`$legacyIdentity = `$legacyIcon -and `$autorun -match",
+    'cp -a -- "$drive_icon_source" "$stage/resources/system/drive logo.ico"',
+    "'resources': ('autorun.inf',)",
+    "sync_file 'Windows autorun identity'",
+    'rm -f -- "$mount_point/the one/resources/t1os-drive.ico"',
+    "grep -Fiqx 'Icon=`"the one\resources\system\drive logo.ico`"'"
+)) {
+    if (-not $rootPushText.Contains($usbIdentityMigrationContract)) {
+        throw "The managed USB push lost its legacy-to-canonical identity migration: $usbIdentityMigrationContract"
+    }
+}
+foreach ($bootFreshnessContract in @(
+    '& $kernelBuilder -Resume',
+    '& $initramfsBuilder',
+    'kernel-build-inputs.json',
+    'initramfs-build-inputs.json',
+    'Assert-T1OSArtifactProvenance'
+)) {
+    if (
+        -not $usbUpdateText.Contains($bootFreshnessContract) -and
+        -not (Get-Content -LiteralPath $hardwareKernelPushScript -Raw).Contains(
+            $bootFreshnessContract
+        )
+    ) {
+        throw "The USB update workflow lost its boot-artifact freshness contract: $bootFreshnessContract"
+    }
+}
 $audioRuntime = Get-Content -LiteralPath $audioRuntimeManifest -Raw |
     ConvertFrom-Json
 $audioProtocol = $audioRuntime.runtime.media_decode_protocol
@@ -163,7 +192,7 @@ foreach ($requiredText in @(
     'TargetSizesGiB',
     'ntfsresize --force --no-progress-bar "$root_device"',
     'Its --expand option is a distinct',
-    't1os-drive.ico',
+    'drive logo.ico',
     'autorun.inf',
     'at least two distinct target capacities'
 )) {
@@ -207,7 +236,7 @@ foreach ($requiredText in @(
     '-AssignDriveLetter',
     'Windows did not assign a drive letter to the verified T1OS root volume',
     'Finalizing and cleanly dismounting T1OS from',
-    "windows_drive_icon -cne 'the one\resources\t1os-drive.ico'"
+    "windows_drive_icon -cne 'the one\resources\system\drive logo.ico'"
 )) {
     if (-not $flashScriptText.Contains($requiredText)) {
         throw "The hardware USB flasher is missing the bundle-install contract: $requiredText"

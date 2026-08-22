@@ -3229,10 +3229,19 @@ class DriverServer:
         filesystem = str(probe['filesystem'])
         readonly = bool(self.volume_policy.get('read_only', False) or not probe.get('safe_write', False))
         baseflags = MS_NOSUID | MS_NODEV | MS_NOEXEC
-        # These removable filesystems do not carry the desktop's Unix identity
-        # reliably. Publish a private uid-1000 view so a volume admitted as
-        # writable is actually writable from Array and its file picker.
-        mountoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'
+        # NTFS3 can expose Windows security metadata instead of the requested
+        # synthetic uid/masks.  In that mode a perfectly writable data volume
+        # can present its root as root:root 0555, which made the old metadata
+        # preflight unmount it forever.  noacsrules gives the private external-
+        # volume tier a deterministic DAC view; nosuid/nodev/noexec below and
+        # the root:1000 0750 parent keep that view confined to the desktop.
+        # FAT-family filesystems continue to use their native synthetic owner.
+        ownershipoptions = b'uid=1000,gid=1000,dmask=0077,fmask=0177'
+        mountoptions = (
+            ownershipoptions + b',noacsrules'
+            if filesystem == 'ntfs3'
+            else ownershipoptions
+        )
         libc = ctypes.CDLL(None, use_errno=True)
         if not hasattr(libc, 'mount'):
             raise OSError(errno.ENOSYS, 'mount system call is unavailable')
@@ -3283,10 +3292,13 @@ class DriverServer:
 
     @staticmethod
     def desktopmodepermits(metadata, writable=False):
-        """Model uid/gid 1000 DAC access to a mounted directory inode."""
+        """Model uid/gid 1000 DAC access to a mounted inode."""
 
         mode = stat.S_IMODE(metadata.st_mode)
-        required = 0o7 if writable else 0o5
+        if stat.S_ISDIR(metadata.st_mode):
+            required = 0o7 if writable else 0o5
+        else:
+            required = 0o6 if writable else 0o4
         if metadata.st_uid == 1000:
             granted = (mode >> 6) & 0o7
         elif metadata.st_gid == 1000:
@@ -3343,16 +3355,31 @@ class DriverServer:
                     0o600,
                     dir_fd=directorydescriptor,
                 )
+                # The probe is created by root because DriverServer alone is
+                # allowed to mount removable media.  NTFS3 therefore assigns
+                # the new inode to root even though the mounted directory is
+                # writable by uid 1000.  Normalize this one disposable inode
+                # before applying the desktop DAC check; otherwise the probe
+                # rejects every healthy writable NTFS volume because of the
+                # identity of the process performing the probe.
+                os.fchown(probedescriptor, 1000, 1000)
+                os.fchmod(probedescriptor, 0o600)
                 probestate = os.fstat(probedescriptor)
                 if (
                     not stat.S_ISREG(probestate.st_mode) or
-                    probestate.st_uid != 1000 or probestate.st_gid != 1000 or
-                    stat.S_IMODE(probestate.st_mode) & 0o077 or
+                    not DriverServer.desktopmodepermits(
+                        probestate, writable=True
+                    ) or
                     probestate.st_nlink != 1
                 ):
                     raise OSError(
                         errno.EACCES,
-                        'mounted volume did not apply the desktop file identity',
+                        (
+                            'mounted volume did not expose a desktop-writable '
+                            f'probe file (uid={probestate.st_uid} '
+                            f'gid={probestate.st_gid} '
+                            f'mode={stat.S_IMODE(probestate.st_mode):04o})'
+                        ),
                         str(target),
                     )
                 if os.write(probedescriptor, b'1') != 1:

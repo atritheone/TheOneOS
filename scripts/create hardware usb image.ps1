@@ -1093,12 +1093,15 @@ rsync -aHAX --numeric-ids --delete \
     --exclude='/the one/settings/terminfo/*' \
     -- "$source_mount"/ "$root_mount"/
 
-# Give the Windows-visible T1OS volume its branded drive icon without adding a
-# non-default directory. The icon itself lives in the existing resources tree.
-install -m 0644 -- "$drive_icon" "$root_mount/the one/resources/t1os-drive.ico"
-printf '[Autorun]\r\nIcon="the one\\resources\\t1os-drive.ico"\r\nLabel=%s\r\n' \
+# Give the Windows-visible T1OS volume its branded drive icon in the system
+# resources tree. Remove the legacy location when rebuilding from an older root.
+install -d -m 0755 -- "$root_mount/the one/resources/system"
+install -m 0644 -- "$drive_icon" "$root_mount/the one/resources/system/drive logo.ico"
+rm -f -- "$root_mount/the one/resources/t1os-drive.ico"
+printf '[Autorun]\r\nIcon="the one\\resources\\system\\drive logo.ico"\r\nLabel=%s\r\n' \
     "$root_label" > "$root_mount/autorun.inf"
-test -s "$root_mount/the one/resources/t1os-drive.ico"
+test -s "$root_mount/the one/resources/system/drive logo.ico"
+test ! -e "$root_mount/the one/resources/t1os-drive.ico"
 tr -d '\r' < "$root_mount/autorun.inf" | grep -Fqx "Label=$root_label"
 
 # The storage source can have been exercised as a bootable development image.

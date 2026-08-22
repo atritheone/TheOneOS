@@ -84,6 +84,9 @@ def main():
         'mkdir -m 02710 "$ephemeral/exchange"',
         'chown 0:1000 "$ephemeral/exchange"',
         'chmod 02710 "$ephemeral/exchange"',
+        'mkdir -m 0750 "$ephemeral/volumes"',
+        'chown 0:1000 "$ephemeral/volumes"',
+        'chmod 0750 "$ephemeral/volumes"',
         'mkdir -m 01733 "$ephemeral/network"',
     )
     require(
@@ -92,6 +95,9 @@ def main():
         'mkdir -m 02710 "/mnt/.ephemeral/exchange"',
         'chown 0:1000 "/mnt/.ephemeral/exchange"',
         'chmod 02710 "/mnt/.ephemeral/exchange"',
+        'mkdir -m 0750 "/mnt/.ephemeral/volumes"',
+        'chown 0:1000 "/mnt/.ephemeral/volumes"',
+        'chmod 0750 "/mnt/.ephemeral/volumes"',
         'mkdir -m 01733 "/mnt/.ephemeral/network"',
     )
 

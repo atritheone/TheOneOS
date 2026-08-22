@@ -194,12 +194,19 @@ def main():
     require(
         volume_probe,
         "desktopmodepermits(rootstate, writable=writable)",
-        "probestate.st_uid != 1000",
+        "os.fchown(probedescriptor, 1000, 1000)",
+        "os.fchmod(probedescriptor, 0o600)",
+        "desktopmodepermits(\n                        probestate, writable=True",
         "os.write(probedescriptor, b'1')",
     )
     volume_dac = function_source(
         trees["driver"], sources["driver"], "desktopmodepermits")
-    require(volume_dac, "required = 0o7 if writable else 0o5")
+    require(
+        volume_dac,
+        "if stat.S_ISDIR(metadata.st_mode):",
+        "required = 0o7 if writable else 0o5",
+        "required = 0o6 if writable else 0o4",
+    )
     for forbidden_transition in (
         "os.fork(", "os.setuid(", "os.setgid(", "os.setgroups(",
     ):

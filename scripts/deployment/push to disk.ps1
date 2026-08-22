@@ -53,6 +53,7 @@ $bootPolicyDirectory = Join-Path $projectRoot 'development\hardware boot policy'
 $bootPolicyManifest = Join-Path $bootPolicyDirectory 'protected-roots.json'
 $resourceSource = Join-Path $projectRoot 'resource'
 $logoSource = Join-Path $resourceSource 'logos'
+$driveIconSource = Join-Path $projectRoot 'flash\T1OS Logo - Black Transparent.ico'
 $fatalScreenSource = Join-Path $projectRoot 'flash\red_screen_of_death.png'
 $imagePath = Join-Path $projectRoot 'environment\software\storage.img'
 $mountPoint = if ($UsbDrive) { '/mnt/t1drive' } else { '/mnt/t1fs' }
@@ -82,7 +83,6 @@ function Get-T1OSUsbDriveTarget {
         'the one',
         'the one\build',
         'the one\settings\runtime paths.json',
-        'the one\resources\t1os-drive.ico',
         'autorun.inf'
     )
 
@@ -122,9 +122,21 @@ function Get-T1OSUsbDriveTarget {
                 }
 
                 $autorun = Get-Content -LiteralPath (Join-Path $root 'autorun.inf') -Raw
+                $canonicalIcon = Test-Path -LiteralPath (
+                    Join-Path $root 'the one\resources\system\drive logo.ico'
+                ) -PathType Leaf
+                $legacyIcon = Test-Path -LiteralPath (
+                    Join-Path $root 'the one\resources\t1os-drive.ico'
+                ) -PathType Leaf
+                $canonicalIdentity = $canonicalIcon -and $autorun -match (
+                    '(?im)^\s*Icon="the one\\resources\\system\\drive logo\.ico"\s*$'
+                )
+                $legacyIdentity = $legacyIcon -and $autorun -match (
+                    '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+                )
                 if (
                     $autorun -notmatch '(?im)^\s*Label=T1OS(?:\s|$)' -or
-                    $autorun -notmatch '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+                    (-not $canonicalIdentity -and -not $legacyIdentity)
                 ) {
                     return
                 }
@@ -176,6 +188,7 @@ $requiredFiles = @(
     $pythonRuntimeVerifier,
     $bootPolicyBuilder,
     $fatalScreenSource,
+    $driveIconSource,
     (Join-Path $resourceSource 'fonts\atkinsonhyperlegiblenext.ttf'),
     (Join-Path $resourceSource 'fonts\cambria.ttf'),
     (Join-Path $resourceSource 'fonts\Fira_Code_v6.2\ttf\FiraCode-Retina.ttf'),
@@ -464,6 +477,7 @@ try {
     $wslPythonCatalogueSource = "$wslProjectRoot/source/catalogue/python"
     $wslPythonRuntimeConfigSource = "$wslProjectRoot/source/python/build/runtime.json"
     $wslResourceSource = "$wslProjectRoot/resource"
+    $wslDriveIconSource = "$wslProjectRoot/flash/T1OS Logo - Black Transparent.ico"
 
     Write-Host "Comparing build software with $buildDestination..."
     Write-Host "Comparing boot files with $bootDestination..."
@@ -536,6 +550,7 @@ boot_policy_manifest=${52}
 selected_roots=${53}
 exhaustive_verify=${54}
 skip_chromium_engine=${55}
+drive_icon_source=${56}
 logo_resource_destination="$mount_point/the one/resources/logos"
 cursor_resource_destination="$mount_point/the one/resources/cursors"
 system_resource_destination="$mount_point/the one/resources/system"
@@ -699,7 +714,6 @@ if [ "$target_mode" = drive ]; then
     [ -d "$mount_point/boot" ] &&
         [ -d "$mount_point/the one/build" ] &&
         [ -f "$mount_point/the one/settings/runtime paths.json" ] &&
-        [ -f "$mount_point/the one/resources/t1os-drive.ico" ] &&
         [ -f "$mount_point/autorun.inf" ] || {
             echo 'The mounted Windows drive is not a complete T1OS USB root.' >&2
             exit 1
@@ -708,6 +722,22 @@ if [ "$target_mode" = drive ]; then
         echo 'The mounted Windows drive does not contain the expected T1OS identity label.' >&2
         exit 1
     }
+    if [ -f "$mount_point/the one/resources/system/drive logo.ico" ]; then
+        tr -d '\r' < "$mount_point/autorun.inf" |
+            grep -Fiqx 'Icon="the one\resources\system\drive logo.ico"' || {
+            echo 'The mounted Windows drive has an unrecognized drive-icon identity.' >&2
+            exit 1
+        }
+    elif [ -f "$mount_point/the one/resources/t1os-drive.ico" ]; then
+        tr -d '\r' < "$mount_point/autorun.inf" |
+            grep -Fiqx 'Icon="the one\resources\t1os-drive.ico"' || {
+            echo 'The mounted Windows drive has an unrecognized legacy drive-icon identity.' >&2
+            exit 1
+        }
+    else
+        echo 'The mounted Windows drive has no recognized T1OS drive icon.' >&2
+        exit 1
+    fi
 fi
 
 # This is the last read-only gate before anything below the mounted target is
@@ -758,6 +788,9 @@ leaf_map = {
     # cannot stat after a hardware boot; recursively inspecting the unrelated
     # profile both exceeds the mutation scope and makes safe updates fail.
     'runtime_contract': ('the one/settings/runtime paths.json',),
+    # A resources sync also migrates the Windows-visible USB identity from the
+    # legacy icon path to the canonical system resource path.
+    'resources': ('autorun.inf',),
 }
 unknown = selected - set(root_map) - set(leaf_map)
 if unknown:
@@ -1003,6 +1036,7 @@ if [ "$png_signature" != '89504e470d0a1a0a' ]; then
     exit 1
 fi
 cp -a -- "$fatal_screen_source" "$stage/resources/system/red_screen_of_death.png"
+cp -a -- "$drive_icon_source" "$stage/resources/system/drive logo.ico"
 
 logo_source="$resource_source/logos"
 unexpected_logo_resources=$(find "$logo_source" \( -type f ! -name '*.png' -o -type l \) -print)
@@ -2807,6 +2841,39 @@ if root_selected resources; then
     sync_file 'Fira Code bold font' "$stage/resources/fonts/firacodebold.ttf" "$font_destination/firacodebold.ttf"
     sync_file 'Fira Code semibold font' "$stage/resources/fonts/firacodesemibold.ttf" "$font_destination/firacodesemibold.ttf"
     sync_file 'fatal screen artwork' "$stage/resources/system/red_screen_of_death.png" "$system_resource_destination/red_screen_of_death.png"
+    if [ "$target_mode" = drive ]; then
+        sync_file 'Windows drive icon' "$stage/resources/system/drive logo.ico" "$system_resource_destination/drive logo.ico"
+        python3 - "$mount_point/autorun.inf" "$stage/autorun.inf" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+source, destination = map(Path, sys.argv[1:])
+lines = source.read_text(encoding='utf-8-sig').splitlines()
+icon = 'Icon="the one\\resources\\system\\drive logo.ico"'
+updated = []
+inserted = False
+for line in lines:
+    if re.match(r'^\s*Icon\s*=', line, flags=re.IGNORECASE):
+        if not inserted:
+            updated.append(icon)
+            inserted = True
+        continue
+    updated.append(line)
+if not inserted:
+    try:
+        section = next(
+            index for index, line in enumerate(updated)
+            if line.strip().casefold() == '[autorun]'
+        )
+    except StopIteration:
+        raise SystemExit('The T1OS autorun file has no [Autorun] section')
+    updated.insert(section + 1, icon)
+destination.write_bytes(('\r\n'.join(updated) + '\r\n').encode('utf-8'))
+PY
+        sync_file 'Windows autorun identity' "$stage/autorun.inf" "$mount_point/autorun.inf"
+        rm -f -- "$mount_point/the one/resources/t1os-drive.ico"
+    fi
     sync_resource_tree 'logo resources' "$stage/resources/logos" "$logo_resource_destination"
     sync_resource_tree 'mouse cursor resources' "$stage/resources/cursors" "$cursor_resource_destination"
     if [ "$target_mode" = image ]; then
@@ -2889,6 +2956,21 @@ if [ "$exhaustive_verify" = True ]; then
         echo 'Fatal screen artwork verification found a remaining difference.' >&2
         exit 1
     }
+    if [ "$target_mode" = drive ]; then
+        cmp -s -- "$stage/resources/system/drive logo.ico" "$system_resource_destination/drive logo.ico" || {
+            echo 'Windows drive icon verification found a remaining difference.' >&2
+            exit 1
+        }
+        tr -d '\r' < "$mount_point/autorun.inf" |
+            grep -Fiqx 'Icon="the one\resources\system\drive logo.ico"' || {
+            echo 'Windows autorun identity verification found a remaining difference.' >&2
+            exit 1
+        }
+        [ ! -e "$mount_point/the one/resources/t1os-drive.ico" ] || {
+            echo 'The legacy Windows drive icon remains after migration.' >&2
+            exit 1
+        }
+    fi
     verify_resource_tree 'logo resources' "$stage/resources/logos" "$logo_resource_destination"
     verify_resource_tree 'mouse cursor resources' "$stage/resources/cursors" "$cursor_resource_destination"
     rm -rf -- \
@@ -3022,7 +3104,7 @@ fi
         $preparationStopwatch.Stop()
         $copyStopwatch = [Diagnostics.Stopwatch]::StartNew()
         $normalizedCopyCommand |
-            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource $wslBootPolicyManifest $selectedRootArgument $exhaustiveVerifyArgument $skipChromiumEngineArgument
+            & wsl.exe -u root --exec bash -s -- $mountPoint $buildDestination $bootDestination $graphicsCatalogueDestination $virtualBoxCatalogueDestination $virtualBoxSoftwareDestination $audioCatalogueDestination $audioSoftwareDestination $wslBuildSource $wslBootSource $wslGraphicsCatalogueSource $wslVirtualBoxCatalogueSource $wslVirtualBoxSoftwareSource $wslAudioCatalogueSource $wslAudioSoftwareSource $imageCatalogueDestination $wslImageCatalogueSource $wslImagePath $virtualBoxSettingsDestination $wslVirtualBoxSettingsSource $fontDestination $driversDestination $wslDriversSource $networkCatalogueDestination $networkSoftwareDestination $networkSettingsDestination $chromiumSoftwareDestination $runtimePathContractDestination $wslNetworkCatalogueSource $wslNetworkSoftwareSource $wslNetworkSettingsSource $wslChromiumSoftwareSource $wslRuntimePathContractSource $wslResourceSource $targetMode $wslMediaSettingsSource $mediaSettingsDestination $wslNativeProtocolHeader $wslNativeWatchdogHeader $wslChromiumProtocolHeader $wslChromiumSourceManifest $pythonSoftwareDestination $pythonCatalogueDestination $wslPythonSoftwareSource $wslPythonCatalogueSource $expectedPythonRelease $expectedPythonManifestSha256 $preflightOnly $managedVerifyOnly $managedSyncOnly $wslPythonRuntimeConfigSource $wslBootPolicyManifest $selectedRootArgument $exhaustiveVerifyArgument $skipChromiumEngineArgument $wslDriveIconSource
         $copyExitCode = $LASTEXITCODE
         $copyStopwatch.Stop()
         if ($copyExitCode -ne 0) {

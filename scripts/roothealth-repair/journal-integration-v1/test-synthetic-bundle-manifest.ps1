@@ -23,6 +23,7 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) (
 )
 $bundle = Join-Path $work 'The One OS 0.3.t1os'
 $esp = Join-Path $work 'esp.img'
+$recovery = Join-Path $work 'recovery.squashfs'
 $root = Join-Path $work 'root.ntfs.img'
 $manifestPath = Join-Path $work 'manifest.json'
 
@@ -71,10 +72,14 @@ try {
     $espStream = [System.IO.File]::OpenWrite($esp)
     $espStream.SetLength(512MB)
     $espStream.Dispose()
+    $recoveryStream = [System.IO.File]::OpenWrite($recovery)
+    $recoveryStream.SetLength(8KB)
+    $recoveryStream.Dispose()
     $rootStream = [System.IO.File]::OpenWrite($root)
     $rootStream.SetLength(1GB)
     $rootStream.Dispose()
     $espHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $esp).Hash.ToLowerInvariant()
+    $recoveryHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $recovery).Hash.ToLowerInvariant()
     $rootHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $root).Hash.ToLowerInvariant()
     $validatorHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $validator).Hash.ToLowerInvariant()
     $journal = [ordered]@{
@@ -136,18 +141,22 @@ try {
         }
     }
     $manifest = [ordered]@{
-        format = 't1os-usb-bundle'; format_version = 1; state = 'validated'
+        format = 't1os-usb-bundle'; format_version = 2; state = 'validated'
         version = '0.3'; drive_version = '0.3'; volume_label = 'T1OS 0.3'
         root_uuid = '0123456789ABCDEF'; root_filesystem = 'ntfs'
         partition_table = 'gpt'; windows_native_root = $true
-        windows_autorun = 'autorun.inf'; windows_drive_icon = 'the one\resources\t1os-drive.ico'
-        minimum_target_bytes = 1612709888
+        windows_autorun = 'autorun.inf'; windows_drive_icon = 'the one\resources\system\drive logo.ico'
+        minimum_target_bytes = 4833935360
         source_image = 'synthetic.img'; source_image_bytes = 2147483648
         source_image_sha256 = ('c' * 64); production = $false; secure_boot = $false
         kernel_release = 'synthetic'; roothealth_journal = $journal
         esp = [ordered]@{
             entry = 'esp.img'; bytes = 536870912; sha256 = $espHash
             filesystem = 'fat32'; label = 'T1OS_EFI'
+        }
+        recovery = [ordered]@{
+            entry = 'recovery.squashfs'; bytes = 8192; partition_bytes = 3221225472
+            sha256 = $recoveryHash; filesystem = 'squashfs-zstd'; label = 'T1OS_RECOVERY'
         }
         root = [ordered]@{
             entry = 'root.ntfs.img'; bytes = 1073741824; sha256 = $rootHash
@@ -169,6 +178,7 @@ try {
         foreach ($payload in @(
             @($manifestPath, 'manifest.json'),
             @($esp, 'esp.img'),
+            @($recovery, 'recovery.squashfs'),
             @($root, 'root.ntfs.img')
         )) {
             [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(

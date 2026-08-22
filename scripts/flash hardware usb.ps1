@@ -381,7 +381,7 @@ function Open-T1OSBundle {
             [string]$manifest.root_filesystem -cne 'ntfs' -or
             [bool]$manifest.windows_native_root -ne $true -or
             [string]$manifest.windows_autorun -cne 'autorun.inf' -or
-            [string]$manifest.windows_drive_icon -cne 'the one\resources\t1os-drive.ico'
+            [string]$manifest.windows_drive_icon -cne 'the one\resources\system\drive logo.ico'
         ) {
             throw 'The bundle does not describe a Windows-native GPT/NTFS T1OS drive.'
         }

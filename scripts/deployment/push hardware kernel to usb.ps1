@@ -28,6 +28,8 @@ $kernelSource = Join-Path $projectRoot 'environment\hardware\boot\vmlinuz-hardwa
 $initramfsSource = Join-Path $projectRoot 'environment\hardware\boot\initramfs-hardware'
 $modulesSource = Join-Path $projectRoot 'environment\hardware\modules.tar.zst'
 $releaseSource = Join-Path $projectRoot 'environment\hardware\kernel-release.txt'
+$kernelProvenanceSource = Join-Path $projectRoot 'environment\hardware\boot\kernel-build-inputs.json'
+$initramfsProvenanceSource = Join-Path $projectRoot 'environment\hardware\boot\initramfs-build-inputs.json'
 $compatibilitySource = Join-Path $projectRoot 'source\drivers\settings\desktop compatibility.json'
 # Transaction paths are internal implementation details. Generate the suffix
 # for every elevated run so deployment never depends on a developer manually
@@ -43,6 +45,61 @@ function Test-IsAdministrator {
     return $principal.IsInRole(
         [Security.Principal.WindowsBuiltInRole]::Administrator
     )
+}
+
+function Assert-T1OSArtifactProvenance {
+    param(
+        [Parameter(Mandatory)][string]$ManifestPath,
+        [Parameter(Mandatory)][string]$ExpectedComponent
+    )
+
+    try {
+        $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Hardware artifact provenance is unreadable: $ManifestPath"
+    }
+    if (
+        [int]$manifest.format -ne 1 -or
+        [string]$manifest.component -cne $ExpectedComponent
+    ) {
+        throw "Hardware artifact provenance has the wrong identity: $ManifestPath"
+    }
+    $records = @($manifest.inputs) + @($manifest.outputs)
+    if ($records.Count -eq 0) {
+        throw "Hardware artifact provenance is empty: $ManifestPath"
+    }
+    $rootPrefix = $projectRoot.TrimEnd('\') + '\'
+    foreach ($record in $records) {
+        $relative = [string]$record.path
+        $expectedHash = [string]$record.sha256
+        if (
+            [string]::IsNullOrWhiteSpace($relative) -or
+            $relative.StartsWith('/', [StringComparison]::Ordinal) -or
+            $relative.Contains('..') -or
+            $expectedHash -cnotmatch '^[0-9a-f]{64}$'
+        ) {
+            throw "Hardware artifact provenance contains an unsafe record: $ManifestPath"
+        }
+        $candidate = [IO.Path]::GetFullPath(
+            (Join-Path $projectRoot $relative.Replace('/', '\'))
+        )
+        if (-not $candidate.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Hardware artifact provenance escaped the project: $relative"
+        }
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+            throw "Hardware artifact provenance input is missing: $relative"
+        }
+        $actualHash = (
+            Get-FileHash -Algorithm SHA256 -LiteralPath $candidate
+        ).Hash.ToLowerInvariant()
+        if ($actualHash -cne $expectedHash) {
+            throw (
+                "Hardware artifact is stale; rebuild before USB deployment: " +
+                "$relative expected=$expectedHash actual=$actualHash"
+            )
+        }
+    }
 }
 
 function Get-T1OSUsbTarget {
@@ -94,12 +151,21 @@ foreach ($path in @(
     $initramfsSource,
     $modulesSource,
     $releaseSource,
+    $kernelProvenanceSource,
+    $initramfsProvenanceSource,
     $compatibilitySource
 )) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required hardware update input is absent: $path"
     }
 }
+
+Assert-T1OSArtifactProvenance `
+    -ManifestPath $kernelProvenanceSource `
+    -ExpectedComponent 't1os-hardware-kernel'
+Assert-T1OSArtifactProvenance `
+    -ManifestPath $initramfsProvenanceSource `
+    -ExpectedComponent 't1os-hardware-initramfs'
 
 $compatibility = Get-Content -LiteralPath $compatibilitySource -Raw |
     ConvertFrom-Json

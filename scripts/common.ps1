@@ -59,7 +59,6 @@ function Get-T1OSUsbDriveTarget {
         'the one\build',
         'the one\master',
         'the one\settings\runtime paths.json',
-        'the one\resources\t1os-drive.ico',
         'autorun.inf'
     )
     $candidates = @(
@@ -85,9 +84,21 @@ function Get-T1OSUsbDriveTarget {
                     if (-not (Test-Path -LiteralPath (Join-Path $root $relativePath))) { return }
                 }
                 $autorun = Get-Content -LiteralPath (Join-Path $root 'autorun.inf') -Raw
+                $canonicalIcon = Test-Path -LiteralPath (
+                    Join-Path $root 'the one\resources\system\drive logo.ico'
+                ) -PathType Leaf
+                $legacyIcon = Test-Path -LiteralPath (
+                    Join-Path $root 'the one\resources\t1os-drive.ico'
+                ) -PathType Leaf
+                $canonicalIdentity = $canonicalIcon -and $autorun -match (
+                    '(?im)^\s*Icon="the one\\resources\\system\\drive logo\.ico"\s*$'
+                )
+                $legacyIdentity = $legacyIcon -and $autorun -match (
+                    '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+                )
                 if (
                     $autorun -notmatch '(?im)^\s*Label=T1OS(?:\s|$)' -or
-                    $autorun -notmatch '(?im)^\s*Icon="the one\\resources\\t1os-drive\.ico"\s*$'
+                    (-not $canonicalIdentity -and -not $legacyIdentity)
                 ) { return }
                 [pscustomobject]@{
                     DriveLetter = $letter

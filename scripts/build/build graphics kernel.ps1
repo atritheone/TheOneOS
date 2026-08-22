@@ -10,6 +10,7 @@ $kernelRoot = Join-Path $projectRoot 'source\entry\kernel'
 $configSource = Join-Path $kernelRoot 'T10Skernel hardware 0.19 settings.txt'
 $policySource = Join-Path $kernelRoot 't1os_lsm.c'
 $quotedShebangPatch = Join-Path $kernelRoot 't1os quoted shebang.patch'
+$ntfsNoAccessRulesPatch = Join-Path $kernelRoot 't1os ntfs3 noacsrules.patch'
 $settingsTarget = Join-Path $kernelRoot 'T10Skernel virtualbox 0.19 settings.txt'
 $kernelTarget = Join-Path $kernelRoot 'current build\t1osbzimage-virtualbox-0.19'
 $environmentTarget = Join-Path $projectRoot 'environment\software\t1osbzimage-virtualbox-0.19'
@@ -55,11 +56,11 @@ function ConvertTo-WslPath {
     return ([string]($output | Select-Object -First 1)).Trim()
 }
 
-foreach ($path in @($kernelRoot, $configSource, $policySource, $quotedShebangPatch, $settingsTarget, $kernelTarget, $environmentTarget, $isoKernelTarget, $developmentRoot, $stageRoot, $stageKernel, $stageSettings, $vmsvgaKernelPatch)) {
+foreach ($path in @($kernelRoot, $configSource, $policySource, $quotedShebangPatch, $ntfsNoAccessRulesPatch, $settingsTarget, $kernelTarget, $environmentTarget, $isoKernelTarget, $developmentRoot, $stageRoot, $stageKernel, $stageSettings, $vmsvgaKernelPatch)) {
     Assert-ProjectPath -Path $path
 }
 
-foreach ($path in @($configSource, $policySource, $quotedShebangPatch)) {
+foreach ($path in @($configSource, $policySource, $quotedShebangPatch, $ntfsNoAccessRulesPatch)) {
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required kernel source file not found: $path"
     }
@@ -109,6 +110,7 @@ $wslArchive = ConvertTo-WslPath -WindowsPath $archive
 $wslConfig = ConvertTo-WslPath -WindowsPath $configSource
 $wslPolicy = ConvertTo-WslPath -WindowsPath $policySource
 $wslQuotedShebangPatch = ConvertTo-WslPath -WindowsPath $quotedShebangPatch
+$wslNtfsNoAccessRulesPatch = ConvertTo-WslPath -WindowsPath $ntfsNoAccessRulesPatch
 $wslStageKernel = ConvertTo-WslPath -WindowsPath $stageKernel
 $wslStageSettings = ConvertTo-WslPath -WindowsPath $stageSettings
 $wslVmsvgaKernelPatch = ConvertTo-WslPath -WindowsPath $vmsvgaKernelPatch
@@ -127,6 +129,7 @@ kernel_sha256=$7
 vmsvga_kernel_patch=$8
 resume=$9
 quoted_shebang_patch=${10}
+ntfs_noacsrules_patch=${11}
 work=/var/tmp/t1os-graphics-kernel
 source="$work/linux-$kernel_version"
 
@@ -169,6 +172,34 @@ if ! grep -Fq 'T1OS keeps its interpreter below `/the one`.' "$source/fs/binfmt_
 fi
 grep -Fq 'bool quoted_name = false;' "$source/fs/binfmt_script.c"
 grep -Fq "i_sep = strnchr(i_name, i_end - i_name, '\"');" "$source/fs/binfmt_script.c"
+if ! grep -Fq 'unsigned noacsrules : 1;' "$source/fs/ntfs3/ntfs_fs.h"; then
+    patch --batch --forward --fuzz=0 -d "$source" -p1 < "$ntfs_noacsrules_patch"
+fi
+if ! grep -Fq '(!S_ISDIR(mode) || !sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"; then
+    python3 - "$source/fs/ntfs3/inode.c" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text()
+old = "\tif (std5->fa & FILE_ATTRIBUTE_READONLY)\n\t\tmode &= ~0222;"
+new = """\t/*
+\t * Windows uses READONLY on directories for folder customisation; it is
+\t * not a directory write-access rule.  A synthetic noacsrules mount must
+\t * therefore not turn such a directory (including a volume root) into
+\t * 0555 and strand an otherwise writable removable volume.
+\t */
+\tif ((std5->fa & FILE_ATTRIBUTE_READONLY) &&
+\t    (!S_ISDIR(mode) || !sbi->options->noacsrules))
+\t\tmode &= ~0222;"""
+if text.count(old) != 1:
+    raise SystemExit('NTFS3 read-only mode rule did not match the pinned source exactly')
+path.write_text(text.replace(old, new))
+PY
+fi
+grep -Fq 'fsparam_flag("noacsrules",' "$source/fs/ntfs3/super.c"
+grep -Fq 'if (!sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"
+grep -Fq '(!S_ISDIR(mode) || !sbi->options->noacsrules)' "$source/fs/ntfs3/inode.c"
 mkdir -p "$source/security/t1os"
 cp -- "$policy" "$source/security/t1os/t1os_lsm.c"
 drm_rule_line=$(grep -n -m1 'DRM/KMS devices are owned by the window server' "$source/security/t1os/t1os_lsm.c" | cut -d: -f1)
@@ -275,7 +306,7 @@ sha256sum "$stage_kernel"
 '@
 
 Write-Host "Building the T1OS graphics kernel from Linux $kernelVersion..."
-& wsl.exe -d Ubuntu --exec bash -c $buildCommand bash $wslArchive $wslConfig $wslPolicy $wslStageKernel $wslStageSettings $kernelVersion $kernelSha256 $wslVmsvgaKernelPatch $resumeValue $wslQuotedShebangPatch
+& wsl.exe -d Ubuntu --exec bash -c $buildCommand bash $wslArchive $wslConfig $wslPolicy $wslStageKernel $wslStageSettings $kernelVersion $kernelSha256 $wslVmsvgaKernelPatch $resumeValue $wslQuotedShebangPatch $wslNtfsNoAccessRulesPatch
 
 if ($LASTEXITCODE -ne 0) {
     throw "The T1OS graphics kernel build failed (exit code $LASTEXITCODE)."
